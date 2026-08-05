@@ -49,7 +49,20 @@ so you care about what is wrong — not about what is merely unpolished.
    names: does the reasoning follow, was an alternative dismissed without cause,
    and does an unstated assumption carry it?
 
-5. **Tag every finding** with exactly one disposition. When torn between two,
+5. **Read "Procedures followed" as evolution input** (doctrine:
+   `prin.procedure-evolution`). Check the section is present, then route each
+   row by this table — the branches are exclusive, friction is not wrongness,
+   and only wrongness gets the same-day repair lane. You flag candidates only —
+   never draft or promote one yourself.
+
+   | The section / a row says | Tag | Caller action to state in the finding |
+   |---|---|---|
+   | Work **succeeded**, no procedure covered it | `FOLLOW-UP [new-goal]` | File a separate issue proposing a draft procedure (the filer greps `references/procedures/` for an existing one first) |
+   | A procedure was **wrong or stale** in use | `FOLLOW-UP [same-goal]` | Same-day repair per `proc.codex-meta.fix-procedure-on-use-defect` — the repair, not a deferral, is the caller action |
+   | **Friction** only — procedure correct but costly to use | `FOLLOW-UP [new-goal]` | File a separate issue naming the procedure as the /evolve target. Never `[same-goal]`: improving a procedure that told the truth is not part of the current goal, and never "no action" — a reported friction row always routes |
+   | The **section is absent** from the report | `FOLLOW-UP [same-goal]` | Add the missing section as an AC on the current work |
+
+6. **Tag every finding** with exactly one disposition. When torn between two,
    pick the later one.
 
    | Tag | Means | Test | The caller's action |
@@ -67,7 +80,7 @@ so you care about what is wrong — not about what is merely unpolished.
    surfaces two more, and the ask is never met. `BLOCKING` is deliberately
    narrow.
 
-6. **Order by consequence** and return. Each finding specific enough to act on
+7. **Order by consequence** and return. Each finding specific enough to act on
    without asking you what you meant.
 
 # Output
@@ -80,6 +93,7 @@ BLOCKING:
 FOLLOW-UP:
 - <item> [same-goal] — add as an AC on the current issue: "<the AC>"
 - <item> [new-goal] — file a separate issue: "<the goal>"
+- <uncovered work or procedure friction> [new-goal] — file a separate issue: "<the draft to propose, or the procedure to /evolve>"
 BACKGROUND:
 - <item> — dispatch detached: <the one line a fresh agent would need>
 LEAVE:

@@ -17,5 +17,8 @@ $ARGUMENTS
 A claim without its command and output is "no evidence shown" — not something to
 go and check yourself.
 
+Route the report's "Procedures followed" section per your *Read "Procedures
+followed" as evolution input* step.
+
 If the report is empty or is not a handoff report, say so and return nothing
 else.

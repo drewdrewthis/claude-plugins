@@ -3,9 +3,9 @@
 Fill this in. Each section says what it is for; the traps are marked inline.
 
 Delete this explanatory block from your copy. Delete any section that is
-genuinely empty, except **Not done** and **Assumptions** — those two are
-load-bearing precisely when they look empty, because silence in them reads as
-coverage.
+genuinely empty, except **Not done**, **Assumptions**, and **Procedures
+followed** — those are load-bearing precisely when they look empty, because
+silence in them reads as coverage.
 
 ---
 
@@ -23,6 +23,17 @@ reviewer catches it.>
 ## What I did
 
 <Two or three lines. The shape of the work, not a narration of every step.>
+
+## Procedures followed
+
+| Procedure / skill | How it went | What was missing or wrong |
+|---|---|---|
+| <proc.id, /skill, or "none found for <the work>"> | <clean, or the friction> | <the gap, or —> |
+
+⚠ "None found" is a row, not a reason to delete the section — the reviewer
+routes uncovered work and procedure friction into procedure evolution
+(work-reviewer's *Read "Procedures followed" as evolution input* step), and can
+only route what you report.
 
 ## Decisions
 
