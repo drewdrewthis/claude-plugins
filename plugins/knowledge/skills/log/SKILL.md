@@ -1,0 +1,35 @@
+---
+name: log
+description: Record something durable to your own knowledge store — a procedure (repeatable way of doing something for your person), a decision (settled choice), or a solution (reusable fix/pattern). Use when your person corrects how you did something, when a choice gets settled, or when you figure out something you'll need again. Templates ship in this skill's templates/ directory.
+user-invocable: true
+argument-hint: "<procedure|decision|solution> <details>"
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+---
+
+# /log — write it down so /how-do-i can find it
+
+Three record types, three destinations. Copy the matching template from
+`${CLAUDE_SKILL_DIR}/templates/` — don't freestyle the shape. The knowledge
+root below is `$KNOWLEDGE_REFS` if set, else `~/.claude/references`.
+
+| type | when | where |
+|---|---|---|
+| **procedure** | a repeatable operation, especially "how my person likes X done" | `<root>/procedures/<kebab-name>.md` (template: `procedure.md`) |
+| **decision** | a settled non-trivial choice you'll need to honor later | append one JSON line to `<root>/decisions.jsonl` (template: `decision.md`) |
+| **solution** | a reusable fix/pattern for a problem that will recur | `<root>/solutions/<YYYY-MM-DD>-<kebab-name>.md` (template: `solution.md`) |
+
+## Rules
+
+- **Check for an existing record first** (`/how-do-i` on the topic). Amend the
+  existing one rather than writing a near-duplicate.
+- **Frontmatter keywords are the findability** — choose the words future-you
+  would actually search with, including your person's own vocabulary.
+- A correction from your person is the highest-value trigger: log it as a
+  procedure (the rule going forward), and put the preference itself in
+  `/about-my-person` if it's about them rather than about a task.
+- These files hold task knowledge, not private content beyond what the
+  procedure needs. Not credentials, ever.

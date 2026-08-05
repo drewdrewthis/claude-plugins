@@ -1,0 +1,14 @@
+{
+  "name": "drewdrewthis",
+  "owner": {
+    "name": "Drü",
+    "email": "drewdrewthis@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "knowledge",
+      "source": "./plugins/knowledge",
+      "description": "Daily notes + personal knowledge system: /take-note, /log (procedures, decisions, solutions + templates), /how-do-i router, SessionStart daily-note loader."
+    }
+  ]
+}

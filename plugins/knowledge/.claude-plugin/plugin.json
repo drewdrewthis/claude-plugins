@@ -1,0 +1,6 @@
+{
+  "name": "knowledge",
+  "version": "0.1.0",
+  "description": "Daily notes + personal knowledge system: /take-note, /log, /how-do-i, and a SessionStart hook that loads today's note (and ABOUT_MY_PERSON.md when present).",
+  "author": { "name": "Drü" }
+}
