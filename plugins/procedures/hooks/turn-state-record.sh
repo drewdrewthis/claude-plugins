@@ -26,9 +26,6 @@ TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '(.tool_name // .tool) // empty' 2>/de
 [ "$TOOL_NAME" = "Skill" ] || exit 0
 
 SKILL="$(printf '%s' "$INPUT" | jq -r '(.tool_input.skill // .input.skill) // empty' 2>/dev/null || true)"
-# Plugin-installed skills may arrive namespaced ("marketplace:how-do-i") —
-# match on the bare skill id.
-SKILL="${SKILL##*:}"
 case "$SKILL" in
     respond)    KEY="respond" ;;
     how-do-i)   KEY="how_do_i" ;;

@@ -1,48 +1,22 @@
 ---
 name: how-do-i
-description: Route a "how do I X / have we decided X / is there a way we do X" question to what already answers it — your own procedures, solutions, decisions log, shipped docs, or conversation history — BEFORE answering from memory or improvising. Also fires before performing any operation you've documented a procedure for.
+description: "The gateway to everything the codex knows. Use when you (or the user) ask 'is there a procedure for X', 'how do we do X', AND — equally — whenever you are ABOUT TO PERFORM a documented operation, whether phrased as a question OR as a direct command ('tag the issue', 'label this PR', 'post to slack', 'cut a release', 'prune/launch/stop/migrate a session', 'run a fleet/orchardist op', 'drive boxd/remote'). An imperative 'do X' is still a trigger: learn the procedure BEFORE executing, not after. Never answer or execute github/slack/release/fleet/boxd operations from memory — those procedures and their paths change and your recall is stale."
 user-invocable: true
-argument-hint: "<the question, verbatim>"
-allowed-tools:
-  - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/route-question.sh *)
-  - Read
-  - Grep
+context: fork
+agent: procedure-scout
+background: false
+argument-hint: "<what you're trying to do>"
 ---
 
-# /how-do-i — check what already answers this
+The caller is about to act and needs to know how it is done here first.
 
-Your durable knowledge lives in five places (root = `$KNOWLEDGE_REFS`, default
-`~/.claude/references`). This skill searches them best-first so you act from
-what's written rather than what you half-remember:
+GOAL:
 
-1. **Your procedures** — `<root>/procedures/*.md` — repeatable
-   operations you've written down.
-2. **Your solutions** — `<root>/solutions/*.md` — reusable fixes.
-3. **Your principles** — `<root>/principles/*.md` — durable how-to-think rules.
-4. **Your failure-modes** — `<root>/failure-modes/*.md` — mistake patterns
-   learned from corrections; check these before repeating an operation that
-   once went wrong.
-5. **Your decisions** — `<root>/decisions.jsonl` — settled choices.
-6. **Shipped docs** — `$HOW_DO_I_EXTRA_DOCS`, if set — docs your operator
-   ships to you.
-7. **History** — the `/recall` index (`$RECALL_SCRIPT`), as fuzzy fallback.
+$ARGUMENTS
 
-Every record you find carries frontmatter (`id`, `kind`, `date`, `keywords`,
-`links`, `status`) — `keywords` is why the search works and `links` tells you
-what else to read.
+Search the record stores, read every candidate in full, and return the proposal
+in your output shape — what governs, the commands verbatim, the traps, and a
+standing label on every source.
 
-## Steps
-
-1. Run the router on the question verbatim:
-   ```bash
-   bash ${CLAUDE_SKILL_DIR}/scripts/route-question.sh <question words...>
-   ```
-2. **Read the top match's document before answering** — the router gives you
-   a path and a snippet, not the content. Answer from the document.
-3. **No match anywhere:** say so plainly, answer from judgment, and — if the
-   answer turns out to be a repeatable way of doing something — write it down
-   via `/log procedure` so next time there IS a match.
-
-An imperative counts too: before *performing* something you've documented
-("book it the usual way", "do the weekly summary"), route first and follow
-your own procedure — that's what it's for.
+If the goal is ambiguous, say which reading you took rather than picking one
+silently.

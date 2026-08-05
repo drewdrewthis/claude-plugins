@@ -24,7 +24,7 @@ orchard-codex `develop-sweatshop`):
 
 | piece | what |
 |---|---|
-| `/how-do-i` | routes a question across procedures, solutions, decisions.jsonl, shipped docs, and `/recall` history before improvising |
+| `/how-do-i` | the gateway to everything the codex knows — forks the `procedure-scout` agent, which searches the record stores via `scripts/query-records.sh` and returns the governing procedure, verbatim commands, traps, and a standing label per source |
 | `/log` | durable records: procedure / decision / solution / principle / failure-mode — `*_TEMPLATE.md` files in `skills/log/templates/` (PROCEDURE, DECISION, SOLUTION, PRINCIPLE, FAILURE_MODE, EVOLUTION) |
 | `/am-i-done` | cold-read review of a handoff report (incl. the "Procedures followed" evolution table) by the `work-reviewer` agent before calling work done |
 | `/evolve` | patch an existing procedure/skill/record from a correction or friction — wraps the codex-meta evolve procedures |
@@ -35,11 +35,16 @@ orchard-codex `develop-sweatshop`):
 | `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation |
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (template in `skills/log/templates/`) — one dated line per material change, newest first; `/log` explains it |
 
-Config (env, optional): `KNOWLEDGE_REFS` — record root (default
-`~/.claude/references`): `procedures/`, `solutions/`, `decisions.jsonl`
-(`KNOWLEDGE_DECISIONS` overrides the jsonl path). `HOW_DO_I_EXTRA_DOCS` —
-extra shipped-docs dir the router also searches. `RECALL_SCRIPT` — recall
-search script for the history surface; degrades gracefully if absent.
+The machinery is copied byte-for-byte from orchard-codex `develop-sweatshop`
+(skills, procedure-scout/work-reviewer agents, gate hooks + lib,
+`query-records.sh` + `log-record.sh` + `gen-*` view generators + shared awk
+matcher, linter, templates). It assumes the codex layout rooted at
+`~/.claude` — record stores under `~/.claude/references/**`,
+`~/.claude/mistakes.jsonl`, scripts reachable per the SKILL docs. Env
+overrides where the upstream scripts define them (`QUERY_RECORDS_ROOT`,
+`MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`, `FAILURE_MODES_DIR`,
+`TURN_STATE_DIR`, `LINT_FRONTMATTER_ROOT`, `KNOWLEDGE_ROOT` for the
+frontmatter hook).
 
 ### about-my-person (0.1.0)
 
