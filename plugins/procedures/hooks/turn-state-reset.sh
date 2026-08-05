@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # turn-state-reset.sh — UserPromptSubmit hook.
 #
-# SINGLE RESPONSIBILITY: start a new turn. Clears every per-turn invariant flag
-# and stamps the turn marker. It never belonged to one gate; it owns the
-# turn boundary for all of them.
+# SINGLE RESPONSIBILITY: start a new turn — clear every per-turn invariant flag
+# and stamp the turn marker. It owns the turn boundary for all gates, not any
+# single one.
 #
 # A "turn" is one user prompt. Flags must not survive it: an invariant satisfied
 # last turn says nothing about this one.

@@ -12,8 +12,8 @@ procedure in `${CLAUDE_SKILL_DIR}/references/`:
 
 | kind | procedure | destination |
 |---|---|---|
-| **procedure** | `create-procedure-PROCEDURE.md` | `$KNOWLEDGE_REFS/procedures/<name>/PROCEDURE.md` + seed its `EVOLUTION.md` (templates in the log skill) |
-| **reference** | `create-reference-PROCEDURE.md` | `$KNOWLEDGE_REFS/docs/` (or the store the procedure names) |
+| **procedure** | `create-procedure-PROCEDURE.md` | `$CODEX_ROOT/references/procedures/<name>/PROCEDURE.md` (default `~/.claude/references`) + seed its `EVOLUTION.md` (templates in the log skill) |
+| **reference** | `create-reference-PROCEDURE.md` | `$CODEX_ROOT/references/docs/` (or the store the procedure names) |
 | **skill** | `create-skill-PROCEDURE.md` | a new skill directory — only when the operation earns an invocation handle (see `docs/adrs/001-procedural-knowledge-system.md`) |
 
 Rules that hold regardless of kind: check `/how-do-i` for an existing

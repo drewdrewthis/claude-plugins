@@ -4,10 +4,6 @@
 # SINGLE RESPONSIBILITY: answer "does this invariant bind THIS session?" and
 # nothing else. Storage lives in turn-state.sh; policy in each gate.
 #
-# AUDIENCES:
-#   /how-do-i   — every MAIN agent.
-#   /am-i-done  — every MAIN agent.
-#
 # A SUBAGENT IS NEVER GATED, for any invariant. A delegated specialist runs
 # under its own contract and cannot satisfy a per-turn invariant that belongs to
 # the session that spawned it — gating it would deadlock the delegation the

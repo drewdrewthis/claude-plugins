@@ -12,11 +12,11 @@ which dispatches to:
 
 - `references/steps/evolve-procedure.md` — patching a PROCEDURE.md (and
   appending the dated line to its EVOLUTION.md — mandatory).
-- `references/steps/evolve-skill.md` / `references/evolve-skill-PROCEDURE.md`
-  — the precision routine for SKILL.md patches.
+- `references/evolve-skill-PROCEDURE.md` — the precision routine for SKILL.md
+  patches, which chains to the `references/steps/evolve-skill.md` checklist.
 - `/log mistake` — when the lesson is a correction to record, not an edit.
 - `/create-new` — when no artifact exists to evolve.
 
 Adjust the paths it names to this install: records live under
-`$KNOWLEDGE_REFS` (default `~/.claude/references`); templates ship in the log
-skill's `templates/`.
+`$CODEX_ROOT/references` (default `~/.claude/references`); templates ship in
+the log skill's `templates/`.

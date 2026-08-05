@@ -22,7 +22,7 @@ FILE="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/nul
 case "$FILE" in *.md) ;; *) exit 0 ;; esac
 [ -f "$FILE" ] || exit 0
 
-ROOT="${KNOWLEDGE_ROOT:-$HOME/.claude}"
+ROOT="${KNOWLEDGE_ROOT:-${CODEX_ROOT:-$HOME/.claude}}"
 case "$FILE" in "$ROOT"/*) ;; *) exit 0 ;; esac
 REL="${FILE#"$ROOT"/}"
 

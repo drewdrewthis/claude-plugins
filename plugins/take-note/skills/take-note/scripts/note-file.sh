@@ -3,11 +3,14 @@
 # Prints TODAY=<path> PREV=<path|none> NEW=<yes|no>
 set -euo pipefail
 
-NOTES_DIR="${NOTES_DIR:-${KNOWLEDGE_WS:-$HOME/workspace}/notes}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../lib/notes-path.sh
+source "$SCRIPT_DIR/../../../lib/notes-path.sh"
+
 mkdir -p "$NOTES_DIR"
 
-today="$NOTES_DIR/$(date +%F).md"
-prev=$(ls "$NOTES_DIR"/????-??-??.md 2>/dev/null | grep -v "^$today$" | sort | tail -1 || true)
+today="$(notes_today_file)"
+prev="$(notes_prev_file)"
 
 echo "TODAY=$today"
 echo "PREV=${prev:-none}"

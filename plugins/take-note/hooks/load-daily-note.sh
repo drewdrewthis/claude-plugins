@@ -5,9 +5,11 @@
 # a session over a missing file.
 set -uo pipefail
 
-WS="${KNOWLEDGE_WS:-$HOME/workspace}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || exit 0
+# shellcheck source=../lib/notes-path.sh
+source "$SCRIPT_DIR/../lib/notes-path.sh" || exit 0
+
 ABOUT="$WS/references/docs/ABOUT_MY_PERSON.md"
-NOTES="$WS/notes"
 
 if [ -s "$ABOUT" ]; then
   echo "## Who your person is (references/docs/ABOUT_MY_PERSON.md — maintain via /about-my-person)"
@@ -15,8 +17,8 @@ if [ -s "$ABOUT" ]; then
   echo
 fi
 
-today="$NOTES/$(date +%F).md"
-prev=$(ls "$NOTES"/????-??-??.md 2>/dev/null | grep -v "^$today$" | sort | tail -1 || true)
+today="$(notes_today_file)"
+prev="$(notes_prev_file)"
 
 if [ -s "$today" ]; then
   echo "## Daily note (today — append via /take-note)"

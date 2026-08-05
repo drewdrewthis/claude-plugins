@@ -90,3 +90,8 @@ carry-over) + a SessionStart hook loading today's (or yesterday's) note and
 the procedures plugin, consolidated into one record: the
 procedure/skill/hook taxonomy, the per-turn invariant gates, records and
 generated views, and the evolution loop.
+
+`docs/principles/` — the binding coding/delegation/docs/clean-up standards,
+vendored from the codex. `.claude/agents/` carries the codex reviewer agents
+(principles, hygiene, security, test) for working in this repo. See
+[CONTRIBUTING.md](CONTRIBUTING.md).

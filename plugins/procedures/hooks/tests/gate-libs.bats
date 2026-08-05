@@ -98,18 +98,12 @@ teardown() {
   run ga_binds_main "$P";    [ "$status" -ne 0 ]
 }
 
-@test "audience: how-do-i DOES bind the default interactive session" {
-  run env -u CLAUDE_CODE_AGENT bash -c "source '$LIB/gate-audience.sh'; ga_binds_main '{}'"
+@test "audience: every non-subagent payload binds" {
+  source "$LIB/gate-audience.sh"
+  run ga_binds_main '{}'
   [ "$status" -eq 0 ]
-}
-
-@test "audience: how-do-i binds every main agent, named or not" {
-  for a in technician orchardist support lead assistant; do
-    run env CLAUDE_CODE_AGENT="$a" bash -c "source '$LIB/gate-audience.sh'; ga_binds_main '{}'"
-    [ "$status" -eq 0 ]
-  done
-  run env -u CLAUDE_CODE_AGENT bash -c "source '$LIB/gate-audience.sh'; ga_binds_main '{}'"
-  [ "$status" -eq 0 ]
+  run ga_binds_main '{"agent_id":"abc"}'
+  [ "$status" -ne 0 ]
 }
 
 # ---------- gate-allowlist ----------
