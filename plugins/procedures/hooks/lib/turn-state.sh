@@ -6,13 +6,10 @@
 #
 # STATE MODEL — one marker file per invariant, keyed by session:
 #   $STATE_DIR/<session_id>.turn       created by the reset hook each turn
-#   $STATE_DIR/<session_id>.respond    created when Skill(respond) runs, OR
-#                                      pre-set by the reset hook when the turn
-#                                      was not triggered by the owner directly
 #   $STATE_DIR/<session_id>.how_do_i   created when Skill(how-do-i) runs
 #   $STATE_DIR/<session_id>.am_i_done  created when Skill(am-i-done) runs
 #
-# WHY MARKER FILES, NOT ONE JSON OBJECT (supersedes the {"respond":…} shape):
+# WHY MARKER FILES, NOT ONE JSON OBJECT:
 # the JSON form required a read-modify-write per flag, which is a lost-update
 # race when two Skill PostToolUse hooks land together (orchard-codex#77). With
 # one file per fact, setting a flag is a `touch` — atomic by construction, no
@@ -25,7 +22,7 @@
 set -uo pipefail
 
 # Where turn state lives. Overridable for tests.
-TURN_STATE_DIR="${TURN_STATE_DIR:-${RESPOND_GATE_STATE_DIR:-/tmp/claude-turn-state}}"
+TURN_STATE_DIR="${TURN_STATE_DIR:-/tmp/claude-turn-state}"
 
 # ts_session_id <payload> — the session key. Falls back to a single stable
 # "unknown" bucket rather than scattering state across per-process keys.

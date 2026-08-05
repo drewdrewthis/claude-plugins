@@ -43,13 +43,6 @@ start_turn_with() {
     | bash "$HOOKS/turn-state-reset.sh"
 }
 
-# 0 when respond-gate would deny the assistant right now.
-respond_gate_denies() {
-  local out
-  out="$(env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'")"
-  [[ "$out" == *"RESPOND-GATE"* ]]
-}
-
 ran_skill() {
   printf '{"session_id":"%s","tool_name":"Skill","tool_input":{"skill":"%s"}}' "$SID" "$1" \
     | bash "$HOOKS/turn-state-record.sh"
@@ -60,28 +53,28 @@ assistant_tool() {
   printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"%s"}]}}\n' "$1" >> "$JSONL"
 }
 
-# ---------- turn-state-record (ported from the retired respond-gate.bats) ----------
+# ---------- turn-state-record ----------
 
-@test "record: an evil:respond look-alike does NOT satisfy the invariant" {
+@test "record: an evil:how-do-i look-alike does NOT satisfy the invariant" {
   start_turn
-  printf '{"session_id":"%s","tool_name":"Skill","tool_input":{"skill":"evil:respond"}}' "$SID" \
+  printf '{"session_id":"%s","tool_name":"Skill","tool_input":{"skill":"evil:how-do-i"}}' "$SID" \
     | bash "$HOOKS/turn-state-record.sh"
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [[ "$output" == *"deny"* ]]
 }
 
 @test "record: the legacy {tool,input} payload shape still marks the flag" {
   start_turn
-  printf '{"session_id":"%s","tool":"Skill","input":{"skill":"respond"}}' "$SID" \
+  printf '{"session_id":"%s","tool":"Skill","input":{"skill":"how-do-i"}}' "$SID" \
     | bash "$HOOKS/turn-state-record.sh"
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [ -z "$output" ]
 }
 
 @test "record: an unrelated skill marks nothing" {
   start_turn
   ran_skill "some-other-skill"
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [[ "$output" == *"deny"* ]]
 }
 
@@ -103,119 +96,12 @@ assistant_tool() {
   [ -z "$output" ]
 }
 
-# ---------- respond-gate ----------
+# ---------- turn-state-reset ----------
 
-@test "respond-gate: denies the assistant until Skill(respond) runs" {
-  start_turn
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || [[ "$output" == *'"permissionDecision":"deny"'* ]]
-  [[ "$output" == *"RESPOND-GATE"* ]]
-}
-
-@test "respond-gate: allows once Skill(respond) has run" {
-  start_turn
-  ran_skill respond
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+@test "reset: the hook stays silent (UserPromptSubmit stdout is model-facing)" {
+  run start_turn
   [ "$status" -eq 0 ]
   [ -z "$output" ]
-}
-
-@test "respond-gate: does not gate a non-assistant agent" {
-  start_turn
-  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
-  [ -z "$output" ]
-}
-
-@test "respond-gate: never gates a delegated subagent" {
-  start_turn
-  P="{\"session_id\":\"$SID\",\"agent_id\":\"sub1\",\"tool_name\":\"Edit\"}"
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$P' | bash '$HOOKS/respond-gate.sh'"
-  [ -z "$output" ]
-}
-
-@test "respond-gate: fails OPEN when the reset hook never ran" {
-  # No start_turn: no .turn marker => unwired reset, must not block.
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
-  [ -z "$output" ]
-}
-
-# ---------- respond-gate: turn trigger (owner directive 2026-08-05) ----------
-#
-# /respond binds only a DIRECT message from the owner. The reset hook classifies
-# the trigger and pre-marks the flag when it was not one, so the gate passes
-# silently. End-to-end here; the classifier's own edges are in gate-libs.bats.
-
-@test "trigger: a direct terminal prompt still gates the assistant" {
-  start_turn_with "roll the notepad and start the day"
-  run respond_gate_denies
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: a task-notification turn is exempt" {
-  start_turn_with '<task-notification status="completed">coder finished</task-notification>'
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "trigger: another agent's channel message is exempt" {
-  start_turn_with '<channel source="plugin:discord:discord" chat_id="1515808689716465754" message_id="1" user="Clara" user_id="1515784888681238608" ts="t">reflect posted</channel>'
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "trigger: the owner's own channel message still gates" {
-  start_turn_with '<channel source="plugin:discord:discord" chat_id="1" message_id="2" user="drewdrewthis" user_id="805967286547775489" ts="t">what is the fleet doing</channel>'
-  run respond_gate_denies
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: an unclassifiable prompt leaves the gate binding" {
-  # A channel tag with no sender attribute. Cannot be attributed => must not
-  # exempt; the gate stays exactly as it is today.
-  start_turn_with '<channel source="plugin:discord:discord" chat_id="1">no sender</channel>'
-  run respond_gate_denies
-  [ "$status" -eq 0 ]
-  # Unterminated tag: same.
-  start_turn_with '<channel source="plugin:discord:discord" user="Clara'
-  run respond_gate_denies
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: a payload carrying no prompt at all leaves the gate binding" {
-  start_turn     # {"session_id":...} with no .prompt — every pre-existing test
-  run respond_gate_denies
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: a non-JSON payload changes nothing about the gate" {
-  # The reset hook cannot key the session, so no .turn marker is written for it
-  # and respond-gate takes its PRE-EXISTING unwired-reset fail-open path. Pinned
-  # so the classifier is never blamed for (or credited with) this release.
-  printf 'not json at all' | bash "$HOOKS/turn-state-reset.sh"
-  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-  [ ! -e "$TURN_STATE_DIR/$SID.respond" ]
-}
-
-@test "trigger: the reset hook stays silent while classifying" {
-  # UserPromptSubmit stdout is MODEL-FACING — anything printed here lands in
-  # context every turn. The classifier must not break that contract.
-  run start_turn_with '<channel source="plugin:discord:discord" chat_id="1" user="Clara" user_id="1515784888681238608" ts="t">hi</channel>'
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "trigger: exemption does not survive into the next turn" {
-  start_turn_with '<task-notification status="completed">x</task-notification>'
-  run respond_gate_denies
-  [ "$status" -ne 0 ]
-  start_turn_with "now do the thing"
-  run respond_gate_denies
-  [ "$status" -eq 0 ]
 }
 
 # ---------- how-do-i-gate ----------

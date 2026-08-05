@@ -29,14 +29,12 @@ real outcomes — and each of those needs a mechanism, not a convention.
 
 ## Per-turn invariant gates
 
-Three invariants hold on every main-agent turn, enforced by blocking hooks:
+Two invariants hold on every main-agent turn, enforced by blocking hooks:
 
-1. **`/respond`** — the turn-entry skill runs before anything else
-   (`respond-gate.sh`, PreToolUse).
-2. **`/how-do-i` before acting** — no mutating tool call until the
+1. **`/how-do-i` before acting** — no mutating tool call until the
    procedure-scout has been consulted this turn (`how-do-i-gate.sh`,
    PreToolUse, all tools).
-3. **`/am-i-done` before stopping** — any turn that called tools gets one
+2. **`/am-i-done` before stopping** — any turn that called tools gets one
    cold-read review of its handoff report before the turn may end
    (`am-i-done-gate.sh`, Stop — asks at most once; when there is genuinely
    nothing to review, stop honestly rather than fabricating work).

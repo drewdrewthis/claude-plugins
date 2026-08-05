@@ -2,15 +2,14 @@
 # how-do-i-gate.sh — PreToolUse hook (all tools; no matcher).
 #
 # SINGLE RESPONSIBILITY: enforce ONE invariant — Skill(how-do-i) runs before a
-# main agent acts. Split out of respond-gate.sh 2026-08-02: the two invariants
-# bind different audiences, so they are two gates.
+# main agent acts.
 #
 # AUDIENCE: every MAIN agent (owner-set 2026-08-02, resolving orchard-codex#99).
 # Subagents are never gated — a delegated specialist runs its own contract, and
 # /how-do-i dispatches a subagent, so gating one would deadlock the delegation.
 #
-# WHY BLOCKING: advisory does not bind. Measured 2026-08-02 — a UserPromptSubmit
-# hook emitting "/respond" reaches the model, but the harness labels it
+# WHY BLOCKING: advisory does not bind. Measured — a UserPromptSubmit hook
+# emitting a skill invocation reaches the model, but the harness labels it
 # "UserPromptSubmit hook success: …", so it arrives as log output, not a command;
 # the session never invoked the skill. The prior advisory banner produced the
 # compliance ritual without the Skill call. Only a gate changes behaviour.

@@ -5,8 +5,8 @@
 # The gate decides what to do about the answer; this file only reports it.
 #
 # ANY tool_use counts — research, reads, and greps as much as edits. Owner
-# decision 2026-08-02: "it should always gate after any tool calls. This skips a
-# direct respond, but encourages a second thought about everything else from
+# decision: "it should always gate after any tool calls. This skips a
+# direct reply, but encourages a second thought about everything else from
 # research to actual work." A turn that only produced words is answerable by the
 # human reading them; a turn that touched the world gets a second look.
 #

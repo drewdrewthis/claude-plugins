@@ -14,7 +14,7 @@
 # activity-undetermined. NOT script-dir-unresolvable, and NOT
 # lib-unreadable:gate-failopen — both fail before the recorder exists to call,
 # so both release silently (hooks/lib/gate-failopen.sh header; case 4/G5 below).
-# LEGITIMATE (must record NOTHING): out-of-audience (ga_binds_main/ga_binds_respond
+# LEGITIMATE (must record NOTHING): out-of-audience (ga_binds_main
 # false), the compliance-path allowlist, a clean no-tool turn, sdk-cli, a
 # non-Stop event.
 #
@@ -122,21 +122,12 @@ unreadable_lib() {
   [ "$status" -eq 0 ]
 }
 
-@test "case 1: respond-gate records reset-hook-never-ran under gate:\"respond\"" {
-  run drive "respond-gate.sh" assistant "$PAYLOAD_EDIT"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-  run jq -e 'select(.gate == "respond" and .why == "reset-hook-never-ran")' "$GATE_FAILOPEN_LOG"
-  [ "$status" -eq 0 ]
-}
-
-@test "case 1: after exercising all three gates, the shared log's gate names are exactly the three" {
+@test "case 1: after exercising both gates, the shared log's gate names are exactly the two" {
   run drive "am-i-done-gate.sh" technician "$STOP"
   run drive "how-do-i-gate.sh" technician "$PAYLOAD_EDIT"
-  run drive "respond-gate.sh" assistant "$PAYLOAD_EDIT"
   run bash -c "jq -r '.gate' '$GATE_FAILOPEN_LOG' | sort -u"
   [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'am-i-done\nhow-do-i\nrespond')" ]
+  [ "$output" = "$(printf 'am-i-done\nhow-do-i')" ]
 }
 
 # ---------- case 2: record shape carries what a rate needs ----------
@@ -153,18 +144,11 @@ unreadable_lib() {
   [ "$output" = "$SID" ]
 }
 
-@test "record shape: respond-gate's fail-open row carries this turn's session_id" {
-  run drive "respond-gate.sh" assistant "$PAYLOAD_EDIT"
-  run jq -r 'select(.gate == "respond" and .why == "reset-hook-never-ran") | .session_id' "$GATE_FAILOPEN_LOG"
-  [ "$output" = "$SID" ]
-}
-
 @test "record shape: a turn stuck in reset-hook-never-ran writes ONE ROW PER TOOL CALL for how-do-i-gate, not one per turn" {
-  # how-do-i-gate.sh/respond-gate.sh are PreToolUse with NO matcher (see their
-  # own file headers) — every tool call re-evaluates the gate. A naive
-  # "rows / eligible turns" rate (AC-4's own follow-on measurement, not built
-  # here) would silently overcount these two relative to the once-per-Stop
-  # am-i-done-gate.
+  # how-do-i-gate.sh is PreToolUse with NO matcher (see its file header) —
+  # every tool call re-evaluates the gate. A naive "rows / eligible turns"
+  # rate (AC-4's own follow-on measurement, not built here) would silently
+  # overcount it relative to the once-per-Stop am-i-done-gate.
   #
   # We do NOT pin a turn-id field to fix this. The one marker that would carry
   # turn identity is $TURN_STATE_DIR/$sid.turn itself, stamped once per turn by
@@ -247,26 +231,6 @@ unreadable_lib() {
   [ ! -s "$GATE_FAILOPEN_LOG" ]
 }
 
-@test "negative control: respond-gate does not record a delegated subagent" {
-  local P="{\"session_id\":\"$SID\",\"agent_id\":\"sub1\",\"tool_name\":\"Edit\"}"
-  run drive "respond-gate.sh" assistant "$P"
-  [ -z "$output" ]
-  [ ! -s "$GATE_FAILOPEN_LOG" ]
-}
-
-@test "negative control: respond-gate does not record a non-assistant agent (out of audience)" {
-  run drive "respond-gate.sh" technician "$PAYLOAD_EDIT"
-  [ -z "$output" ]
-  [ ! -s "$GATE_FAILOPEN_LOG" ]
-}
-
-@test "negative control: respond-gate does not record on the compliance path" {
-  local P="{\"session_id\":\"$SID\",\"tool_name\":\"Skill\",\"tool_input\":{\"skill\":\"respond\"}}"
-  run drive "respond-gate.sh" assistant "$P"
-  [ -z "$output" ]
-  [ ! -s "$GATE_FAILOPEN_LOG" ]
-}
-
 # ---------- case 4 / G5: the recorder cannot record its own absence ----------
 # A gate that bricks a session because ITS OWN lib is missing is the
 # unrecoverable case. We pin the SAFE behaviour (exit 0, silent); we do not
@@ -284,13 +248,6 @@ unreadable_lib() {
 @test "G5 bootstrap hole: how-do-i-gate fails safely when hooks/lib/gate-failopen.sh is itself unreadable" {
   unreadable_lib "gate-failopen.sh" || { echo "AC-4 not yet implemented: hooks/lib/gate-failopen.sh does not exist"; false; }
   run drive "how-do-i-gate.sh" technician "$PAYLOAD_EDIT"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "G5 bootstrap hole: respond-gate fails safely when hooks/lib/gate-failopen.sh is itself unreadable" {
-  unreadable_lib "gate-failopen.sh" || { echo "AC-4 not yet implemented: hooks/lib/gate-failopen.sh does not exist"; false; }
-  run drive "respond-gate.sh" assistant "$PAYLOAD_EDIT"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -349,45 +306,6 @@ unreadable_lib() {
   [ "$output" = "how-do-i" ]
 }
 
-@test "case 4b: respond-gate records lib-unreadable:turn-state instead of releasing silently" {
-  start_turn
-  ran_skill respond
-  unreadable_lib turn-state.sh
-  run drive "respond-gate.sh" assistant "$PAYLOAD_EDIT"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-  run jq -e 'select(.gate == "respond" and .why == "lib-unreadable:turn-state")' "$GATE_FAILOPEN_LOG"
-  [ "$status" -eq 0 ]
-  run bash -c "jq -r '.gate' '$GATE_FAILOPEN_LOG' | sort -u"
-  [ "$output" = "respond" ]
-}
-
-@test "case 4b: respond-gate records lib-unreadable:gate-audience instead of releasing silently" {
-  start_turn
-  ran_skill respond
-  unreadable_lib gate-audience.sh
-  run drive "respond-gate.sh" assistant "$PAYLOAD_EDIT"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-  run jq -e 'select(.gate == "respond" and .why == "lib-unreadable:gate-audience")' "$GATE_FAILOPEN_LOG"
-  [ "$status" -eq 0 ]
-  run bash -c "jq -r '.gate' '$GATE_FAILOPEN_LOG' | sort -u"
-  [ "$output" = "respond" ]
-}
-
-@test "case 4b: respond-gate records lib-unreadable:gate-allowlist instead of releasing silently" {
-  start_turn
-  ran_skill respond
-  unreadable_lib gate-allowlist.sh
-  run drive "respond-gate.sh" assistant "$PAYLOAD_EDIT"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-  run jq -e 'select(.gate == "respond" and .why == "lib-unreadable:gate-allowlist")' "$GATE_FAILOPEN_LOG"
-  [ "$status" -eq 0 ]
-  run bash -c "jq -r '.gate' '$GATE_FAILOPEN_LOG' | sort -u"
-  [ "$output" = "respond" ]
-}
-
 # ---------- case 5: no-jq must stay recordable (ordering regression guard) ----------
 # These pin an ORDERING, which is why they read as trivial and are not.
 # Pre-AC-4 both PreToolUse gates ran `command -v jq || exit 0` before SCRIPT_DIR
@@ -411,17 +329,6 @@ unreadable_lib() {
   [ "$status" -eq 0 ]
 }
 
-@test "no-jq ordering: respond-gate records no-jq instead of a silent, unrecordable exit" {
-  EMPTY="$(mktemp -d)"
-  run env PATH="$EMPTY" HOME="$FAKE_HOME" CLAUDE_CODE_AGENT=assistant GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
-    /bin/bash -c "echo '$PAYLOAD_EDIT' | /bin/bash '$HOOKS/respond-gate.sh'"
-  rm -rf "$EMPTY"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-  run jq -e 'select(.gate == "respond" and .why == "no-jq")' "$GATE_FAILOPEN_LOG"
-  [ "$status" -eq 0 ]
-}
-
 # ---------- case 6 / G6: install propagation ----------
 
 @test "G6 install: a provisioned tree carries hooks/lib/gate-failopen.sh and every gate can source it" {
@@ -434,7 +341,7 @@ unreadable_lib() {
   PROV="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gf-prov.XXXXXX")"
   mkdir -p "$PROV/hooks"
   cp -r "$HOOKS/lib" "$PROV/hooks/lib"
-  cp "$HOOKS/am-i-done-gate.sh" "$HOOKS/how-do-i-gate.sh" "$HOOKS/respond-gate.sh" "$PROV/hooks/"
+  cp "$HOOKS/am-i-done-gate.sh" "$HOOKS/how-do-i-gate.sh" "$PROV/hooks/"
 
   [ -r "$PROV/hooks/lib/gate-failopen.sh" ] || {
     echo "MISSING from provisioned tree: hooks/lib/gate-failopen.sh (AC-4 not yet implemented)"
@@ -442,7 +349,7 @@ unreadable_lib() {
     false
   }
 
-  for g in am-i-done-gate.sh how-do-i-gate.sh respond-gate.sh; do
+  for g in am-i-done-gate.sh how-do-i-gate.sh; do
     grep -q 'lib/gate-failopen\.sh' "$PROV/hooks/$g" || {
       echo "$g does not source lib/gate-failopen.sh"
       rm -rf "$PROV"
@@ -459,10 +366,7 @@ unreadable_lib() {
 # ---------- case 7: catch-rate non-regression ----------
 # am-i-done's block decision is already pinned (gates.bats's "gates a
 # research-only turn" and "blocks once on a turn that produced an artifact",
-# :199, :207, :220, :226-227). respond-gate's deny SHAPE is already pinned
-# (gates.bats's "respond-gate: denies the assistant until Skill(respond) runs",
-# which checks permissionDecision explicitly) — not duplicated here.
-# (Line numbers as of this file's setup()/teardown() hardening.)
+# :199, :207, :220, :226-227) — not duplicated here.
 
 @test "catch-rate non-regression: how-do-i-gate's denial still sets permissionDecision:deny" {
   # GREEN AT HEAD, deliberately — how-do-i-gate.sh's closing `jq -nc` block

@@ -59,11 +59,6 @@ shipped — `tool_input.skill` arrives as the bare skill name, the reset hook
 stamps the turn, the record hook marks `how_do_i`, and the fork dispatches
 the plugin's own `procedure-scout`.
 
-**`respond-gate.sh` ships but is NOT wired** in `hooks/hooks.json`: it denies
-tool calls until a `/respond` skill has run, and this plugin does not ship a
-`/respond` skill — wiring it would brick any consumer without one. Hosts
-that have their own `/respond` wire it via their user/project settings.
-
 ### Tests
 
 The upstream bats suites for everything shipped here (gates + libs +

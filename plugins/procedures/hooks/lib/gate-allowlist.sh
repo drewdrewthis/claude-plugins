@@ -6,7 +6,7 @@
 # (sol.2026-07-08-hook-conflict-markers-freeze-all-tools).
 #
 # ALLOWLISTED:
-#   Skill  — Skill(respond) / Skill(how-do-i) / Skill(am-i-done) ARE compliance.
+#   Skill  — Skill(how-do-i) / Skill(am-i-done) ARE compliance.
 #   Agent  — /how-do-i and /am-i-done dispatch a subagent, so the delegation
 #            itself is the compliance path. Without this the gate denies the
 #            Agent call that would satisfy it. Added 2026-08-02 with the

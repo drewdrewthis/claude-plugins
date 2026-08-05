@@ -34,10 +34,10 @@ teardown() {
 @test "turn-state: mark then is_marked" {
   source "$LIB/turn-state.sh"
   ts_reset "$SID"
-  run ts_is_marked "$SID" respond
+  run ts_is_marked "$SID" how_do_i
   [ "$status" -ne 0 ]
-  ts_mark "$SID" respond
-  run ts_is_marked "$SID" respond
+  ts_mark "$SID" how_do_i
+  run ts_is_marked "$SID" how_do_i
   [ "$status" -eq 0 ]
 }
 
@@ -58,11 +58,9 @@ teardown() {
 @test "turn-state: reset clears flags from the previous turn" {
   source "$LIB/turn-state.sh"
   ts_reset "$SID"
-  ts_mark "$SID" respond
   ts_mark "$SID" how_do_i
   ts_mark "$SID" am_i_done
   ts_reset "$SID"
-  run ts_is_marked "$SID" respond;   [ "$status" -ne 0 ]
   run ts_is_marked "$SID" how_do_i;  [ "$status" -ne 0 ]
   run ts_is_marked "$SID" am_i_done; [ "$status" -ne 0 ]
 }
@@ -70,11 +68,9 @@ teardown() {
 @test "turn-state: flags are independent (no lost update between keys)" {
   source "$LIB/turn-state.sh"
   ts_reset "$SID"
-  ts_mark "$SID" respond &
   ts_mark "$SID" how_do_i &
   ts_mark "$SID" am_i_done &
   wait
-  run ts_is_marked "$SID" respond;   [ "$status" -eq 0 ]
   run ts_is_marked "$SID" how_do_i;  [ "$status" -eq 0 ]
   run ts_is_marked "$SID" am_i_done; [ "$status" -eq 0 ]
 }
@@ -99,33 +95,12 @@ teardown() {
   source "$LIB/gate-audience.sh"
   P='{"agent_id":"abc123"}'
   run ga_is_subagent "$P";   [ "$status" -eq 0 ]
-  run ga_binds_respond "$P"; [ "$status" -ne 0 ]
   run ga_binds_main "$P";    [ "$status" -ne 0 ]
-}
-
-@test "audience: respond binds the assistant" {
-  source "$LIB/gate-audience.sh"
-  CLAUDE_CODE_AGENT=assistant run ga_binds_respond '{}'
-  [ "$status" -eq 0 ]
-}
-
-@test "audience: respond does NOT bind the default interactive session (agent unset)" {
-  # Issue #197: the default interactive session is how-do-i-gated but NOT
-  # respond-gated. Treating unset as "assistant" gates every worker and bare
-  # shell that launches without --agent.
-  run env -u CLAUDE_CODE_AGENT bash -c "source '$LIB/gate-audience.sh'; ga_binds_respond '{}'"
-  [ "$status" -ne 0 ]
 }
 
 @test "audience: how-do-i DOES bind the default interactive session" {
   run env -u CLAUDE_CODE_AGENT bash -c "source '$LIB/gate-audience.sh'; ga_binds_main '{}'"
   [ "$status" -eq 0 ]
-}
-
-@test "audience: respond does NOT bind a named non-assistant agent" {
-  source "$LIB/gate-audience.sh"
-  run env CLAUDE_CODE_AGENT=technician bash -c "source '$LIB/gate-audience.sh'; ga_binds_respond '{}'"
-  [ "$status" -ne 0 ]
 }
 
 @test "audience: how-do-i binds every main agent, named or not" {
@@ -135,115 +110,6 @@ teardown() {
   done
   run env -u CLAUDE_CODE_AGENT bash -c "source '$LIB/gate-audience.sh'; ga_binds_main '{}'"
   [ "$status" -eq 0 ]
-}
-
-# ---------- gate-audience: turn trigger ----------
-#
-# Owner directive 2026-08-05: /respond binds only a DIRECT message from him.
-# Tag shapes below are verbatim from real transcripts.
-
-@test "trigger: a plain terminal prompt is a direct owner message" {
-  source "$LIB/gate-audience.sh"
-  run ga_prompt_is_direct_owner "roll the notepad and start the day"
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: a task-notification is not a direct owner message" {
-  source "$LIB/gate-audience.sh"
-  run ga_prompt_is_direct_owner '<task-notification status="completed">coder finished</task-notification>'
-  [ "$status" -ne 0 ]
-}
-
-@test "trigger: another agent's channel message is not a direct owner message" {
-  source "$LIB/gate-audience.sh"
-  P='<channel source="plugin:discord:discord" chat_id="1515808689716465754" message_id="1531261186106986507" user="Clara" user_id="1515784888681238608" ts="2026-07-27T11:25:16.225Z">reflect posted</channel>'
-  run ga_prompt_is_direct_owner "$P"
-  [ "$status" -ne 0 ]
-}
-
-@test "trigger: the owner's own discord message binds, by name or by id alone" {
-  source "$LIB/gate-audience.sh"
-  P='<channel source="plugin:discord:discord" chat_id="1" message_id="2" user="drewdrewthis" user_id="805967286547775489" ts="t">status?</channel>'
-  run ga_prompt_is_direct_owner "$P"
-  [ "$status" -eq 0 ]
-  # Id alone suffices: a display-name change must not silently exempt him.
-  Q='<channel source="plugin:discord:discord" chat_id="1" message_id="2" user="someNewNick" user_id="805967286547775489" ts="t">status?</channel>'
-  run ga_prompt_is_direct_owner "$Q"
-  [ "$status" -eq 0 ]
-  # ...and so does the name alone, for a tag carrying no user_id.
-  R='<channel source="plugin:discord:discord" chat_id="1" user="drewdrewthis" ts="t">status?</channel>'
-  run ga_prompt_is_direct_owner "$R"
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: telegram is DM-locked to the owner, so any telegram tag binds" {
-  source "$LIB/gate-audience.sh"
-  P='<channel source="plugin:telegram:telegram" chat_id="1650037651" message_id="9" user="operator" ts="t">ping</channel>'
-  run ga_prompt_is_direct_owner "$P"
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: his message batched with other agents' still binds" {
-  source "$LIB/gate-audience.sh"
-  P='<channel source="plugin:discord:discord" chat_id="1" message_id="1" user="Clara" user_id="1515784888681238608" ts="t">a</channel>
-<channel source="plugin:discord:discord" chat_id="1" message_id="2" user="drewdrewthis" user_id="805967286547775489" ts="t">b</channel>'
-  run ga_prompt_is_direct_owner "$P"
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: message text quoting a task-notification marker cannot exempt him" {
-  # Ordering guard: owner-presence is decided BEFORE the marker scan, so text
-  # he sends can only ever over-gate, never turn the gate off.
-  source "$LIB/gate-audience.sh"
-  P='<channel source="plugin:discord:discord" chat_id="1" user="drewdrewthis" user_id="805967286547775489" ts="t">why did <task-notification fire?</channel>'
-  run ga_prompt_is_direct_owner "$P"
-  [ "$status" -eq 0 ]
-  # Same text from another agent stays exempt — it was never his turn.
-  Q='<channel source="plugin:discord:discord" chat_id="1" user="Clara" user_id="1515784888681238608" ts="t">why did <task-notification fire?</channel>'
-  run ga_prompt_is_direct_owner "$Q"
-  [ "$status" -ne 0 ]
-}
-
-@test "trigger: an unclassifiable channel tag falls open to binding" {
-  source "$LIB/gate-audience.sh"
-  # Unterminated tag.
-  run ga_prompt_is_direct_owner '<channel source="plugin:discord:discord" user="Clara'
-  [ "$status" -eq 0 ]
-  # No sender attribute at all.
-  run ga_prompt_is_direct_owner '<channel source="plugin:discord:discord" chat_id="1">x</channel>'
-  [ "$status" -eq 0 ]
-  # Empty prompt.
-  run ga_prompt_is_direct_owner ""
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: an adjacent attribute cannot impersonate user=" {
-  source "$LIB/gate-audience.sh"
-  P='<channel source="plugin:discord:discord" reply_to_user="drewdrewthis" user="Clara" user_id="1515784888681238608" ts="t">x</channel>'
-  run ga_prompt_is_direct_owner "$P"
-  [ "$status" -ne 0 ]
-}
-
-@test "trigger: the owner identity set is env-configurable" {
-  T='<channel source="plugin:discord:discord" user="Clara" user_id="1515784888681238608" ts="t">x</channel>'
-  D='<channel source="plugin:discord:discord" user="drewdrewthis" user_id="805967286547775489" ts="t">x</channel>'
-  run env RESPOND_DIRECT_USERS="Clara" bash -c "source '$LIB/gate-audience.sh'; ga_prompt_is_direct_owner '$T'"
-  [ "$status" -eq 0 ]
-  run env RESPOND_DIRECT_USERS="Clara" bash -c "source '$LIB/gate-audience.sh'; ga_prompt_is_direct_owner '$D'"
-  [ "$status" -ne 0 ]
-  # Comma-separated is accepted too.
-  run env RESPOND_DIRECT_USERS="Clara,Rexxy" bash -c "source '$LIB/gate-audience.sh'; ga_prompt_is_direct_owner '$T'"
-  [ "$status" -eq 0 ]
-}
-
-@test "trigger: tag attributes are read by name, not by position" {
-  source "$LIB/gate-audience.sh"
-  run ga_tag_attr ' source="plugin:discord:discord" user="Clara" user_id="42"' user
-  [ "$output" = "Clara" ]
-  run ga_tag_attr ' source="plugin:discord:discord" user="Clara" user_id="42"' user_id
-  [ "$output" = "42" ]
-  run ga_tag_attr ' source="x" user="Clara"' ts
-  [ "$status" -ne 0 ]
 }
 
 # ---------- gate-allowlist ----------

@@ -35,7 +35,7 @@ set -uo pipefail
 GATE_FAILOPEN_LOG="${GATE_FAILOPEN_LOG:-$HOME/.claude/gate-failopen.jsonl}"
 
 # gate_failopen <gate> <why> [session_id] — append one record and exit 0.
-# <gate> is the caller's own name (am-i-done | how-do-i | respond): each gate
+# <gate> is the caller's own name (am-i-done | how-do-i): each gate
 # records under itself, never a shared/hardcoded label. <session_id> is
 # omitted (empty) exactly when the caller could not determine it either (e.g.
 # the no-jq path, where session_id parsing needs the very jq that is absent).
