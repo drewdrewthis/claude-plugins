@@ -52,6 +52,17 @@ Design rules the gates follow:
   per session (`$TURN_STATE_DIR/<sid>.<key>`), reset each UserPromptSubmit,
   recorded by a PostToolUse(Skill) hook. Setting a flag is an atomic `touch`;
   there is no read-modify-write to race.
+- **Turn state is not derived from the transcript, though it could be.** Hook
+  payloads carry `transcript_path`, and "did Skill(how-do-i) run after the
+  last user message" is a parse away — but the how-do-i gate fires on every
+  tool call, and parsing an unbounded transcript per call loses to an O(1)
+  marker `stat`; the transcript is Claude Code's internal, unversioned
+  format, so deriving every gate from it couples the hot path to a schema
+  that shifts across releases; and a transcript-derived gate cannot make the
+  unwired-vs-unsatisfied distinction the `.turn` marker exists for. The one
+  place transcript truth is genuinely needed — "did this turn call any
+  tool," at Stop — is the one place it is read (`turn-activity.sh`), once
+  per turn, wrapped in fail-open.
 - **Fail open, and record blind failures.** Missing jq, unreadable state, an
   unwired reset hook — all release the gate. A gate that blocks on its own
   bug bricks the session. Every *blind* fail-open (as opposed to a legitimate

@@ -11,6 +11,7 @@ design record.
 ```
 /plugin marketplace add drewdrewthis/claude-plugins
 /plugin install procedures@drewdrewthis
+/plugin install delegation@drewdrewthis
 /plugin install about-my-person@drewdrewthis
 /plugin install take-note@drewdrewthis
 ```
@@ -67,6 +68,39 @@ vendored under `plugins/procedures/{hooks,scripts}/tests/`. Run:
 
 ```
 cd plugins/procedures && bats hooks/tests scripts/tests
+```
+
+### delegation (0.1.0)
+
+Pick the right specialist, brief it properly, and mint a new one when none
+fits. **The machinery ships; the roster is the host's** — this plugin carries
+the ROUTER and the RULE FOR MAKING agents, never agent files themselves, so
+one plugin serves a fleet whose rosters differ.
+
+| piece | what |
+|---|---|
+| `/delegate` | classify the task shape (kind / difficulty / focus), run `scripts/route-delegation.sh` for the agent + model + why, then build the briefing — self-contained, result-demanding, coding/docs standards woven in — and verify what comes back |
+| `/create-new-sub-agent` | mint the specialist the router had no row for: `templates/AGENT_TEMPLATE.md` (single mandate, right-sized tier, tools allowlist, tripwires) + `references/write-agent-doc-PROCEDURE.md`, written into the host roster |
+| `scripts/route-delegation.sh` | the routing table AS A SCRIPT — one row per task shape, each agent's model read LIVE from the roster's `model:` frontmatter, so retuning the roster propagates without editing prose. `--list` dumps every route |
+| `scripts/lint-agent-files.sh` | structural lint for agent files: frontmatter + `Role` + `Boundaries`, no dates, no issue refs (hard); size budget and missing `model:` (warn) |
+
+Config: `CLAUDE_AGENTS_DIR` for the roster, else `$CODEX_ROOT/agents`, else
+`~/.claude/agents`; `LINT_AGENT_FILES_ROOT` (else `$CODEX_ROOT`, else
+`~/.claude`) for the linter — the same data-root chaining as `procedures`.
+
+Router exit codes: `0` matched, `1` usage error, `2` no specialist fits **or
+this host has no roster at all**, `3` roster drift. That second exit-2 case is
+the deliberate **agent-less degradation**: a fresh tenant that has minted no
+agents gets the self-extension rule ("mint one via `/create-new-sub-agent`"),
+not a drift error about a corruption that does not exist. A matched agent
+missing while *other* agents exist is still exit 3 — real drift.
+
+Vendored from the codex with the same two adaptation classes as `procedures`,
+each marked `PLUGIN ADAPTATION`: data-root defaults, and host-neutral wording
+in place of codex-internal file/hook references. Tests:
+
+```
+cd plugins/delegation && bats scripts/tests
 ```
 
 ### about-my-person (0.1.0)
