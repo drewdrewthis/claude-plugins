@@ -48,4 +48,4 @@ This is the half no script can do.
 
 A subagent's report is a claim, not evidence. Before acting on it, run the cheapest disconfirming check — read the file it says it wrote, run the command it says passes, diff what it says it changed.
 
-Full routing rationale: `${CLAUDE_SKILL_DIR}/references/delegation-routing-PROCEDURE.md`.
+Full routing rationale: `${CLAUDE_SKILL_DIR}/references/delegation-routing.procedure.md`.

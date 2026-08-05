@@ -168,3 +168,138 @@ teardown() {
     [[ "$line" == *" — "* ]]
   done <<< "$output"
 }
+
+# ---------------------------------------------------------------------------
+# PLUGIN ADAPTATION: owner call — a query returns ALL matches by default;
+# truncation and ranking floors are opt-in knobs, because the scout needs the
+# full match set.
+#
+# Fixture: 25 tiny solution records sharing a rare keyword (manyresultkw),
+# one per file, so a query for it produces >20 matches — enough to exceed
+# the old hardcoded LIMIT=20 and prove the new default is uncapped.
+# ---------------------------------------------------------------------------
+_seed_many_matches_fixture() {
+  for i in $(seq 1 25); do
+    cat > "$FIX/references/solutions/manyresult$i.md" <<EOF
+---
+id: sol.manyresult$i
+kind: solution
+date: 2026-06-25
+keywords: [manyresultkw]
+links: {}
+status: resolved
+---
+# many-result fixture $i
+
+body
+EOF
+  done
+}
+
+@test "more than 20 matches in a kind all come back by default (no cap)" {
+  _seed_many_matches_fixture
+  run bash -c "bash '$SCRIPT' --keyword manyresultkw"
+  [ "$status" -eq 0 ]
+  local count
+  count=$(printf '%s\n' "$output" | grep -c 'manyresult[0-9]*\.md')
+  [ "$count" -eq 25 ]
+}
+
+@test "--limit 3 caps the total result count to exactly 3" {
+  _seed_many_matches_fixture
+  run bash -c "bash '$SCRIPT' --keyword manyresultkw --limit 3"
+  [ "$status" -eq 0 ]
+  local count
+  count=$(printf '%s\n' "$output" | grep -c 'manyresult[0-9]*\.md')
+  [ "$count" -eq 3 ]
+}
+
+@test "QUERY_RECORDS_LIMIT env var caps the total result count" {
+  _seed_many_matches_fixture
+  run bash -c "QUERY_RECORDS_LIMIT=5 bash '$SCRIPT' --keyword manyresultkw"
+  [ "$status" -eq 0 ]
+  local count
+  count=$(printf '%s\n' "$output" | grep -c 'manyresult[0-9]*\.md')
+  [ "$count" -eq 5 ]
+}
+
+@test "--limit also caps structural-only (no-keyword) queries" {
+  _seed_many_matches_fixture
+  run bash -c "bash '$SCRIPT' --kind solution --limit 4"
+  [ "$status" -eq 0 ]
+  local count
+  count=$(printf '%s\n' "$output" | grep -c 'manyresult[0-9]*\.md')
+  [ "$count" -eq 4 ]
+}
+
+# ---------------------------------------------------------------------------
+# --rel-ratio 0 disables the relative-floor suppression: mirrors the
+# suppression fixture in record-ranking.bats (relstrong vs relfill1/2), but
+# here asserts that rel-ratio=0 lets the otherwise-suppressed weak matches
+# through.
+# ---------------------------------------------------------------------------
+_seed_relfloor_fixture() {
+  for i in 1 2; do
+    cat > "$FIX/references/decisions/qrrelfill$i.md" <<EOF
+---
+id: dec.qrrelfill$i
+kind: decision
+date: 2026-06-25
+keywords: [qrcommonrela, qrcommonrelb]
+links: {}
+status: active
+---
+# relative floor filler $i
+
+body
+EOF
+  done
+
+  cat > "$FIX/references/decisions/qrrelstrong.md" <<'EOF'
+---
+id: dec.qrrelstrong
+kind: decision
+date: 2026-06-25
+keywords: [qrrelstrongA]
+links: {}
+status: active
+---
+# strong match record
+
+body
+EOF
+
+  for i in $(seq 1 10); do
+    cat > "$FIX/references/solutions/qrreldecoy$i.md" <<EOF
+---
+id: sol.qrreldecoy$i
+kind: solution
+date: 2026-06-25
+keywords: [qrcommonrela, qrcommonrelb]
+links: {}
+status: resolved
+---
+# decoy to inflate df of qrcommonrela/qrcommonrelb
+
+body
+EOF
+  done
+}
+
+@test "default rel_ratio suppresses the weak match (baseline for the next test)" {
+  _seed_relfloor_fixture
+  run bash -c "bash '$SCRIPT' --keyword 'qrrelstrongA qrcommonrela qrcommonrelb'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"qrrelstrong.md"* ]]
+  [[ "$output" != *"qrrelfill1.md"* ]]
+  [[ "$output" != *"qrrelfill2.md"* ]]
+}
+
+@test "--rel-ratio 0 disables relative-floor suppression, weak match now surfaces" {
+  _seed_relfloor_fixture
+  run bash -c "bash '$SCRIPT' --keyword 'qrrelstrongA qrcommonrela qrcommonrelb' --rel-ratio 0"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"qrrelstrong.md"* ]]
+  [[ "$output" == *"qrrelfill1.md"* ]]
+  [[ "$output" == *"qrrelfill2.md"* ]]
+}

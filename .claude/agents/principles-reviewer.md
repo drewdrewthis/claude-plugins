@@ -31,7 +31,7 @@ When the diff touches `agents/*.md`, `skills/**/SKILL.md`, or `references/proced
 - A **procedure** is for work with more than one caller. Multiple callers is what makes it a procedure; length is not.
 - A **skill** is a gateway with context: it gates onto a script, an agent, or a procedure. Gating onto nothing means it is a procedure in the wrong drawer.
 
-Flag an agent whose method is a bare pointer to a single-caller procedure — that is the codex's recurring drift, and `AGENT_TEMPLATE.md` ("An agent carries its own method") is the source of truth.
+Flag an agent whose method is a bare pointer to a single-caller procedure — that is the codex's recurring drift, and `agent.template.md` ("An agent carries its own method") is the source of truth.
 
 ### 2. Readability for the Next Engineer
 Could someone unfamiliar with this code understand it in 30 seconds? Names reveal intent. Structure tells a story. No comments needed to explain *what* — only *why* when genuinely non-obvious.

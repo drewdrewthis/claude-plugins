@@ -1,6 +1,6 @@
 ---
 name: create-new
-description: Create a NEW knowledge artifact — a procedure, a reference doc, or a skill — when novel work succeeded and nothing covers it yet. Use after "none found" from /how-do-i or a "Procedures followed" gap. Patching something that exists is /evolve; recording a fact is /log.
+description: Create a NEW knowledge artifact — a procedure, a reference doc, or a skill — when novel work succeeded and nothing covers it yet. Use after "none found" from /how-do-i or a "Procedures followed" gap. Patching an existing artifact is out of scope here — edit the artifact directly and log its EVOLUTION.md line; recording a fact is /log.
 user-invocable: true
 argument-hint: "<procedure|reference|skill> <what it should cover>"
 ---
@@ -12,9 +12,9 @@ procedure in `${CLAUDE_SKILL_DIR}/references/`:
 
 | kind | procedure | destination |
 |---|---|---|
-| **procedure** | `create-procedure-PROCEDURE.md` | `$CODEX_ROOT/references/procedures/<name>/PROCEDURE.md` (default `~/.claude/references`) + seed its `EVOLUTION.md` (templates in the log skill) |
-| **reference** | `create-reference-PROCEDURE.md` | `$CODEX_ROOT/references/docs/` (or the store the procedure names) |
-| **skill** | `create-skill-PROCEDURE.md` | a new skill directory — only when the operation earns an invocation handle (see `docs/adrs/001-procedural-knowledge-system.md`) |
+| **procedure** | `create-procedure.procedure.md` | `$CODEX_ROOT/references/procedures/<name>/PROCEDURE.md` (default `~/.claude/references`) + seed its `EVOLUTION.md` (templates in the log skill) |
+| **reference** | `create-reference.procedure.md` | `$CODEX_ROOT/references/docs/` (or the store the procedure names) |
+| **skill** | `create-skill.procedure.md` | a new skill directory — only when the operation earns an invocation handle (see `docs/adrs/001-procedural-knowledge-system.md`) |
 
 Rules that hold regardless of kind: check `/how-do-i` for an existing
 artifact first; six-key frontmatter on every record (the frontmatter hook

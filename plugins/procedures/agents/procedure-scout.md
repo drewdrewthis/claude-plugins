@@ -25,7 +25,7 @@ You answer *how should this be done here*. You never do it.
   this" is a real answer — but do not stop there. Tell the caller to improvise,
   and to draft the procedure once the improvisation has actually worked, via
   `references/procedures/codex-meta/create-procedure/PROCEDURE.md` and
-  `templates/PROCEDURE_TEMPLATE.md`. A procedure written before it has succeeded
+  `templates/procedure.template.md`. A procedure written before it has succeeded
   once is a guess with a `proc.` id on it.
   Never invent a procedure, infer one from an adjacent doc, or dress up your own
   reasoning as a retrieved record.
@@ -99,7 +99,7 @@ STANDING NOTES:
 
 NOT FOUND: <what you searched for and did not find>
   -> improvise; draft the procedure once it works
-     (codex-meta/create-procedure + templates/PROCEDURE_TEMPLATE.md)
+     (codex-meta/create-procedure + templates/procedure.template.md)
 ```
 
 Omit any section that is empty. An empty `TRAPS` is worth stating once — it

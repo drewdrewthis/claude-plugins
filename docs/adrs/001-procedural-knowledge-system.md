@@ -17,15 +17,15 @@ real outcomes — and each of those needs a mechanism, not a convention.
 
 - **A procedure is a prose script.** The atomic unit is the *document*
   (`PROCEDURE.md`), not an index entry — a procedure is read whole, top to
-  bottom, and its frontmatter is its discovery surface. Indexes and digests
-  are generated views, never the source of truth.
+  bottom, and its frontmatter is its discovery surface. There are no
+  maintained index files; digests are compiled per-query by the scout.
 - **A skill is a gateway with context.** It is the invocation handle
   (`/how-do-i`, `/log`, `/am-i-done`): thin, user/agent-invocable, and it may
   carry context or dispatch a subagent (`context: fork` + `agent:`). Executor
   skills are not demotable to procedure docs — the handle is the point.
 - **A hook is deterministic enforcement.** Anything that must *always*
-  happen (gates, frontmatter schema, generated-view freshness) is a script
-  wired to a lifecycle event, never a request in prose.
+  happen (gates, frontmatter schema) is a script wired to a lifecycle event,
+  never a request in prose.
 
 ## Per-turn invariant gates
 
@@ -35,7 +35,7 @@ Two invariants hold on every main-agent turn, enforced by blocking hooks:
    procedure-scout has been consulted this turn (`how-do-i-gate.sh`,
    PreToolUse, all tools).
 2. **`/am-i-done` before stopping** — any turn that called tools gets one
-   cold-read review of its handoff report before the turn may end
+   cold-read review of its am-i-done report before the turn may end
    (`am-i-done-gate.sh`, Stop — asks at most once; when there is genuinely
    nothing to review, stop honestly rather than fabricating work).
 
@@ -68,17 +68,18 @@ Design rules the gates follow:
   bug bricks the session. Every *blind* fail-open (as opposed to a legitimate
   release) is appended to a jsonl log so silent degradation is visible.
 
-## Records and views
+## Records
 
 - Every record carries the **six-key frontmatter** (`id`, `kind`, `date`,
   `keywords` non-empty, `links`, `status`) — enforced by lint + hook. The
   frontmatter is the index; `query-records.sh` is the one PULL interface over
-  all stores.
+  all stores. There are no materialized views and no index files: the
+  procedure-scout compiles a digest per query, so nothing can go stale
+  between a record and its copy.
 - **Mistakes are events, failure-modes are records.** Each mistake appends
   one structured jsonl row at correction time; a recurring pattern is
   promoted to a durable failure-mode record only at ≥3 occurrences (the
-  script enforces the bar). `common-mistakes.md` and the store INDEXes are
-  generated views — never hand-edited.
+  script enforces the bar).
 
 ## Evolution
 
@@ -90,6 +91,6 @@ Design rules the gates follow:
   is promoted from draft only after it has been followed as written and
   worked.
 - **Behavioral corrections start from the incident**, not from prose: log
-  the mistake, find the pattern, then patch the procedure/skill via
-  `/evolve` — so evolution is driven by what actually went wrong, not by
-  what sounded better.
+  the mistake, find the pattern, then patch the procedure/skill directly and
+  record the change in its `EVOLUTION.md` — so evolution is driven by what
+  actually went wrong, not by what sounded better.

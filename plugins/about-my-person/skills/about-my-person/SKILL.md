@@ -10,12 +10,17 @@ allowed-tools:
 
 # /about-my-person — the one file about who you serve
 
-The file at `$ABOUT_MY_PERSON_FILE` (default `~/workspace/references/docs/ABOUT_MY_PERSON.md`) is the single canonical
-answer to "who is my person and how do they like things done". It is seeded at
+The file at `${ABOUT_MY_PERSON_FILE:-${ABOUT_MY_PERSON_DIR:-$HOME/.claude/about-my-person}/ABOUT_MY_PERSON.md}`
+is the single canonical answer to "who is my person and how do they like
+things done". `ABOUT_MY_PERSON_DIR` overrides the directory; `ABOUT_MY_PERSON_FILE`
+overrides the file path directly (wins if both are set). It is seeded at
 provisioning and you maintain it from then on. It is deliberately ONE file —
 short enough to read whole. It is not a diary (that's the daily note), not a
 transcript archive (that's `/recall`), and not general memory (auto-memory
 handles ambient facts). This file is the curated profile.
+
+A sibling file, `EVOLUTION.md`, in the same directory holds a dated one-line
+log of material changes to the profile, newest first (create it if missing).
 
 ## The procedure (follow exactly)
 
@@ -33,7 +38,9 @@ handles ambient facts). This file is the curated profile.
 3. **Update, don't accumulate.** If a fact changes (new city, new job),
    REPLACE the old one; the changelog line records that it changed. If a
    section exceeds ~15 lines, condense it — the file must stay whole-readable.
-4. **Date the changelog line** (`- 2026-08-05: moved from X to Y`).
+4. **Date the changelog line** (`- 2026-08-05: moved from X to Y`) AND append
+   the same one-liner to `EVOLUTION.md` in the same directory (create it with
+   just a `# Evolution — about-my-person` heading if missing).
 5. **When asked "what do you know about me":** read the file and answer from
    it conversationally. Offer to correct anything that's wrong — and if they
    correct you, apply the correction via this same procedure, right then.

@@ -159,7 +159,7 @@ ISSUEREF_RE='#[0-9]+'
 # Print $1 with markdown anchor links removed, so R5 sees only real issue refs.
 #
 # `[step](#3-verify)` is a link into a numbered heading, not a reference to
-# issue 3 — and AGENT_TEMPLATE.md actively tells agent files to point at
+# issue 3 — and agent.template.md actively tells agent files to point at
 # procedures, so deep-linking numbered headings is the expected shape. Before
 # this, the only exits for a NEW (un-grandfathered) file were rewording the
 # link or `--no-verify`.
@@ -280,7 +280,7 @@ warn_rules() {
     if [ -z "$lines" ]; then
         warn "$f: W1: cannot read the file — line count unavailable, size budget NOT checked"
     elif [ "$lines" -gt "$budget" ]; then
-        warn "$f: W1: $lines lines over the ${budget}-line ${klass} budget — tighten the prose. Do NOT move the agent's own method into a procedure and point at it: an agent carries its method inline (AGENT_TEMPLATE, 'An agent carries its own method')"
+        warn "$f: W1: $lines lines over the ${budget}-line ${klass} budget — tighten the prose. Do NOT move the agent's own method into a procedure and point at it: an agent carries its method inline (agent.template, 'An agent carries its own method')"
     fi
 
     printf '%s\n' "$block" | grep -qE '^model:' \

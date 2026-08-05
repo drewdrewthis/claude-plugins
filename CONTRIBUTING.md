@@ -25,8 +25,8 @@ this doc to restate them:
 ## Vendoring rule (`plugins/procedures`)
 
 The procedures plugin's machinery (skills, `procedure-scout`/`work-reviewer`
-agents, gate hooks + lib, `query-records.sh`, `log-record.sh`, `gen-*`
-generators, linter, templates) is vendored from `orchard-codex@develop-sweatshop`.
+agents, gate hooks + lib, `query-records.sh`, `log-record.sh`, linter,
+templates) is vendored from `orchard-codex@develop-sweatshop`.
 
 - Anything that isn't upstream must be marked `# PLUGIN ADAPTATION: <why>` at
   the point of divergence — the plugin-hosting context (data-root defaults,
@@ -40,7 +40,7 @@ generators, linter, templates) is vendored from `orchard-codex@develop-sweatshop
 ## Tests are the gate
 
 ```
-cd plugins/procedures && bats hooks/tests scripts/tests
+cd plugins/procedures && bats hooks/tests
 ```
 
 Must be green before any PR merges. New hook or script behavior — including
@@ -61,7 +61,7 @@ follows the taxonomy in
 [`docs/adrs/001-procedural-knowledge-system.md`](docs/adrs/001-procedural-knowledge-system.md):
 
 - **One responsibility per hook/script, stated in its header.** No hook
-  that both gates and generates a view.
+  that both gates and writes a record.
 - **Hooks fail open, and record blind fail-opens.** A gate that blocks on
   its own bug bricks the session — missing dependency or unreadable state
   releases the gate, and every such release is logged.

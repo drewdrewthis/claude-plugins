@@ -26,7 +26,7 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
    grep -rl '<2-3 keywords>' ~/.claude/references/procedures/
    ```
 
-   If a match exists, follow the evolve procedure (`references/procedures/codex-meta/evolve/PROCEDURE.md`) to patch the existing one instead — see Boundaries.
+   If a match exists, patch that procedure directly (and log the change in its sibling `EVOLUTION.md`) instead of creating a new one — see Boundaries.
 
 2. **Determine `<area>` and `<name>`.** Existing areas: `assistant`, `boxd`, `codex-meta`, `fleet-session`, `git-tree`, `github`, `infra`, `langwatch`, `notify-comms`, `orchardist`, `planner-orchardist-loop`, `provisioning`, `remote`, `research-think`, `review-qa`, `slack`. Pick the closest fit; a new area dir is allowed when none fit.
 
@@ -86,7 +86,7 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
 
 ## Boundaries
 
-- **create-procedure vs evolve / evolve-skill**: This skill is the CREATE half — use it ONLY when no existing procedure covers the work. The evolve procedure (`references/procedures/codex-meta/evolve/PROCEDURE.md`) and evolve-skill procedure (`references/procedures/codex-meta/evolve-skill/PROCEDURE.md`) operate on EXISTING procedures/skills after they hit friction (the PATCH/PROMOTE loop). If a procedure already exists, stop here and follow the evolve procedure. Authority: `references/principles/procedure-evolution.md`.
+- **Create vs patch**: This skill is the CREATE half — use it ONLY when no existing procedure covers the work. Patching an EXISTING procedure or skill after it hits friction is out of scope: edit the artifact directly and append the dated line to its `EVOLUTION.md`. If a procedure already exists, stop here and do that instead. Authority: `references/principles/procedure-evolution.md`.
 - Do NOT set `status: active` on a new record — that requires a promotion gate.
-- Do NOT run this skill for skills (`SKILL.md` files) — that is the create-skill procedure (`references/procedures/codex-meta/create-skill/PROCEDURE.md`).
+- Do NOT run this skill for skills (`SKILL.md` files) — that is the create-skill procedure (`create-skill.procedure.md`).
 - No codebase reading, no implementation — prose record only.

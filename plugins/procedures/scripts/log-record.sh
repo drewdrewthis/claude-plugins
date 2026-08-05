@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # log-record.sh — the DETERMINISTIC half of `/log <kind>`.
 #
+# PLUGIN ADAPTATION: no materialized views — the upstream gen-* regen steps are
+# removed; the procedure-scout compiles views on demand.
+#
 # Consolidates the four record-writers (log-mistake, record-decision,
 # record-solution, record-failure-mode) into one script with four
 # subcommands. The `/log` SKILL gathers the JUDGMENT fields (category,
 # description, recurrence_of, pattern, keywords, prose body) and calls this
-# script, which does only the mechanical work: build the JSON / file, and
-# regenerate the relevant always-loaded/materialized view (common-mistakes.md,
-# decisions/INDEX.md, or solutions/INDEX.md).
+# script, which does only the mechanical work: build the JSON / write the file.
 #
 # HARD RULE: every JSON object is built with `jq -n --arg` — never an inline
 # echoed brace-literal. The old log-mistake/SKILL.md echoed the JSON object as a
@@ -15,20 +16,15 @@
 # that quoted literal truncates the JSON). This script fixes it by construction.
 #
 # Subcommands:
-#   mistake       append a row to mistakes.jsonl, then regen common-mistakes.md
-#   decision      write references/decisions/<date>-<slug>.md, then regen its INDEX
-#   solution      write references/solutions/<date>-<slug>.md, then regen its INDEX
-#   failure-mode  write/update references/failure-modes/<slug>.md, then regen
+#   mistake       append a row to mistakes.jsonl
+#   decision      write references/decisions/<date>-<slug>.md
+#   solution      write references/solutions/<date>-<slug>.md
+#   failure-mode  write/update references/failure-modes/<slug>.md
 #                 (gated: >=3 occurrences of the pattern in mistakes.jsonl first)
 #
 # Env overrides (used by tests so a dry-run never mutates committed records):
 #   MISTAKES_JSONL        path to the jsonl (default: $HOME/.claude/mistakes.jsonl).
-#                         Threaded through to the regen so the table joins the
-#                         same jsonl the row was appended to.
-#   COMMON_MISTAKES_OUT   when set, the regen writes here (via gen --stdout)
-#                         instead of the committed references/common-mistakes.md.
-#                         This is how a temp test runs the regen without
-#                         touching the committed file.
+#                         Also the corpus the failure-mode >=3 gate counts.
 #   DECISIONS_DIR / SOLUTIONS_DIR / FAILURE_MODES_DIR
 #                         override the target dirs (default: references/<kind>).
 
@@ -44,38 +40,8 @@ MISTAKES_JSONL="${MISTAKES_JSONL:-$HOME/.claude/mistakes.jsonl}"
 DECISIONS_DIR="${DECISIONS_DIR:-$ROOT/references/decisions}"
 SOLUTIONS_DIR="${SOLUTIONS_DIR:-$ROOT/references/solutions}"
 FAILURE_MODES_DIR="${FAILURE_MODES_DIR:-$ROOT/references/failure-modes}"
-GEN="$SCRIPT_DIR/gen-common-mistakes.sh"
-GEN_DECISIONS="$SCRIPT_DIR/gen-decisions-index.sh"
-GEN_SOLUTIONS="$SCRIPT_DIR/gen-solutions-index.sh"
 
 die() { printf 'log-record: %s\n' "$1" >&2; exit 1; }
-
-# Run the common-mistakes regenerator. Threads MISTAKES_JSONL through so the
-# table joins the same jsonl the row was appended to. When COMMON_MISTAKES_OUT
-# is set, write there via --stdout (leaving the committed md untouched);
-# otherwise run bare (writes references/common-mistakes.md), per the plan.
-regen_common_mistakes() {
-    [ -x "$GEN" ] || [ -f "$GEN" ] || die "generator not found at $GEN"
-    if [ -n "${COMMON_MISTAKES_OUT:-}" ]; then
-        MISTAKES_JSONL="$MISTAKES_JSONL" bash "$GEN" --stdout > "$COMMON_MISTAKES_OUT"
-    else
-        MISTAKES_JSONL="$MISTAKES_JSONL" bash "$GEN"
-    fi
-}
-
-# references/decisions/INDEX.md and references/solutions/INDEX.md are
-# GENERATED views (see gen-decisions-index.sh / gen-solutions-index.sh) — the
-# record file just written IS the source of truth. Regenerating the index
-# after writing is what keeps it in sync; there is no hand-append here.
-regen_decisions_index() {
-    [ -x "$GEN_DECISIONS" ] || [ -f "$GEN_DECISIONS" ] || die "generator not found at $GEN_DECISIONS"
-    bash "$GEN_DECISIONS"
-}
-
-regen_solutions_index() {
-    [ -x "$GEN_SOLUTIONS" ] || [ -f "$GEN_SOLUTIONS" ] || die "generator not found at $GEN_SOLUTIONS"
-    bash "$GEN_SOLUTIONS"
-}
 
 # ===========================================================================
 # mistake
@@ -145,7 +111,6 @@ cmd_mistake() {
 
     mkdir -p "$(dirname "$MISTAKES_JSONL")"
     printf '%s\n' "$row" >> "$MISTAKES_JSONL"
-    regen_common_mistakes
     printf 'log-record: appended mistake to %s\n' "$MISTAKES_JSONL" >&2
 }
 
@@ -232,7 +197,6 @@ EOF
         printf '%s\n' "$body"
     } > "$file"
 
-    regen_decisions_index
     printf 'log-record: wrote %s\n' "$file" >&2
 }
 
@@ -309,7 +273,6 @@ EOF
         printf '%s\n' "$body"
     } > "$file"
 
-    regen_solutions_index
     printf 'log-record: wrote %s\n' "$file" >&2
 }
 
@@ -376,7 +339,7 @@ cmd_failure_mode() {
         printf 'kind: failure-mode\n'
         printf 'date: %s\n' "$date"
         printf 'keywords: %s\n' "$keywords"
-        # rule is the exact common-mistakes.md cell — quote it.
+        # rule is a single quoted sentence — the whole rule, on one line.
         printf 'rule: %s\n' "$(jq -nc --arg r "$rule" '$r')"
         if [ -n "$face_of" ]; then
             printf 'face_of: %s\n' "$face_of"
@@ -397,7 +360,6 @@ cmd_failure_mode() {
         printf '## Correct\n\n%s\n' "$correct"
     } > "$file"
 
-    regen_common_mistakes
     printf 'log-record: wrote %s\n' "$file" >&2
 }
 

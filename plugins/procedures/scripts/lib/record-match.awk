@@ -26,7 +26,11 @@
 #              (#META<TAB>N<TAB>avgdl) followed by <token><TAB><df><TAB><idf>
 #              lines. Supplies per-token IDF (ranking) and df (the gate).
 #   limit    — max number of `path — gloss` lines to emit PER KIND, applied to
-#              the RANKED order (highest scorers survive the cap). Default 20.
+#              the RANKED order (highest scorers survive the cap).
+#              PLUGIN ADAPTATION: owner call — a query returns ALL matches by
+#              default; truncation and ranking floors are opt-in knobs,
+#              because the scout needs the full match set. Default 0 (0/empty
+#              = uncapped, i.e. every ranked survivor is emitted).
 #   gate     — 1 (default) = PUSH absolute gate ON: a record fires only when it
 #                has >=2 matched tokens OR >=1 matched token with df<=K_floor.
 #              0 = PULL gate OFF: any record with >=1 matched token is a
@@ -61,7 +65,7 @@
 
 BEGIN {
     # ---- defaults ----
-    if (limit == "")     limit = 20
+    if (limit == "")     limit = 0
     if (gate == "")      gate = 1
     if (k1 == "")        k1 = 1.2
     if (b == "")         b = 0.5
@@ -239,8 +243,8 @@ END {
         if (!(k in bucket_top)) bucket_top[k] = r_score[idx]
         # relative floor: drop candidates below rel_ratio * bucket top.
         if (r_score[idx] < rel_ratio * bucket_top[k]) continue
-        # per-kind cap on the RANKED order.
-        if (kindcount[k] >= limit) continue
+        # per-kind cap on the RANKED order. limit<=0 = uncapped.
+        if (limit > 0 && kindcount[k] >= limit) continue
         printf "%s — %s\n", r_path[idx], r_gloss[idx]
         kindcount[k]++
     }

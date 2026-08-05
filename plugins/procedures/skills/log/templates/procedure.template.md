@@ -28,8 +28,8 @@ Delete this line only if nothing is confusable with it.
 <!--
 HOW TO USE THIS TEMPLATE — delete this block.
 
-A procedure is for work with NO script. If a script does the work, write a SKILL instead
-(SKILL_TEMPLATE.md) whose job is telling an agent how to use that script.
+A procedure is for work with NO script. If a script does the work, write a SKILL instead —
+a skill whose job is telling an agent how to use that script.
 
 Act-doc rules (prin.agent-facing-docs, loaded in the root CLAUDE.md):
 - Steps are imperative and ordered. The reader is a competent agent, not a novice.

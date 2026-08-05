@@ -17,7 +17,7 @@ A task shape that already routes needs a better BRIEF, not a new agent. Mint onl
 
 ## 2. Write the file
 
-Read `${CLAUDE_SKILL_DIR}/references/write-agent-doc-PROCEDURE.md`, then fill the skeleton in `${CLAUDE_SKILL_DIR}/templates/AGENT_TEMPLATE.md`. What the template is for:
+Read `${CLAUDE_SKILL_DIR}/references/write-agent-doc.procedure.md`, then fill the skeleton in `${CLAUDE_SKILL_DIR}/templates/agent.template.md`. What the template is for:
 
 - **A single mandate.** One agent, one question it answers. Two mandates is two agents.
 - **A right-sized model tier, with the justification written down.** Haiku for mechanical, Sonnet for standard, Opus for judgment — the tier is the cost lever, so say why this one.

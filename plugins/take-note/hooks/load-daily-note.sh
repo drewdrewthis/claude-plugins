@@ -9,10 +9,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || exit 0
 # shellcheck source=../lib/notes-path.sh
 source "$SCRIPT_DIR/../lib/notes-path.sh" || exit 0
 
-ABOUT="$WS/references/docs/ABOUT_MY_PERSON.md"
+ABOUT="${ABOUT_MY_PERSON_FILE:-${ABOUT_MY_PERSON_DIR:-$HOME/.claude/about-my-person}/ABOUT_MY_PERSON.md}"
 
 if [ -s "$ABOUT" ]; then
-  echo "## Who your person is (references/docs/ABOUT_MY_PERSON.md — maintain via /about-my-person)"
+  echo "## Who your person is ($ABOUT — maintain via /about-my-person)"
   cat "$ABOUT"
   echo
 fi

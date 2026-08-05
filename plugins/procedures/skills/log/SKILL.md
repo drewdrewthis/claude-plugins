@@ -1,6 +1,6 @@
 ---
 name: log
-description: "Log a durable record — a mistake, decision, solution, or failure-mode — to its record store. One entry point for all four record kinds. Use when the user corrects you (mistake), a judgment call is resolved (decision), a non-obvious fix is confirmed (solution), or a recurring agent mistake reaches the promotion bar (failure-mode). Triggers: 'log a mistake', 'record this decision', 'document this fix', 'promote this to a failure mode', or /evolve codifying a rule."
+description: "Log a durable record — a mistake, decision, solution, or failure-mode — to its record store. One entry point for all four record kinds. Use when the user corrects you (mistake), a judgment call is resolved (decision), a non-obvious fix is confirmed (solution), or a recurring agent mistake reaches the promotion bar (failure-mode). Triggers: 'log a mistake', 'record this decision', 'document this fix', 'promote this to a failure mode', or codifying a rule after a correction."
 user-invocable: true
 argument-hint: "<kind> [text]"
 ---
@@ -13,7 +13,7 @@ One entry point for the four record kinds. `<kind>` is `mistake`, `decision`, `s
 scripts/log-record.sh <kind> [flags…]
 ```
 
-The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal — the apostrophe-in-jq bug the old `log-mistake` had), writing the file, and regenerating the relevant INDEX/view (`gen-decisions-index.sh`, `gen-solutions-index.sh`, or `common-mistakes.md`). You own the JUDGMENT half below.
+The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal — the apostrophe-in-jq bug the old `log-mistake` had) and writing the file. No index files are maintained: discovery is the record's frontmatter plus `scripts/query-records.sh`. You own the JUDGMENT half below.
 
 Resume the interrupted conversation immediately after — every kind takes <10 seconds and must not derail it.
 
@@ -21,9 +21,9 @@ Resume the interrupted conversation immediately after — every kind takes <10 s
 
 ## kind = mistake
 
-Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `deep-reflect`, `/evolve`, and `retro`.
+Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by the procedure-scout (which sweeps failure-modes + `mistakes.jsonl` per query), `deep-reflect`, and `retro`.
 
-**Triggers:** user correction ("no", "wrong", "not that", a redirect); self-catch; from `/evolve` after codifying a rule; manual `/log mistake <description>`.
+**Triggers:** user correction ("no", "wrong", "not that", a redirect); self-catch; after codifying a rule from a correction; manual `/log mistake <description>`.
 
 **Gather the fields:**
 
@@ -58,7 +58,7 @@ Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `deep-refl
 
    **Merged ids (2026-06-10 condensation):** if the mistake matches any retired id — `claim-done-without-evidence`, `speculation-with-false-precision`, `dependency-conclusion-from-partial-read`, `recipe-untested-because-test-bypasses-recipe`, `cross-layer-wire-untested`, `stale-prove-it-marker-after-push`, `self-defeating-evidence-cmd`, `assumed-block` — pass `--pattern "unverified-claim-acted-on"` and record the specific face with `--face "<face-name>"`. Do NOT rewrite historical entries.
 
-**Call the script** (it stamps `ts`, `project`, `session` if you omit them; it regenerates `common-mistakes.md` automatically):
+**Call the script** (it stamps `ts`, `project`, `session` if you omit them):
 
 ```bash
 bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" mistake \
@@ -68,7 +68,7 @@ bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" mistake \
   [--pattern "<row-id>"] [--face "<face>"] [--recurrence-of "<earliest-ts>"]
 ```
 
-**After:** scan the last ~20 entries for the same `category` + similar `description` (or a shared `recurrence_of` chain). If **3+** entries share a pattern with no matching record in `references/failure-modes/`, promote it with `/log failure-mode <slug> "<rule>"` (see below). Below the ≥3 bar, leave the EVENT logged. Promotion at scale (condensation, demotion) stays `/evolve`'s job.
+**After:** scan the last ~20 entries for the same `category` + similar `description` (or a shared `recurrence_of` chain). If **3+** entries share a pattern with no matching record in `references/failure-modes/`, promote it with `/log failure-mode <slug> "<rule>"` (see below). Below the ≥3 bar, leave the EVENT logged. Promotion at scale (condensation, demotion) stays a deliberate maintenance pass.
 
 **Boundaries:** don't log clarifications (a correction changes direction; a clarification adds detail). Don't write vague entries ("made a mistake") — be specific.
 
@@ -76,7 +76,7 @@ bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" mistake \
 
 ## kind = decision
 
-Writes `references/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`) and regenerates `references/decisions/INDEX.md` via `scripts/gen-decisions-index.sh` (the INDEX is a generated view — never hand-append a row). Consumed by the pre-action grep that prevents relitigating settled choices. Mirrors `/decide` Phase 6 — if `/decide` already wrote the artifact, do NOT duplicate it; just note the existing path.
+Writes `references/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter plus `scripts/query-records.sh`. Consumed by the pre-action grep that prevents relitigating settled choices. Mirrors `/decide` Phase 6 — if `/decide` already wrote the artifact, do NOT duplicate it; just note the existing path.
 
 **Pre-action grep first** — `grep -rl '<keywords>' ~/.claude/references/decisions/`; if the question is already settled, link the existing record instead of creating a duplicate.
 
@@ -101,7 +101,7 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = solution
 
-Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`) and regenerates `references/solutions/INDEX.md` via `scripts/gen-solutions-index.sh` (the INDEX is a generated view — never hand-append a row). Consumed by the pre-action grep in `common-mistakes.md`.
+Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter plus `scripts/query-records.sh`. Consumed by the procedure-scout's pre-action sweep.
 
 **Gather:** `slug` (kebab-case, ≤6 words, names the *problem* not the fix), `keywords` (problem domain, tool name, error class), `situation-tags` (lowercase situation class: `daemon`, `gh-cli`, `env-config`, …), `resolve-after` (~3 months out; env/version hacks expire faster), a one-line `summary` = the canonical resolution, and the prose `body` (Symptom / Rule / optional Check / optional Recipe — Recipe only when flags/order matter).
 
@@ -124,9 +124,9 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = failure-mode
 
-Writes `references/failure-modes/<slug>.md` (BARE slug filename, no `fm.` prefix; id `fm.<slug>`; `rule:` field = the exact `common-mistakes.md` cell) and regenerates `common-mistakes.md`. Does NOT merge on re-run — see below. Consumed every session via the always-loaded `common-mistakes.md`.
+Writes `references/failure-modes/<slug>.md` (BARE slug filename, no `fm.` prefix; id `fm.<slug>`; `rule:` field = the one-sentence rule, whole and self-contained). Does NOT merge on re-run — see below. Consumed by the procedure-scout, which sweeps failure-modes + `mistakes.jsonl` per query.
 
-**Triggers:** a mistake pattern reached **≥3** occurrences in `~/.claude/mistakes.jsonl` (the `/evolve` Phase 2.5 promotion bar); "promote this to a rule"; a FACE record nesting under a mega parent.
+**Triggers:** a mistake pattern reached **≥3** occurrences in `~/.claude/mistakes.jsonl` (the promotion bar, script-enforced); "promote this to a rule"; a FACE record nesting under a mega parent.
 
 **Check the gate + prior entry FIRST:**
 
@@ -138,9 +138,9 @@ grep -c '"pattern":"<slug>"' ~/.claude/mistakes.jsonl            # occurrence co
 - The script ENFORCES the ≥3 gate on a NEW record (counts `"pattern":"<slug>"` in the jsonl and refuses below 3). Below the bar, log the EVENT with `/log mistake` instead.
 - **If a record already exists, the script REFUSES by default** (non-zero exit, file untouched) — it does not read or merge the existing content. To add a face/instance or revise prose on a record that already exists, **hand-edit the file directly**; that is how every real failure-mode record has actually grown. `--force` overwrites the ENTIRE file from scratch (every prior face gone) and exists only for a genuinely intentional full rewrite — never pass it to "update" a record whose content you want to keep.
 
-**Gather:** `slug` (kebab-case, ≤6 words, names the failure behavior — the SAME bare slug used as the jsonl `pattern`, so the join holds), `rule` (ONE crisp imperative sentence — the entire table cell; write it so a fresh agent can act on it in isolation), `keywords`, and the prose `mistake` / `correct` sections.
+**Gather:** `slug` (kebab-case, ≤6 words, names the failure behavior — the SAME bare slug used as the jsonl `pattern`, so the join holds), `rule` (ONE crisp imperative sentence — write it so a fresh agent can act on it in isolation), `keywords`, and the prose `mistake` / `correct` sections.
 
-**Standalone vs FACE:** a standalone record gets its own `common-mistakes.md` row. A FACE of a mega parent passes `--face-of <parent-slug-without-fm-prefix>` (and the parent gets `--mega true`); FACE records are NOT emitted as their own row.
+**Standalone vs FACE:** a standalone record stands on its own. A FACE of a mega parent passes `--face-of <parent-slug-without-fm-prefix>` (and the parent gets `--mega true`); a FACE is read through its parent, not as a peer.
 
 ```bash
 bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" failure-mode \
@@ -150,6 +150,6 @@ bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" failure-mode \
   [--face-of "<parent-slug>"] [--mega true]
 ```
 
-The script regenerates `common-mistakes.md` after the write (joining the registry against the real jsonl `pattern` counts, stripping `fm.` to match). NEVER hand-edit `common-mistakes.md` — a pre-commit guard rejects a divergent copy. New records start `verification: pending`, `status: active` — do not invent evidence.
+New records start `verification: pending`, `status: active` — do not invent evidence.
 
 **failure-mode vs mistake:** `/log mistake` appends ONE structured EVENT per occurrence (cheap, at correction time). `/log failure-mode` creates/updates the durable RECORD that `pattern` points AT — and requires ≥3 occurrences. They compose: log the EVENT each time; promote to a RECORD when it recurs.

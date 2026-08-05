@@ -11,14 +11,26 @@
 # principles).
 #
 # Flags (combine with AND logic — every condition must hold):
-#   --keyword <tok>   records whose frontmatter `keywords` contain the token
-#                     (same tokenization + shared matcher as the router).
-#   --kind <kind>     records whose frontmatter `kind:` equals <kind>.
-#   --id <id>         the record whose frontmatter `id:` equals <id> exactly.
-#   --links-to <id>   records whose `links:` value references <id>.
+#   --keyword <tok>    records whose frontmatter `keywords` contain the token
+#                      (same tokenization + shared matcher as the router).
+#   --kind <kind>      records whose frontmatter `kind:` equals <kind>.
+#   --id <id>          the record whose frontmatter `id:` equals <id> exactly.
+#   --links-to <id>    records whose `links:` value references <id>.
+#   --limit <N>        cap the total result count (env QUERY_RECORDS_LIMIT).
+#                      0/absent = all matches (the default).
+#   --rel-ratio <X>    matcher's relative floor, within a kind bucket a
+#                      candidate scoring < X * (bucket top score) is dropped
+#                      (env QUERY_RECORDS_REL_RATIO). 0 disables this
+#                      suppression. Default 0.3 (unchanged ranking behavior).
+#   --k-floor <N>      matcher's rarity-gate document-frequency threshold
+#                      (env QUERY_RECORDS_K_FLOOR). Default 2 (unchanged).
 #
-# Output: `path — gloss` lines (same shape as the router). Capped at 20.
-# No match: empty stdout, exit 0.
+# PLUGIN ADAPTATION: owner call — a query returns ALL matches by default;
+# truncation and ranking floors are opt-in knobs, because the scout needs the
+# full match set.
+#
+# Output: `path — gloss` lines (same shape as the router). All matches by
+# default; pass --limit to cap. No match: empty stdout, exit 0.
 #
 # Pure bash/grep/awk; no network, no LLM.
 #
@@ -48,7 +60,12 @@ source "$SCRIPT_DIR/lib/stores.sh"
 # query-records uses ALL_STORES as its local name; alias for clarity.
 ALL_STORES=("${STORES[@]}")
 
-LIMIT=20
+# PLUGIN ADAPTATION: owner call — a query returns ALL matches by default;
+# truncation and ranking floors are opt-in knobs, because the scout needs the
+# full match set. LIMIT=0 means uncapped (total-result cap, applied below).
+LIMIT="${QUERY_RECORDS_LIMIT:-0}"
+REL_RATIO="${QUERY_RECORDS_REL_RATIO:-}"
+K_FLOOR="${QUERY_RECORDS_K_FLOOR:-}"
 
 # ---- parse flags ----
 Q_KEYWORD=""
@@ -57,10 +74,13 @@ Q_ID=""
 Q_LINKS_TO=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --keyword)  Q_KEYWORD="${2:-}"; shift 2 ;;
-        --kind)     Q_KIND="${2:-}"; shift 2 ;;
-        --id)       Q_ID="${2:-}"; shift 2 ;;
-        --links-to) Q_LINKS_TO="${2:-}"; shift 2 ;;
+        --keyword)   Q_KEYWORD="${2:-}"; shift 2 ;;
+        --kind)      Q_KIND="${2:-}"; shift 2 ;;
+        --id)        Q_ID="${2:-}"; shift 2 ;;
+        --links-to)  Q_LINKS_TO="${2:-}"; shift 2 ;;
+        --limit)     LIMIT="${2:-0}"; shift 2 ;;
+        --rel-ratio) REL_RATIO="${2:-}"; shift 2 ;;
+        --k-floor)   K_FLOOR="${2:-}"; shift 2 ;;
         *) echo "query-records: unknown flag: $1" >&2; exit 2 ;;
     esac
 done
@@ -167,20 +187,36 @@ if [ -n "$Q_KEYWORD" ]; then
     # the PUSH gate would suppress a lone common token. So pass gate=0 to turn
     # OFF the absolute df<=K_floor floor — the matcher then ranks every record
     # with >=1 matched token and returns the top-N. The router keeps gate=1.
-    printf '%s\n' "$NARROWED" | awk \
+    # PLUGIN ADAPTATION: owner call — the matcher's own per-kind `limit` stays
+    # uncapped (0) here; the total-result cap (--limit/QUERY_RECORDS_LIMIT) is
+    # applied uniformly below, after this path and the structural-only path
+    # both emit their full match sets.
+    MATCH_OUT="$(printf '%s\n' "$NARROWED" | awk \
         -v tokfile="$TOKEN_FILE" \
         -v idffile="$IDF_FILE" \
         -v gate=0 \
-        -v limit="$LIMIT" \
-        -f "$LIB_DIR/record-match.awk"
+        -v limit=0 \
+        -v rel_ratio="$REL_RATIO" \
+        -v k_floor="$K_FLOOR" \
+        -f "$LIB_DIR/record-match.awk")"
+    if [ "$LIMIT" -gt 0 ] 2>/dev/null; then
+        printf '%s\n' "$MATCH_OUT" | head -n "$LIMIT"
+    else
+        printf '%s\n' "$MATCH_OUT"
+    fi
     exit 0
 fi
 
 # ---- no keyword: emit the structurally-narrowed records as path — gloss ----
+# PLUGIN ADAPTATION: owner call — all matches by default; the old hardcoded
+# early break at LIMIT=20 is gone. --limit/QUERY_RECORDS_LIMIT (0 = uncapped)
+# now caps the TOTAL result count, checked per emitted line below.
 n=0
 while IFS= read -r f; do
     [ -n "$f" ] || continue
-    [ "$n" -ge "$LIMIT" ] && break
+    if [ "$LIMIT" -gt 0 ] 2>/dev/null && [ "$n" -ge "$LIMIT" ]; then
+        break
+    fi
     printf '%s — %s\n' "$f" "$(gloss_of "$f")"
     n=$((n + 1))
 done <<< "$NARROWED"

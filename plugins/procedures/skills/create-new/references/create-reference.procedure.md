@@ -56,15 +56,13 @@ Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.
 
    Body is free-form. Use `## ` section headers for scanability. Lead with the conclusion or most-referenced fact. Prefer tables for 2+-dimensional content.
 
-4. **INDEX row — conditional.** Most `references/<area>/` dirs have NO `INDEX.md`; do NOT create one. Dirs that do: `solutions/`, `scenarios/`, `decisions/`, `plans/`. For `decisions/` and `solutions/`, the INDEX is GENERATED — never hand-append; just run `scripts/gen-decisions-index.sh` or `scripts/gen-solutions-index.sh` after adding the record file. For `scenarios/` and `plans/`, append a row at the TOP of the table (newest-first) — those remain hand-maintained.
+4. **No index row.** No index files are maintained anywhere in the stores — do NOT create or append to one. Discovery is the record's frontmatter plus `scripts/query-records.sh`; the procedure-scout compiles any digest it needs per query.
 
 5. Confirm the file path and report. Resume the interrupted conversation.
 
 ## Boundaries
 
-- This skill is for FREE-FORM reference docs — not procedures (use the create-procedure procedure `references/procedures/codex-meta/create-procedure/PROCEDURE.md`), not solution fixes (use `/log solution`), not failure-mode records (use `/log failure-mode`), not decision records (use `/log decision`).
-- Do NOT create an `INDEX.md` in a dir that lacks one — only append (or regenerate, for `decisions/`/`solutions/`) when one already exists.
-- Never hand-edit `references/decisions/INDEX.md` or `references/solutions/INDEX.md` — rerun the generator script instead.
+- This skill is for FREE-FORM reference docs — not procedures (use `create-procedure.procedure.md`), not solution fixes (use `/log solution`), not failure-mode records (use `/log failure-mode`), not decision records (use `/log decision`).
+- Do NOT create an index file in any store dir — frontmatter is the only index.
 - `status: active` always at creation (unlike procedures which start `draft`).
 - Keep the doc scannable: lead with conclusion, use headers, avoid prose blocks where a table works.
-- No INDEX row for `principles/`, `policies/`, `research/`, `adrs/` — those dirs have no INDEX.md.

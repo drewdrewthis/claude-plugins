@@ -1,4 +1,4 @@
-# Handoff report template
+# am-i-done report template
 
 Fill this in. Each section says what it is for; the traps are marked inline.
 
