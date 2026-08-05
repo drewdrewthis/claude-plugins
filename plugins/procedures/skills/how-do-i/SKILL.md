@@ -18,10 +18,18 @@ what's written rather than what you half-remember:
 1. **Your procedures** — `<root>/procedures/*.md` — repeatable
    operations you've written down.
 2. **Your solutions** — `<root>/solutions/*.md` — reusable fixes.
-3. **Your decisions** — `<root>/decisions.jsonl` — settled choices.
-4. **Shipped docs** — `$HOW_DO_I_EXTRA_DOCS`, if set — docs your operator
+3. **Your principles** — `<root>/principles/*.md` — durable how-to-think rules.
+4. **Your failure-modes** — `<root>/failure-modes/*.md` — mistake patterns
+   learned from corrections; check these before repeating an operation that
+   once went wrong.
+5. **Your decisions** — `<root>/decisions.jsonl` — settled choices.
+6. **Shipped docs** — `$HOW_DO_I_EXTRA_DOCS`, if set — docs your operator
    ships to you.
-5. **History** — the `/recall` index (`$RECALL_SCRIPT`), as fuzzy fallback.
+7. **History** — the `/recall` index (`$RECALL_SCRIPT`), as fuzzy fallback.
+
+Every record you find carries frontmatter (`id`, `kind`, `date`, `keywords`,
+`links`, `status`) — `keywords` is why the search works and `links` tells you
+what else to read.
 
 ## Steps
 

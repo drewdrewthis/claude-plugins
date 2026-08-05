@@ -25,7 +25,7 @@ orchard-codex `develop-sweatshop`):
 | piece | what |
 |---|---|
 | `/how-do-i` | routes a question across procedures, solutions, decisions.jsonl, shipped docs, and `/recall` history before improvising |
-| `/log` | durable records: procedure / decision / solution, templates in `skills/log/templates/` |
+| `/log` | durable records: procedure / decision / solution / principle / failure-mode — `*_TEMPLATE.md` files in `skills/log/templates/` (PROCEDURE, DECISION, SOLUTION, PRINCIPLE, FAILURE_MODE, EVOLUTION) |
 | `/am-i-done` | cold-read review of a handoff report by the `work-reviewer` agent before calling work done |
 | `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(how-do-i)` has run this turn; fail-open, blind fail-opens recorded |
 | `am-i-done-gate` (Stop) | requires one `Skill(am-i-done)` review on any turn that called tools; asks at most once |
