@@ -22,6 +22,22 @@ root below is `$KNOWLEDGE_REFS` if set, else `~/.claude/references`.
 | **decision** | a settled non-trivial choice you'll need to honor later | append one JSON line to `<root>/decisions.jsonl` (template: `decision.md`) |
 | **solution** | a reusable fix/pattern for a problem that will recur | `<root>/solutions/<YYYY-MM-DD>-<kebab-name>.md` (template: `solution.md`) |
 
+## Frontmatter — every record, no exceptions
+
+Every record .md begins with the six-key frontmatter block: `id`, `kind`,
+`date`, `keywords` (non-empty — the discovery surface), `links`, `status`.
+The templates carry the shape; a PostToolUse hook lints every record you
+write and blocks the turn's flow until you fix a violation. Markdown without
+frontmatter is invisible to discovery — it may as well not exist.
+
+## EVOLUTION.md — a procedure's memory
+
+Every procedure directory carries an `EVOLUTION.md` beside its content
+(template: `EVOLUTION.md`). On every material edit to a procedure, append one
+dated line — what changed and the incident/correction that motivated it,
+newest first. Never rewrite old lines. This is how the next agent knows an
+edit was settled, not accidental.
+
 ## Rules
 
 - **Check for an existing record first** (`/how-do-i` on the topic). Amend the

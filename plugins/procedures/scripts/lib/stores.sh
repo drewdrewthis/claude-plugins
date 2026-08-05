@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# stores.sh — single source of truth for the seven codex record stores.
+#
+# Source this file from any script that needs the store list:
+#   source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/stores.sh"   # from hooks/
+#   source "$(dirname "${BASH_SOURCE[0]}")/lib/stores.sh"                  # from scripts/
+#
+# Exports:
+#   STORES           — bash array of the seven store paths (relative to repo root)
+#   STORES_ALT       — pipe-separated alternation for grep -E / sed -E patterns
+#                      e.g. "references/failure-modes|references/decisions|..."
+#
+# NOTE: hooks run as subprocesses; source via a path derived from the script's
+# own ${BASH_SOURCE[0]}, NOT from $CLAUDE_PROJECT_DIR (not exported to hooks).
+
+STORES=(
+    references/failure-modes
+    references/decisions
+    references/solutions
+    references/procedures
+    references/research
+    plans
+    references/principles
+)
+
+# Build pipe-alternation of full store paths for grep -E / sed -E patterns.
+STORES_ALT=""
+for _s in "${STORES[@]}"; do
+    STORES_ALT="${STORES_ALT:+${STORES_ALT}|}${_s}"
+done
+
+# Build pipe-alternation of store BASENAMES for links sub-key stripping.
+# e.g. "failure-modes|decisions|solutions|procedures|research|plans|principles"
+STORES_BASENAME_ALT=""
+for _s in "${STORES[@]}"; do
+    _b="${_s##*/}"
+    STORES_BASENAME_ALT="${STORES_BASENAME_ALT:+${STORES_BASENAME_ALT}|}${_b}"
+done
+unset _s _b

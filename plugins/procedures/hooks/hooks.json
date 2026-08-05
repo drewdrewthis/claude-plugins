@@ -13,6 +13,12 @@
         "hooks": [
           { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/turn-state-record.sh" }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/enforce-frontmatter.sh" }
+        ]
       }
     ],
     "PreToolUse": [
