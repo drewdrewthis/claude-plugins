@@ -35,16 +35,44 @@ orchard-codex `develop-sweatshop`):
 | `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation |
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (template in `skills/log/templates/`) — one dated line per material change, newest first; `/log` explains it |
 
-The machinery is copied byte-for-byte from orchard-codex `develop-sweatshop`
-(skills, procedure-scout/work-reviewer agents, gate hooks + lib,
-`query-records.sh` + `log-record.sh` + `gen-*` view generators + shared awk
-matcher, linter, templates). It assumes the codex layout rooted at
-`~/.claude` — record stores under `~/.claude/references/**`,
-`~/.claude/mistakes.jsonl`, scripts reachable per the SKILL docs. Env
-overrides where the upstream scripts define them (`QUERY_RECORDS_ROOT`,
-`MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`, `FAILURE_MODES_DIR`,
-`TURN_STATE_DIR`, `LINT_FRONTMATTER_ROOT`, `KNOWLEDGE_ROOT` for the
-frontmatter hook).
+The machinery is vendored from orchard-codex `develop-sweatshop` (skills,
+procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
+`log-record.sh` + `gen-*` view generators + shared awk matcher, linter,
+templates) with exactly two classes of deliberate adaptation, each marked
+`PLUGIN ADAPTATION` in the source:
+
+- **Data-root defaults:** every script's record-store root defaults to
+  `~/.claude` (the host codex) instead of the script's own parent dir —
+  upstream the scripts live inside the codex repo; installed as a plugin
+  they must not write records into the plugin dir. Override with
+  `CODEX_ROOT` (or the per-script vars: `QUERY_RECORDS_ROOT`,
+  `MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`, `FAILURE_MODES_DIR`,
+  `LINT_FRONTMATTER_ROOT`, `TURN_STATE_DIR`, `KNOWLEDGE_ROOT` for the
+  frontmatter hook).
+- **Script paths in skill bodies:** `/log` and the `/how-do-i` fork prompt
+  reference the plugin-shipped scripts via `${CLAUDE_SKILL_DIR}` (substituted
+  by Claude Code in skill markdown) instead of upstream's repo-relative
+  paths.
+
+Verified end-to-end with `claude --plugin-dir`: the gate cycle works as
+shipped — `tool_input.skill` arrives as the bare skill name, the reset hook
+stamps the turn, the record hook marks `how_do_i`, and the fork dispatches
+the plugin's own `procedure-scout`.
+
+**`respond-gate.sh` ships but is NOT wired** in `hooks/hooks.json`: it denies
+tool calls until a `/respond` skill has run, and this plugin does not ship a
+`/respond` skill — wiring it would brick any consumer without one. Hosts
+that have their own `/respond` wire it via their user/project settings.
+
+### Tests
+
+The upstream bats suites for everything shipped here (gates + libs +
+fail-open, linter, `query-records.sh` + ranking, index generators) are
+vendored under `plugins/procedures/{hooks,scripts}/tests/`. Run:
+
+```
+cd plugins/procedures && bats hooks/tests scripts/tests
+```
 
 ### about-my-person (0.1.0)
 
@@ -63,11 +91,7 @@ carry-over) + a SessionStart hook loading today's (or yesterday's) note and
 
 ## docs/
 
-`docs/adrs/` — the ADRs and decision records behind this system, copied from
-orchard-codex (per-turn invariant gates, done-gate design, procedure = prose
-script / skill = executor, atomic unit is the document, scenario-driven
-evolution, skill-is-a-gateway). `docs/procedure-evolution.md` — the
-generative-loop principle EVOLUTION.md logging serves.
-
-Origin: skills extracted 2026-08-05 from `appletree-base`; gates, linter, and
-ADRs from `orchard-codex@develop-sweatshop`.
+`docs/adrs/001-procedural-knowledge-system.md` — the design rationale behind
+the procedures plugin, consolidated into one record: the
+procedure/skill/hook taxonomy, the per-turn invariant gates, records and
+generated views, and the evolution loop.

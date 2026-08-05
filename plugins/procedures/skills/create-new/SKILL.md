@@ -14,9 +14,9 @@ procedure in `${CLAUDE_SKILL_DIR}/references/`:
 |---|---|---|
 | **procedure** | `create-procedure-PROCEDURE.md` | `$KNOWLEDGE_REFS/procedures/<name>/PROCEDURE.md` + seed its `EVOLUTION.md` (templates in the log skill) |
 | **reference** | `create-reference-PROCEDURE.md` | `$KNOWLEDGE_REFS/docs/` (or the store the procedure names) |
-| **skill** | `create-skill-PROCEDURE.md` | a new skill directory — only when the operation earns an invocation handle (see docs/adrs: executor-skills-stay-as-skills, skill-is-a-gateway) |
+| **skill** | `create-skill-PROCEDURE.md` | a new skill directory — only when the operation earns an invocation handle (see `docs/adrs/001-procedural-knowledge-system.md`) |
 
 Rules that hold regardless of kind: check `/how-do-i` for an existing
 artifact first; six-key frontmatter on every record (the frontmatter hook
 enforces it); draft-then-promote — a first success earns a draft, promotion
-needs the gate in `docs/procedure-evolution.md`.
+needs the gate in `docs/adrs/001-procedural-knowledge-system.md` ("Evolution").

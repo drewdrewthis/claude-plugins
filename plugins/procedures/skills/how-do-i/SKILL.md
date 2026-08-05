@@ -18,5 +18,9 @@ Search the record stores, read every candidate in full, and return the proposal
 in your output shape — what governs, the commands verbatim, the traps, and a
 standing label on every source.
 
+Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`
+(use it in place of the relative `scripts/query-records.sh` in your steps); the
+record stores live under `~/.claude/references/**` and `~/.claude/mistakes.jsonl`.
+
 If the goal is ambiguous, say which reading you took rather than picking one
 silently.

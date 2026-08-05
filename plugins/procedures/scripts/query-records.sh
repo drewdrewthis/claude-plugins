@@ -37,7 +37,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"
 # ROOT (the corpus root) defaults to repo root. Overridable via
 # QUERY_RECORDS_ROOT for testing against fixture stores.
-ROOT="${QUERY_RECORDS_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+# PLUGIN ADAPTATION: data root defaults to the host codex (~/.claude), not this
+# plugin install dir — upstream these scripts live inside the codex repo itself.
+ROOT="${QUERY_RECORDS_ROOT:-${CODEX_ROOT:-$HOME/.claude}}"
 cd "$ROOT" || exit 0
 
 # SSOT store list — sourced from scripts/lib/stores.sh (defines STORES array).

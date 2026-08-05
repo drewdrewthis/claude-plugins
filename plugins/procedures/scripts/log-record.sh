@@ -35,7 +35,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# PLUGIN ADAPTATION: data root defaults to the host codex (~/.claude), not this
+# plugin install dir — upstream these scripts live inside the codex repo itself.
+ROOT="${CODEX_ROOT:-$HOME/.claude}"
 
 # --- paths (all overridable for tests) ---
 MISTAKES_JSONL="${MISTAKES_JSONL:-$HOME/.claude/mistakes.jsonl}"

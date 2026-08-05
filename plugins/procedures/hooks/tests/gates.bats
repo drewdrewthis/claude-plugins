@@ -1,0 +1,442 @@
+#!/usr/bin/env bats
+# Policy tests for the three per-turn gates.
+#
+# The libraries are covered by gate-libs.bats; these prove POLICY only —
+# who is denied, when, and that every degenerate path releases.
+#
+# Run: bats hooks/tests/gates.bats
+
+setup() {
+  HOOKS="$BATS_TEST_DIRNAME/.."
+  export TURN_STATE_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gates.XXXXXX")"
+  # orchard-codex#210 root cause: gate_failopen() defaults this to the REAL
+  # $HOME/.claude/gate-failopen.jsonl (the GATE_FAILOPEN_LOG assignment in
+  # hooks/lib/gate-failopen.sh). Leaving it unset
+  # here is what leaked this suite's own runs into production telemetry (see
+  # "root cause #210" test below). HOME is ALSO redirected: PROJ two lines
+  # down and gate_failopen's own default are both $HOME-relative, so a fake
+  # HOME closes both holes with one export, and covers any future $HOME-relative
+  # default too.
+  export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gates-home.XXXXXX")"
+  mkdir -p "$HOME/.claude"
+  export GATE_FAILOPEN_LOG="$TURN_STATE_DIR/gate-failopen.jsonl"
+  SID="bats-g-$$-$BATS_TEST_NUMBER"
+  PAYLOAD_EDIT="{\"session_id\":\"$SID\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}"
+  # am-i-done-gate reads the transcript, which must live where it looks.
+  PROJ="$HOME/.claude/projects/-bats-g-$$-$BATS_TEST_NUMBER"
+  mkdir -p "$PROJ"
+  JSONL="$PROJ/$SID.jsonl"
+  : > "$JSONL"
+  STOP="{\"session_id\":\"$SID\",\"hook_event_name\":\"Stop\"}"
+}
+
+teardown() {
+  rm -rf "$TURN_STATE_DIR" "$HOME" 2>/dev/null || true
+}
+
+start_turn() { printf '{"session_id":"%s"}' "$SID" | bash "$HOOKS/turn-state-reset.sh"; }
+
+# start_turn_with <prompt> — a turn carrying the text that triggered it. jq
+# builds the payload so channel tags' own quotes survive intact.
+start_turn_with() {
+  jq -nc --arg s "$SID" --arg p "$1" '{session_id:$s, prompt:$p}' \
+    | bash "$HOOKS/turn-state-reset.sh"
+}
+
+# 0 when respond-gate would deny the assistant right now.
+respond_gate_denies() {
+  local out
+  out="$(env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'")"
+  [[ "$out" == *"RESPOND-GATE"* ]]
+}
+
+ran_skill() {
+  printf '{"session_id":"%s","tool_name":"Skill","tool_input":{"skill":"%s"}}' "$SID" "$1" \
+    | bash "$HOOKS/turn-state-record.sh"
+}
+
+user_prompt() { printf '{"type":"user","message":{"content":"do the thing"}}\n' >> "$JSONL"; }
+assistant_tool() {
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"%s"}]}}\n' "$1" >> "$JSONL"
+}
+
+# ---------- turn-state-record (ported from the retired respond-gate.bats) ----------
+
+@test "record: an evil:respond look-alike does NOT satisfy the invariant" {
+  start_turn
+  printf '{"session_id":"%s","tool_name":"Skill","tool_input":{"skill":"evil:respond"}}' "$SID" \
+    | bash "$HOOKS/turn-state-record.sh"
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [[ "$output" == *"deny"* ]]
+}
+
+@test "record: the legacy {tool,input} payload shape still marks the flag" {
+  start_turn
+  printf '{"session_id":"%s","tool":"Skill","input":{"skill":"respond"}}' "$SID" \
+    | bash "$HOOKS/turn-state-record.sh"
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "record: an unrelated skill marks nothing" {
+  start_turn
+  ran_skill "some-other-skill"
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [[ "$output" == *"deny"* ]]
+}
+
+@test "record: a non-Skill tool is ignored and exits clean" {
+  start_turn
+  run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/turn-state-record.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "record: a jq-less machine fails OPEN and stays silent" {
+  start_turn
+  # Absolute interpreter path: with PATH emptied, `bash` itself is unresolvable,
+  # which would fail the rig rather than exercise the hook's jq-less path.
+  EMPTY="$(mktemp -d)"
+  run env PATH="$EMPTY" /bin/bash -c "echo '{}' | /bin/bash '$HOOKS/turn-state-record.sh'"
+  rm -rf "$EMPTY"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# ---------- respond-gate ----------
+
+@test "respond-gate: denies the assistant until Skill(respond) runs" {
+  start_turn
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || [[ "$output" == *'"permissionDecision":"deny"'* ]]
+  [[ "$output" == *"RESPOND-GATE"* ]]
+}
+
+@test "respond-gate: allows once Skill(respond) has run" {
+  start_turn
+  ran_skill respond
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "respond-gate: does not gate a non-assistant agent" {
+  start_turn
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "respond-gate: never gates a delegated subagent" {
+  start_turn
+  P="{\"session_id\":\"$SID\",\"agent_id\":\"sub1\",\"tool_name\":\"Edit\"}"
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$P' | bash '$HOOKS/respond-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "respond-gate: fails OPEN when the reset hook never ran" {
+  # No start_turn: no .turn marker => unwired reset, must not block.
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [ -z "$output" ]
+}
+
+# ---------- respond-gate: turn trigger (owner directive 2026-08-05) ----------
+#
+# /respond binds only a DIRECT message from the owner. The reset hook classifies
+# the trigger and pre-marks the flag when it was not one, so the gate passes
+# silently. End-to-end here; the classifier's own edges are in gate-libs.bats.
+
+@test "trigger: a direct terminal prompt still gates the assistant" {
+  start_turn_with "roll the notepad and start the day"
+  run respond_gate_denies
+  [ "$status" -eq 0 ]
+}
+
+@test "trigger: a task-notification turn is exempt" {
+  start_turn_with '<task-notification status="completed">coder finished</task-notification>'
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "trigger: another agent's channel message is exempt" {
+  start_turn_with '<channel source="plugin:discord:discord" chat_id="1515808689716465754" message_id="1" user="Clara" user_id="1515784888681238608" ts="t">reflect posted</channel>'
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "trigger: the owner's own channel message still gates" {
+  start_turn_with '<channel source="plugin:discord:discord" chat_id="1" message_id="2" user="drewdrewthis" user_id="805967286547775489" ts="t">what is the fleet doing</channel>'
+  run respond_gate_denies
+  [ "$status" -eq 0 ]
+}
+
+@test "trigger: an unclassifiable prompt leaves the gate binding" {
+  # A channel tag with no sender attribute. Cannot be attributed => must not
+  # exempt; the gate stays exactly as it is today.
+  start_turn_with '<channel source="plugin:discord:discord" chat_id="1">no sender</channel>'
+  run respond_gate_denies
+  [ "$status" -eq 0 ]
+  # Unterminated tag: same.
+  start_turn_with '<channel source="plugin:discord:discord" user="Clara'
+  run respond_gate_denies
+  [ "$status" -eq 0 ]
+}
+
+@test "trigger: a payload carrying no prompt at all leaves the gate binding" {
+  start_turn     # {"session_id":...} with no .prompt — every pre-existing test
+  run respond_gate_denies
+  [ "$status" -eq 0 ]
+}
+
+@test "trigger: a non-JSON payload changes nothing about the gate" {
+  # The reset hook cannot key the session, so no .turn marker is written for it
+  # and respond-gate takes its PRE-EXISTING unwired-reset fail-open path. Pinned
+  # so the classifier is never blamed for (or credited with) this release.
+  printf 'not json at all' | bash "$HOOKS/turn-state-reset.sh"
+  run env CLAUDE_CODE_AGENT=assistant bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/respond-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -e "$TURN_STATE_DIR/$SID.respond" ]
+}
+
+@test "trigger: the reset hook stays silent while classifying" {
+  # UserPromptSubmit stdout is MODEL-FACING — anything printed here lands in
+  # context every turn. The classifier must not break that contract.
+  run start_turn_with '<channel source="plugin:discord:discord" chat_id="1" user="Clara" user_id="1515784888681238608" ts="t">hi</channel>'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "trigger: exemption does not survive into the next turn" {
+  start_turn_with '<task-notification status="completed">x</task-notification>'
+  run respond_gate_denies
+  [ "$status" -ne 0 ]
+  start_turn_with "now do the thing"
+  run respond_gate_denies
+  [ "$status" -eq 0 ]
+}
+
+# ---------- how-do-i-gate ----------
+
+@test "how-do-i-gate: denies a named main agent until the skill runs" {
+  start_turn
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [[ "$output" == *"HOW-DO-I-GATE"* ]]
+}
+
+@test "how-do-i-gate: allows once Skill(how-do-i) has run" {
+  start_turn
+  ran_skill how-do-i
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "how-do-i-gate: allows the Agent tool while outstanding (no deadlock)" {
+  start_turn
+  P="{\"session_id\":\"$SID\",\"tool_name\":\"Agent\",\"tool_input\":{}}"
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "how-do-i-gate: allows reading a procedure while outstanding" {
+  start_turn
+  P="{\"session_id\":\"$SID\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/h/references/procedures/a/PROCEDURE.md\"}}"
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "how-do-i-gate: never gates a delegated subagent" {
+  start_turn
+  P="{\"session_id\":\"$SID\",\"agent_id\":\"sub1\",\"tool_name\":\"Edit\"}"
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ -z "$output" ]
+}
+
+# ---------- am-i-done-gate ----------
+
+@test "am-i-done: releases a purely conversational turn (no tools at all)" {
+  start_turn
+  user_prompt
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "am-i-done: gates a research-only turn (Bash/Read, nothing written)" {
+  # Owner decision 2026-08-02: gate after ANY tool call. Research turns are
+  # exactly where a wrong conclusion ships unchallenged.
+  start_turn
+  user_prompt
+  assistant_tool Bash
+  assistant_tool Read
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
+  [[ "$output" == *"block"* ]]
+}
+
+@test "am-i-done: blocks once on a turn that produced an artifact" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
+  [[ "$output" == *"block"* ]]
+}
+
+@test "am-i-done: a delegated Agent call counts as an artifact" {
+  start_turn
+  user_prompt
+  assistant_tool Agent
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
+}
+
+@test "am-i-done: asks at most ONCE per turn, then releases" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
+  # Second Stop with no new work: must release, not loop.
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "am-i-done: re-arms on the NEXT turn" {
+  # The owner's invariant is once per TURN. Asking once per session is the bug
+  # this pins: turn 2 must block again after its own artifact.
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
+
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
+  [[ "$output" == *"block"* ]]
+}
+
+@test "am-i-done: releases once the skill has run" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  ran_skill am-i-done
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "am-i-done: a new user prompt resets the activity window" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  user_prompt          # new turn began; the Edit belongs to the previous one
+  start_turn           # reset hook fires on the new prompt
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "am-i-done: records a fail-open when the reset hook never ran" {
+  # No start_turn => no .turn marker => the gate is unwired, not clear. AC-2:
+  # "an inert reviewer must be detectable".
+  export GATE_FAILOPEN_LOG="$TURN_STATE_DIR/failopen.jsonl"
+  run env CLAUDE_CODE_AGENT=technician GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  grep -q 'reset-hook-never-ran' "$GATE_FAILOPEN_LOG"
+}
+
+@test "am-i-done: records a fail-open on a jq-less machine" {
+  start_turn
+  export GATE_FAILOPEN_LOG="$TURN_STATE_DIR/failopen.jsonl"
+  EMPTY="$(mktemp -d)"
+  run env PATH="$EMPTY" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    /bin/bash -c "echo '$STOP' | /bin/bash '$HOOKS/am-i-done-gate.sh'"
+  rm -rf "$EMPTY"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  grep -q 'no-jq' "$GATE_FAILOPEN_LOG"
+}
+
+@test "am-i-done: records a fail-open when activity cannot be determined" {
+  # A gate that releases blindly must be distinguishable from one that releases
+  # because the turn was clean. Silent fail-open is how alerters die unseen.
+  start_turn
+  export GATE_FAILOPEN_LOG="$TURN_STATE_DIR/failopen.jsonl"
+  rm -f "$JSONL"        # transcript gone => cannot tell
+  run env CLAUDE_CODE_AGENT=technician GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  grep -q 'activity-undetermined' "$GATE_FAILOPEN_LOG"
+}
+
+@test "am-i-done: never gates a delegated subagent" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  P="{\"session_id\":\"$SID\",\"hook_event_name\":\"Stop\",\"agent_id\":\"sub1\"}"
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "am-i-done: fails OPEN when the reset hook never ran" {
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "am-i-done: releases for the sdk-cli entrypoint" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician CLAUDE_CODE_ENTRYPOINT=sdk-cli \
+    bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ -z "$output" ]
+}
+
+# ---------- test-harness hygiene (orchard-codex#210 root cause, 2026-08-03) ----------
+#
+# gate_failopen() defaults its log to the REAL $HOME/.claude/gate-failopen.jsonl
+# (the GATE_FAILOPEN_LOG assignment in hooks/lib/gate-failopen.sh). This file's
+# setup() exported TURN_STATE_DIR but not
+# GATE_FAILOPEN_LOG or HOME, so "am-i-done: fails OPEN when the reset hook
+# never ran" (above) appended a row to PRODUCTION telemetry on every dev-time
+# `bats` run of this file — the actual source of the rows that opened #210 (at
+# least 11 of 13 as of this writing; root-caused via reflog + mtime-birth
+# arithmetic, full detail in plans/REENTRY-issue210-gate-failopen.md and issue
+# #210 comments). setup()/teardown() below now export both, closing the hole
+# this test pins.
+
+@test "root cause #210: this suite does not leak a fail-open record into a bystander's real HOME" {
+  # Runs THIS FILE, filtered to the one test that reproduces the leak, as a
+  # child bats process with HOME pointed at a throwaway dir and
+  # GATE_FAILOPEN_LOG deliberately UNSET — i.e. exactly this file's own
+  # setup(), exercising the hook's default log path. If setup() does not
+  # export GATE_FAILOPEN_LOG, the child's fail-open write has nowhere else to
+  # go and lands at $LEAK_HOME/.claude/gate-failopen.jsonl.
+  LEAK_HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/leakhome.XXXXXX")"
+  mkdir -p "$LEAK_HOME/.claude"
+
+  run env -u GATE_FAILOPEN_LOG HOME="$LEAK_HOME" \
+    bats --filter '^am-i-done: fails OPEN when the reset hook never ran$' "$BATS_TEST_DIRNAME/gates.bats"
+
+  # Sanity: the filter must have actually selected and run the one offending
+  # test (TAP plan "1..1" + "ok 1"), or a wrong/empty selection would pass the
+  # leak check below for no reason.
+  [[ "$output" == *"1..1"* ]]
+  [[ "$output" == *"ok 1 am-i-done: fails OPEN when the reset hook never ran"* ]]
+
+  [ ! -e "$LEAK_HOME/.claude/gate-failopen.jsonl" ] || {
+    echo "LEAK reproduced: $(cat "$LEAK_HOME/.claude/gate-failopen.jsonl")"
+    rm -rf "$LEAK_HOME"
+    false
+  }
+
+  rm -rf "$LEAK_HOME"
+}

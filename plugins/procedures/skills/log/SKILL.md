@@ -61,7 +61,7 @@ Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `deep-refl
 **Call the script** (it stamps `ts`, `project`, `session` if you omit them; it regenerates `common-mistakes.md` automatically):
 
 ```bash
-bash ~/.claude/scripts/log-record.sh mistake \
+bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" mistake \
   --category "<category>" --description "<description>" --correction "<correction>" \
   --severity "<severity>" --trigger "<trigger>" --skill "<skill-or-empty>" \
   --scenario-matched "<slug-or-null>" \
@@ -83,7 +83,7 @@ Writes `references/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`) and rege
 **Gather:** `slug` (kebab-case, ≤7 words, names the *question* resolved), `keywords` (lowercase: domain, options considered, key actors), a one-line `summary`, and the prose `body` (the `/decide` Phase-6 template: Goal / Values protocol / Chosen path / Autonomy verdict / Consequences foreseen / materialized [pending] / Outcome [pending] / …). Leave `[pending]` for sections that need future evidence — that is correct on creation.
 
 ```bash
-bash ~/.claude/scripts/log-record.sh decision \
+bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" decision \
   --slug "<slug>" --title "<title>" --summary "<one-line summary>" \
   --keywords '[<lowercase, comma-separated>]' \
   [--body "$(cat <<'EOF'
@@ -106,7 +106,7 @@ Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `si
 **Gather:** `slug` (kebab-case, ≤6 words, names the *problem* not the fix), `keywords` (problem domain, tool name, error class), `situation-tags` (lowercase situation class: `daemon`, `gh-cli`, `env-config`, …), `resolve-after` (~3 months out; env/version hacks expire faster), a one-line `summary` = the canonical resolution, and the prose `body` (Symptom / Rule / optional Check / optional Recipe — Recipe only when flags/order matter).
 
 ```bash
-bash ~/.claude/scripts/log-record.sh solution \
+bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" solution \
   --slug "<slug>" --title "<title>" --summary "<rule in one imperative sentence>" \
   --keywords '[<lowercase>]' --situation-tags '[<lowercase>]' --resolve-after "<YYYY-MM-DD>" \
   [--body "$(cat <<'EOF'
@@ -143,7 +143,7 @@ grep -c '"pattern":"<slug>"' ~/.claude/mistakes.jsonl            # occurrence co
 **Standalone vs FACE:** a standalone record gets its own `common-mistakes.md` row. A FACE of a mega parent passes `--face-of <parent-slug-without-fm-prefix>` (and the parent gets `--mega true`); FACE records are NOT emitted as their own row.
 
 ```bash
-bash ~/.claude/scripts/log-record.sh failure-mode \
+bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" failure-mode \
   --slug "<slug>" --rule "<one crisp imperative sentence>" \
   --keywords '[<lowercase>]' \
   [--mistake "<≤3-sentence description>"] [--correct "<full correct behavior>"] \

@@ -37,7 +37,9 @@ STDOUT_MODE=0
 [ "${1:-}" = "--stdout" ] && STDOUT_MODE=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# PLUGIN ADAPTATION: data root defaults to the host codex (~/.claude), not this
+# plugin install dir — upstream these scripts live inside the codex repo itself.
+ROOT="${CODEX_ROOT:-$HOME/.claude}"
 cd "$ROOT"
 
 FM_DIR="references/failure-modes"
