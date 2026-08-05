@@ -10,7 +10,7 @@ argument-hint: "<what the specialist is for>"
 ## 1. Check the router first
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/../../scripts/route-delegation.sh" --list
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/route-delegation.sh" --list
 ```
 
 A task shape that already routes needs a better BRIEF, not a new agent. Mint only when the router genuinely has no row for the shape (exit 2), and the shape recurs — a one-off is a `general-purpose` call with a reason, not a roster entry.
@@ -31,7 +31,7 @@ The template's MUST-READ is `agent-facing-docs.md` — in your host codex at `$C
 Destination: `${CLAUDE_AGENTS_DIR:-$CODEX_ROOT/agents}` (default `~/.claude/agents`) as `<name>.md`.
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/../../scripts/lint-agent-files.sh" <file>
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/lint-agent-files.sh" <file>
 ```
 
 Hard rules (exit 1): frontmatter with `name:`/`description:`, a `Role` heading, a `Boundaries` heading, no ISO dates, no `#NNN` issue refs. Size budget and a missing `model:` warn only. Paths are relative to the lint root — set `LINT_AGENT_FILES_ROOT` (or `CODEX_ROOT`) if your roster is not under `~/.claude`.

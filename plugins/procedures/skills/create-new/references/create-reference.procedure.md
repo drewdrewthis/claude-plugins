@@ -20,9 +20,15 @@ Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.
 
 ## Steps
 
-1. **Determine `<area>` and `<name>`.** Existing areas under `references/`: `adrs`, `decisions`, `failure-modes`, `mandates`, `plans`, `policies`, `principles`, `procedures`, `research`, `scenarios`, `solutions`. Plus many top-level `references/<name>.md` topic files. Pick the closest fit; a new area dir is allowed when none fit — create the dir.
+1. **Determine `<area>` and `<name>`.** List the existing areas — never work from a remembered list:
 
-   - Area fit guide: `principles/` for behavioral rules; `policies/` for constraints/mandates; `research/` for findings/analysis; `procedures/` only if creating a PROCEDURE.md (use the create-procedure procedure `references/procedures/codex-meta/create-procedure/PROCEDURE.md` instead); top-level `references/<name>.md` for broad cross-cutting topics.
+   ```bash
+   ls "${CODEX_ROOT:-$HOME/.claude}/references/"
+   ```
+
+   Alongside the area dirs sit top-level `references/<name>.md` topic files. Pick the closest fit; a new area dir is allowed when none fit — create the dir.
+
+   - Area fit guide: `principles/` for behavioral rules; `policies/` for constraints/mandates; `research/` for findings/analysis; `procedures/` only if creating a PROCEDURE.md (use the sibling `create-procedure.procedure.md` instead); top-level `references/<name>.md` for broad cross-cutting topics.
    - `<name>`: kebab-case slug (e.g. `orchard-daemon`, `model-selection`, `session-spawn-recipe`)
    - `id`: `ref.<area>.<name>` for area files; `ref.<name>` for top-level files
 
@@ -56,7 +62,7 @@ Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.
 
    Body is free-form. Use `## ` section headers for scanability. Lead with the conclusion or most-referenced fact. Prefer tables for 2+-dimensional content.
 
-4. **No index row.** No index files are maintained anywhere in the stores — do NOT create or append to one. Discovery is the record's frontmatter plus `scripts/query-records.sh`; the procedure-scout compiles any digest it needs per query.
+4. **No index row.** No index files are maintained anywhere in the stores — do NOT create or append to one. Discovery is the record's frontmatter plus `scripts/query-records.sh` at the plugin root (the invoking skill's prompt carries the resolved path); the procedure-scout compiles any digest it needs per query.
 
 5. Confirm the file path and report. Resume the interrupted conversation.
 

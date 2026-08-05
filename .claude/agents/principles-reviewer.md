@@ -4,10 +4,6 @@ description: "Opinionated design reviewer focused on SRP, readability, extensibi
 model: opus
 ---
 
-## Mandate
-
-See `~/.claude/references/mandates/principles-reviewer.md` — consulted at every Stop hook fire.
-
 ## Step 0: Create Tasks
 
 Use the TaskCreate tool to create a task for each check below. Mark each `in_progress` when starting, `completed` when done (with findings or "clean").

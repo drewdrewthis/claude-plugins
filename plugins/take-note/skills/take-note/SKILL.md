@@ -1,6 +1,6 @@
 ---
 name: take-note
-description: Jot a note on your daily scratchpad (default ~/workspace/notes/YYYY-MM-DD.md; override with NOTES_DIR). Use for in-flight plans, agreements with your person, open threads, working context worth surviving the day — the yellow legal pad, NOT durable memory. New day = new file with still-relevant items carried forward.
+description: Jot a note on your daily scratchpad (default ~/workspace/notes/YYYY-MM-DD.md; override with KNOWLEDGE_WS or NOTES_DIR). Use for in-flight plans, agreements with your person, open threads, working context worth surviving the day — the yellow legal pad, NOT durable memory. New day = new file with still-relevant items carried forward.
 user-invocable: true
 argument-hint: "[the note — or leave empty to review/tidy today's note]"
 allowed-tools:
@@ -18,8 +18,8 @@ One markdown file per day at `~/workspace/notes/YYYY-MM-DD.md` by default
 scratchpad of what's live *today* — plans in motion, things agreed with your
 person, open threads, gotchas of the moment. It is NOT memory (durable facts
 about your person → `/about-my-person`; ambient facts → auto-memory) and NOT
-history (that's `/recall`). Rule of thumb: matters in a month → elsewhere;
-matters this week → here.
+history (`/recall` where the host has it). Rule of thumb: matters in a month
+→ elsewhere; matters this week → here.
 
 ## Steps
 

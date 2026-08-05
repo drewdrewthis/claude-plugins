@@ -11,13 +11,8 @@ status: active
 
 Patches an existing `PROCEDURE.md` from real usage evidence — a deviation,
 a missing step, or a stale/broken ref hit while following it — and appends
-the dated line to that procedure directory's `EVOLUTION.md`. Does NOT edit
-skills, agents, CLAUDE.md, hooks, or other record kinds; those are edited
-directly by whoever hits the friction, and a new-artifact case routes to
-`/create-new` instead.
-
-`references/steps/evolve-procedure.md` is the precision routine — open and
-execute it inline.
+the dated line to that procedure directory's `EVOLUTION.md`. Scope boundaries
+are the SKILL.md's; the table below is only the routing check.
 
 **$ARGUMENTS:** `<procedure> <what changed / what friction>` — the target
 procedure (path or name) and the correction. If the procedure name is

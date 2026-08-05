@@ -26,7 +26,7 @@ orchard-codex `develop-sweatshop`):
 | piece | what |
 |---|---|
 | `/how-do-i` | the gateway to everything the codex knows — forks the `procedure-scout` agent, which searches the record stores via `scripts/query-records.sh` and returns the governing procedure, verbatim commands, traps, and a standing label per source |
-| `/log` | durable records: procedure / decision / solution / principle / failure-mode — `*.template.md` files in `skills/log/templates/` (procedure, decision, solution, principle, failure-mode, evolution) |
+| `/log` | durable records: mistake / decision / solution / failure-mode via `scripts/log-record.sh`; `skills/log/templates/` additionally carries the procedure, principle, and evolution shapes, written by hand |
 | `/am-i-done` | cold-read review of an am-i-done report (incl. the "Procedures followed" evolution table) by the `work-reviewer` agent before calling work done |
 | `/create-new` | create a new procedure/reference/skill for uncovered work — wraps the codex-meta create procedures; draft-then-promote |
 | `/evolve-procedure` | patch an EXISTING procedure from a correction, incident, or friction — deviation, missing step, or stale/broken ref; procedures only, every material patch appends a dated line to that procedure dir's `EVOLUTION.md` |
@@ -38,8 +38,8 @@ orchard-codex `develop-sweatshop`):
 
 The machinery is vendored from orchard-codex `develop-sweatshop` (skills,
 procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
-`log-record.sh` + shared awk matcher, linter, templates) with exactly two classes of deliberate adaptation, each marked
-`PLUGIN ADAPTATION` in the source:
+`log-record.sh` + shared awk matcher, linter, templates) with deliberate adaptation, marked
+`PLUGIN ADAPTATION` in the source where it touches code:
 
 - **Data-root defaults:** every script's record-store root defaults to
   `~/.claude` (the host codex) instead of the script's own parent dir —
@@ -49,10 +49,12 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   `MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`, `FAILURE_MODES_DIR`,
   `LINT_FRONTMATTER_ROOT`, `TURN_STATE_DIR`, `KNOWLEDGE_ROOT` for the
   frontmatter hook).
-- **Script paths in skill bodies:** `/log` and the `/how-do-i` fork prompt
-  reference the plugin-shipped scripts via `${CLAUDE_SKILL_DIR}` (substituted
-  by Claude Code in skill markdown) instead of upstream's repo-relative
-  paths.
+- **Script paths in skill/agent bodies:** the skills and agents reference the
+  plugin-shipped scripts via `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}`
+  (substituted by Claude Code in skill and agent markdown) instead of
+  upstream's repo-relative paths, which would resolve against the caller's
+  cwd. Host-neutral wording in place of codex-internal file/hook references is
+  a third, prose-only adaptation class and is not individually marked.
 
 Verified end-to-end with `claude --plugin-dir`: the gate cycle works as
 shipped — `tool_input.skill` arrives as the bare skill name, the reset hook

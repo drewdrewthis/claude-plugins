@@ -10,10 +10,12 @@ argument-hint: "<kind> [text]"
 One entry point for the four record kinds. `<kind>` is `mistake`, `decision`, `solution`, or `failure-mode`. This skill gathers the JUDGMENT fields, then calls the deterministic writer:
 
 ```
-scripts/log-record.sh <kind> [flags…]
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" <kind> [flags…]
 ```
 
-The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal — the apostrophe-in-jq bug the old `log-mistake` had) and writing the file. No index files are maintained: discovery is the record's frontmatter plus `scripts/query-records.sh`. You own the JUDGMENT half below.
+The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal) and writing the file. No index files are maintained: discovery is the record's frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. You own the JUDGMENT half below.
+
+Record templates for every shape live in `${CLAUDE_PLUGIN_ROOT}/skills/log/templates/`. Kinds the writer script does not handle — `procedure`, `principle`, `evolution` — are written by hand from their template.
 
 Resume the interrupted conversation immediately after — every kind takes <10 seconds and must not derail it.
 
@@ -21,7 +23,7 @@ Resume the interrupted conversation immediately after — every kind takes <10 s
 
 ## kind = mistake
 
-Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by the procedure-scout (which sweeps failure-modes + `mistakes.jsonl` per query), `deep-reflect`, and `retro`.
+Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by the procedure-scout, which sweeps failure-modes + `mistakes.jsonl` per query.
 
 **Triggers:** user correction ("no", "wrong", "not that", a redirect); self-catch; after codifying a rule from a correction; manual `/log mistake <description>`.
 
@@ -56,12 +58,12 @@ Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by the proced
 
    Each record's frontmatter `id` is `fm.<row-id>`. If matched, pass `--pattern "<row-id>"` (WITHOUT the `fm.` prefix). Omit if no record matches.
 
-   **Merged ids (2026-06-10 condensation):** if the mistake matches any retired id — `claim-done-without-evidence`, `speculation-with-false-precision`, `dependency-conclusion-from-partial-read`, `recipe-untested-because-test-bypasses-recipe`, `cross-layer-wire-untested`, `stale-prove-it-marker-after-push`, `self-defeating-evidence-cmd`, `assumed-block` — pass `--pattern "unverified-claim-acted-on"` and record the specific face with `--face "<face-name>"`. Do NOT rewrite historical entries.
+   If the mistake is a narrower FACE of a broader record in the registry, pass the broader record's `--pattern` and name the specific face with `--face "<face-name>"`.
 
 **Call the script** (it stamps `ts`, `project`, `session` if you omit them):
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" mistake \
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" mistake \
   --category "<category>" --description "<description>" --correction "<correction>" \
   --severity "<severity>" --trigger "<trigger>" --skill "<skill-or-empty>" \
   --scenario-matched "<slug-or-null>" \
@@ -76,14 +78,14 @@ bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" mistake \
 
 ## kind = decision
 
-Writes `references/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter plus `scripts/query-records.sh`. Consumed by the pre-action grep that prevents relitigating settled choices. Mirrors `/decide` Phase 6 — if `/decide` already wrote the artifact, do NOT duplicate it; just note the existing path.
+Writes `references/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. Consumed by the pre-action grep that prevents relitigating settled choices.
 
 **Pre-action grep first** — `grep -rl '<keywords>' ~/.claude/references/decisions/`; if the question is already settled, link the existing record instead of creating a duplicate.
 
-**Gather:** `slug` (kebab-case, ≤7 words, names the *question* resolved), `keywords` (lowercase: domain, options considered, key actors), a one-line `summary`, and the prose `body` (the `/decide` Phase-6 template: Goal / Values protocol / Chosen path / Autonomy verdict / Consequences foreseen / materialized [pending] / Outcome [pending] / …). Leave `[pending]` for sections that need future evidence — that is correct on creation.
+**Gather:** `slug` (kebab-case, ≤7 words, names the *question* resolved), `keywords` (lowercase: domain, options considered, key actors), a one-line `summary`, and the prose `body` — sections Goal / Chosen path / Consequences / Outcome. Leave `[pending]` for sections that need future evidence — that is correct on creation.
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" decision \
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" decision \
   --slug "<slug>" --title "<title>" --summary "<one-line summary>" \
   --keywords '[<lowercase, comma-separated>]' \
   [--body "$(cat <<'EOF'
@@ -93,7 +95,7 @@ EOF
 )"]
 ```
 
-If no `--body` is passed, the script writes the standard `/decide` Phase-6 skeleton with `[pending]` sections. `status: active` at creation; flip to `resolved` only when the outcome is known (a future edit). Record only decisions already made, not ones being weighed.
+If no `--body` is passed, the script writes its default skeleton with `[pending]` sections. `status: active` at creation; flip to `resolved` only when the outcome is known (a future edit). Record only decisions already made, not ones being weighed.
 
 Re-running with the same `--slug`/`--date` REFUSES if the file already exists (no merge) — hand-edit the file directly to flip `status` or fill in `[pending]` sections, or pass `--force` to overwrite it entirely.
 
@@ -101,12 +103,12 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = solution
 
-Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter plus `scripts/query-records.sh`. Consumed by the procedure-scout's pre-action sweep.
+Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. Consumed by the procedure-scout's pre-action sweep.
 
 **Gather:** `slug` (kebab-case, ≤6 words, names the *problem* not the fix), `keywords` (problem domain, tool name, error class), `situation-tags` (lowercase situation class: `daemon`, `gh-cli`, `env-config`, …), `resolve-after` (~3 months out; env/version hacks expire faster), a one-line `summary` = the canonical resolution, and the prose `body` (Symptom / Rule / optional Check / optional Recipe — Recipe only when flags/order matter).
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" solution \
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" solution \
   --slug "<slug>" --title "<title>" --summary "<rule in one imperative sentence>" \
   --keywords '[<lowercase>]' --situation-tags '[<lowercase>]' --resolve-after "<YYYY-MM-DD>" \
   [--body "$(cat <<'EOF'
@@ -143,7 +145,7 @@ grep -c '"pattern":"<slug>"' ~/.claude/mistakes.jsonl            # occurrence co
 **Standalone vs FACE:** a standalone record stands on its own. A FACE of a mega parent passes `--face-of <parent-slug-without-fm-prefix>` (and the parent gets `--mega true`); a FACE is read through its parent, not as a peer.
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/../../scripts/log-record.sh" failure-mode \
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" failure-mode \
   --slug "<slug>" --rule "<one crisp imperative sentence>" \
   --keywords '[<lowercase>]' \
   [--mistake "<≤3-sentence description>"] [--correct "<full correct behavior>"] \

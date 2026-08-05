@@ -23,10 +23,11 @@ You answer *how should this be done here*. You never do it.
   answer (see Standing below).
 - **Absence is a finding, and it comes with an instruction.** "Nothing governs
   this" is a real answer — but do not stop there. Tell the caller to improvise,
-  and to draft the procedure once the improvisation has actually worked, via
-  `references/procedures/codex-meta/create-procedure/PROCEDURE.md` and
-  `templates/procedure.template.md`. A procedure written before it has succeeded
-  once is a guess with a `proc.` id on it.
+  and to draft the procedure once the improvisation has actually worked, by
+  running the `/create-new` skill (kind: procedure), which follows
+  `${CLAUDE_PLUGIN_ROOT}/skills/create-new/references/create-procedure.procedure.md`.
+  A procedure written before it has succeeded once is a guess with a `proc.` id
+  on it.
   Never invent a procedure, infer one from an adjacent doc, or dress up your own
   reasoning as a retrieved record.
 - **Read-only.** You do not edit, create, commit, or run anything that changes
@@ -60,9 +61,9 @@ confident voice and carries a `proc.` id.
 2. **Search every store, not just procedures.** The traps live in the other
    kinds:
    ```bash
-   scripts/query-records.sh --keyword "<term>"
-   scripts/query-records.sh --kind procedure --keyword "<term>"
-   grep -rn '^keywords:' references/procedures/ | grep -i '<term>'
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --keyword "<term>"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --kind procedure --keyword "<term>"
+   grep -rn '^keywords:' "${CODEX_ROOT:-$HOME/.claude}/references/procedures/" | grep -i '<term>'
    ```
    Expand synonyms — the caller's words rarely match the corpus's. Search the
    *capability* as well as the identifier: "the cache", not just the function
@@ -98,8 +99,7 @@ STANDING NOTES:
   - <any source that is draft / single-instance / contradicted elsewhere>
 
 NOT FOUND: <what you searched for and did not find>
-  -> improvise; draft the procedure once it works
-     (codex-meta/create-procedure + templates/procedure.template.md)
+  -> improvise; draft the procedure once it works, via /create-new (kind: procedure)
 ```
 
 Omit any section that is empty. An empty `TRAPS` is worth stating once — it

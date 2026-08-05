@@ -9,7 +9,7 @@ status: active
 
 # /create-procedure
 
-Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<area>/<name>/`. Consumed via the `keywords` field by `Skill(how-do-i)` → `procedure-scout` and by `scripts/query-records.sh`.
+Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<area>/<name>/`. Consumed via the `keywords` field by `Skill(how-do-i)` → `procedure-scout` and by `scripts/query-records.sh` at the plugin root (the invoking skill's prompt carries the resolved path).
 
 # Triggers
 
@@ -28,14 +28,20 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
 
    If a match exists, patch that procedure directly (and log the change in its sibling `EVOLUTION.md`) instead of creating a new one — see Boundaries.
 
-2. **Determine `<area>` and `<name>`.** Existing areas: `assistant`, `boxd`, `codex-meta`, `fleet-session`, `git-tree`, `github`, `infra`, `langwatch`, `notify-comms`, `orchardist`, `planner-orchardist-loop`, `provisioning`, `remote`, `research-think`, `review-qa`, `slack`. Pick the closest fit; a new area dir is allowed when none fit.
+2. **Determine `<area>` and `<name>`.** List the existing areas — never work from a remembered list:
+
+   ```bash
+   ls "${CODEX_ROOT:-$HOME/.claude}/references/procedures/"
+   ```
+
+   Pick the closest fit; a new area dir is allowed when none fit.
 
    - `<name>`: kebab-case slug for the operation (e.g. `record-kanban-card`, `rotate-api-key`)
    - `id`: `proc.<area>.<name>`
 
 3. **Pick keywords** — lowercase, these are the discovery tokens for the procedures hook and skill. Include the operation verb, domain noun, and any common aliases.
 
-4. **Write `PROCEDURE.md`** at `references/procedures/<area>/<name>/PROCEDURE.md`:
+4. **Write `PROCEDURE.md`** at `references/procedures/<area>/<name>/PROCEDURE.md`, from `skills/log/templates/procedure.template.md` at the plugin root:
 
    ```
    ---
@@ -55,9 +61,9 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
    <optional — include when there are meaningful variations>
    ```
 
-   Status starts as `draft` — creation is cheap and ungated. Promotion to `active` is gated and is NOT this skill's job (see `references/principles/procedure-evolution.md`).
+   Status starts as `draft` — creation is cheap and ungated. Draft-then-promote: a first success earns a draft, and promotion to `active` happens only after the procedure has been followed as written and worked. That promotion is NOT this skill's job.
 
-5. **Write `EVOLUTION.md`** in the SAME directory:
+5. **Write `EVOLUTION.md`** in the SAME directory, from `skills/log/templates/evolution.template.md` at the plugin root:
 
    ```
    ---
@@ -76,17 +82,13 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
 
 6. Confirm the two files exist and report: `Created references/procedures/<area>/<name>/PROCEDURE.md (status: draft) + EVOLUTION.md`.
 
-   **Then COMMIT your own scoped paths** — `git add <explicit paths> && git commit`. Do **not** rely on the snapshot timer. As of 2026-07-13 it has not committed anything since 2026-07-08, for two independent reasons, and work left uncommitted is simply lost:
-   - `codex-snapshot.timer` is **un-anchored**: it schedules off `OnUnitActiveSec` (monotonic), and `Persistent=true` does nothing for monotonic timers — this box's hibernate/resume drops the anchor, so `systemctl --user list-timers` shows `NEXT = -` even though the unit reports `active`/`enabled`.
-   - Even when it does fire, `codex-snapshot.sh` runs `git add -A && git commit`, which the **protected-names pre-commit hook rejects** (the tree carries personal names, incl. a tracked *filename*). The service exits 1 and commits nothing.
-
-   Stage explicit paths (never `-A`, which sweeps other sessions' in-flight work) and keep your own content free of personal names, or the same hook will reject you too.
+   Then commit your own explicit paths (never `git add -A` — it sweeps other sessions' in-flight work).
 
 7. This skill takes <30 seconds. Resume the interrupted conversation.
 
 ## Boundaries
 
-- **Create vs patch**: This skill is the CREATE half — use it ONLY when no existing procedure covers the work. Patching an EXISTING procedure or skill after it hits friction is out of scope: edit the artifact directly and append the dated line to its `EVOLUTION.md`. If a procedure already exists, stop here and do that instead. Authority: `references/principles/procedure-evolution.md`.
+- **Create vs patch**: This skill is the CREATE half — use it ONLY when no existing procedure covers the work. Patching an EXISTING procedure or skill after it hits friction is out of scope: edit the artifact directly and append the dated line to its `EVOLUTION.md`. If a procedure already exists, stop here and do that instead — `/evolve-procedure` owns the patch lane.
 - Do NOT set `status: active` on a new record — that requires a promotion gate.
 - Do NOT run this skill for skills (`SKILL.md` files) — that is the create-skill procedure (`create-skill.procedure.md`).
 - No codebase reading, no implementation — prose record only.

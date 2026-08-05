@@ -1,6 +1,6 @@
 ---
 name: am-i-done
-description: "Get a cold read on finished work before calling it done. Write the am-i-done report (${CLAUDE_SKILL_DIR}/templates/am-i-done-report.template.md), then invoke this with it — a reviewer reads it and returns findings tagged BLOCKING / FOLLOW-UP / BACKGROUND / LEAVE. Required once on any turn that called tools — research and verification turns included, not just ones that wrote files. Use before the closing TL;DR, not instead of it."
+description: "Get a cold read on finished work before calling it done. Write the am-i-done report (template in this skill's templates/ directory), then invoke this with it — a reviewer reads it and returns findings tagged BLOCKING / FOLLOW-UP / BACKGROUND / LEAVE. Required once on any turn that called tools — research and verification turns included, not just ones that wrote files. Use before the closing TL;DR, not instead of it."
 user-invocable: true
 context: fork
 agent: work-reviewer

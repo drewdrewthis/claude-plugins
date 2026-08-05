@@ -49,8 +49,10 @@ so you care about what is wrong — not about what is merely unpolished.
    names: does the reasoning follow, was an alternative dismissed without cause,
    and does an unstated assumption carry it?
 
-5. **Read "Procedures followed" as evolution input** (doctrine:
-   `prin.procedure-evolution`). Check the section is present, then route each
+5. **Read "Procedures followed" as evolution input.** The governing rule: a
+   procedure is patched from real outcomes via `/evolve-procedure`, and every
+   material patch appends a dated line to that procedure directory's
+   `EVOLUTION.md`. Check the section is present, then route each
    row by this table — the branches are exclusive, friction is not wrongness,
    and only wrongness gets the same-day repair lane. You flag candidates only —
    never draft or promote one yourself.
@@ -58,7 +60,7 @@ so you care about what is wrong — not about what is merely unpolished.
    | The section / a row says | Tag | Caller action to state in the finding |
    |---|---|---|
    | Work **succeeded**, no procedure covered it | `FOLLOW-UP [new-goal]` | File a separate issue proposing a draft procedure (the filer greps `references/procedures/` for an existing one first) |
-   | A procedure was **wrong or stale** in use | `FOLLOW-UP [same-goal]` | Same-day repair per `proc.codex-meta.fix-procedure-on-use-defect` — the repair, not a deferral, is the caller action |
+   | A procedure was **wrong or stale** in use | `FOLLOW-UP [same-goal]` | Same-day repair via `/evolve-procedure` — the repair, not a deferral, is the caller action |
    | **Friction** only — procedure correct but costly to use | `FOLLOW-UP [new-goal]` | File a separate issue naming the procedure to patch. Never `[same-goal]`: improving a procedure that told the truth is not part of the current goal, and never "no action" — a reported friction row always routes |
    | The **section is absent** from the report | `FOLLOW-UP [same-goal]` | Add the missing section as an AC on the current work |
 

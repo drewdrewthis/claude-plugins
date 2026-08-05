@@ -1,20 +1,20 @@
 ---
-name: evolve-procedure
-description: "Improve a procedure based on how it just performed. Analyzes the conversation for friction/deviations/missing-or-broken refs when a procedure was followed, then patches the PROCEDURE.md and logs to its EVOLUTION.md. Triggered after a procedure is followed, or by deep-reflect / the done-gate when a procedure deviation surfaced."
-user-invocable: true
-argument-hint: "[procedure path or name] or auto (analyzes current conversation)"
+id: ref.evolve-procedure-steps
+kind: reference
+date: 2026-06-25
+keywords: [evolve-procedure, patch, friction, deviation, evolution-log, procedure]
+links: {}
+status: active
 ---
 
-# Evolve Procedure
+# Evolve Procedure — the precision routine
 
 Tighten a procedure based on real usage evidence. This is not a rewrite — it's a focused patch.
 
-Target procedure: $ARGUMENTS (if blank, scan the conversation for the procedure that was followed/read this session — the PROCEDURE.md whose steps the turn executed).
+Target procedure: the one named by the caller (if unnamed, scan the conversation for the procedure that was followed/read this session — the PROCEDURE.md whose steps the turn executed).
 
 ## When This Runs
 
-- **Automatically** — after a documented procedure is followed, the invoking Claude should run `steps/evolve-procedure.md` against it as a closing step
-- **From the deep-reflect procedure** (`references/procedures/research-think/deep-reflect/PROCEDURE.md`, if this install has one) — when reflection identifies procedures that were used in analyzed sessions
 - **From the `am-i-done-gate` review** — when a deviation OR a missing/broken ref surfaced this turn against a documented procedure
 - **Manually** — user invokes it to improve a specific procedure
 
@@ -26,7 +26,7 @@ Before starting, create a task for each phase below using TaskCreate. Chain sequ
 
 First, check `~/.claude/mistakes.jsonl` for entries naming the target procedure — grep by its path (`references/procedures/<cat>/<name>/`) or its name. These entries are high-confidence — they were logged at correction time with classified context.
 
-Then scan the **current conversation** (or session digests if invoked from deep-reflect) for:
+Then scan the **current conversation** for:
 
 1. **The procedure being followed** — which PROCEDURE.md drove the turn, and which steps/anchor-sections were executed?
 2. **Deviations** — "the doc said X but I did Y." Why did execution diverge from the written step?
@@ -76,7 +76,7 @@ Then append a dated line to the **same directory's** `EVOLUTION.md`:
 - YYYY-MM-DD — <what changed and why, citing the friction>
 ```
 
-**Multi-procedure docs** (e.g. `fleet-session/lifecycle/PROCEDURE.md` covering launch/continue/stop under anchor-sections) share one `EVOLUTION.md` — note which anchor-section the change touched (e.g. `- 2026-06-09 — lifecycle#launch: …`).
+**Multi-procedure docs** (an `<area>/<name>/PROCEDURE.md` covering several related operations under anchor-sections) share one `EVOLUTION.md` — note which anchor-section the change touched (e.g. `- 2026-06-09 — <name>#<section>: …`).
 
 ## Phase 4: Report
 
@@ -95,4 +95,4 @@ Run TaskList. If any task is not `completed`, go back and finish it now.
 - **Bloating** — every evolution adds lines, nothing gets removed. Actively trim wasted steps.
 - **Breaking what works** — restructuring a procedure that's mostly fine. Patch, don't rewrite.
 - **Evolving without evidence** — speculative improvements belong in a rewrite, not an evolution.
-- **Skipping the EVOLUTION.md log** — the dated line is the audit trail deep-reflect and future evolutions consume; always append it after a patch.
+- **Skipping the EVOLUTION.md log** — the dated line is the audit trail future evolutions consume; always append it after a patch.

@@ -47,8 +47,6 @@ Trust the operator's named model ID. Do not assert a model "doesn't exist" from 
 
 Verify existence and capabilities via `/v1/models` API, not memory.
 
-Full rules and edge cases: `references/model-knowledge.md`.
-
 ## Act-gate — the cheap disconfirming check fires BEFORE the irreversible-ish act
 
 A claim that drives an irreversible-ish action (file an issue/DECISION, launch a worker, dispatch a coder, hand back "blocked") must first run its ONE cheap disconfirming check this turn. Four trigger shapes, each with its matching check:
@@ -60,10 +58,4 @@ A claim that drives an irreversible-ish action (file an issue/DECISION, launch a
 | **A measurement is the deployable number** | Benchmark the artifact that actually SHIPS (the slim/pipx/production build), not a convenience build (`[all]` uv-venv, dev image). A number measured on a non-shipping build is not a deployable result. |
 | **Work is blocked / needs-a-live-session** | "Blocked" carries the same evidence bar as "done." Try the cheap substitute FIRST: `claude -p` print-mode uses Claude's own in-process auth and runs from a shell; a direct curl/CLI hit substitutes for "needs-a-session." Most blocks dissolve on a sub-minute check (see `SECOND_GUESS.md`). |
 
-The recurring tell across all four: the disconfirming check is cheap and available, but gets deferred until a Stop-sweep forces it — at which point the claim dissolves. Fire it pre-act, not on sweep N.
-
-**Provenance** (the failures this prevents): filing scenario#629 on an unchecked theory (2026-06-09); recommending "don't ship" off a sub-agent's false won't-compile claim (it was a stale baked SDK, fixed by rebuilding the venv on a clean Python); reporting `[all]`-venv compression as the deployable number when the slim shipping build compressed 0%; and parking a "needs-a-live-session" verification as blocked for 3 turns when `claude -p` ran it (2026-06-10). Spine row: `references/common-mistakes.md` `unverified-claim-acted-on` (faces `completion-word`, `plan-shaped / inherited-prose`, `blocked-without-test`).
-
-## Visual input handling
-
-Rules for processing screenshots, images, and visual assets: `.claude/rules/visual-inputs.md`.
+The recurring tell: the disconfirming check is cheap and available, but gets deferred until a Stop-sweep forces it — at which point the claim dissolves. Fire it pre-act, not on sweep N.

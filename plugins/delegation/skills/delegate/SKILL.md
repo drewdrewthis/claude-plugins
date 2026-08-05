@@ -20,7 +20,7 @@ Three axes. Only `kind` is always required.
 ## 2. Route
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/../../scripts/route-delegation.sh" --kind <kind> [--difficulty <d>|--focus <f>]
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/route-delegation.sh" --kind <kind> [--difficulty <d>|--focus <f>]
 ```
 
 It answers `agent`, `model`, and `why`, reading each model live from your roster's frontmatter — so a retuned roster propagates without editing anything here. `--list` dumps every route.

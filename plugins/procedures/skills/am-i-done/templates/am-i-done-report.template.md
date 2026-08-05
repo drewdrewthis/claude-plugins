@@ -3,9 +3,9 @@
 Fill this in. Each section says what it is for; the traps are marked inline.
 
 Delete this explanatory block from your copy. Delete any section that is
-genuinely empty, except **Not done** and **Assumptions** — those two are
-load-bearing precisely when they look empty, because silence in them reads as
-coverage.
+genuinely empty, except **Procedures followed**, **Not done**, and
+**Assumptions** — those three are load-bearing precisely when they look empty,
+because silence in them reads as coverage.
 
 ---
 
@@ -29,6 +29,15 @@ reviewer catches it.>
 | Decision | Why | What I rejected |
 |---|---|---|
 | <the call> | <the reason> | <the alternative and why not> |
+
+## Procedures followed
+
+| Procedure | Followed as written? | Deviation / friction — needs /evolve-procedure? |
+|---|---|---|
+| <path or id of each procedure consulted this turn> | <yes / no — what you did instead> | <what was wrong, stale, or costly, and whether it warrants a patch> |
+
+<If no procedure covered the work, say so — an uncovered success is the input
+for a new draft, not an empty section.>
 
 ## Claims and evidence
 

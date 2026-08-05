@@ -9,13 +9,11 @@ status: active
 
 # write-agent-doc
 
-> **Dispatch:** this procedure is now executed by delegating to the `scribe` agent (`~/.claude/agents/scribe.md`). There is no `/write-agent-doc` skill.
-
 ## Procedure
 
 **MUST READ first:**
-- `~/.claude/references/principles/agent-facing-docs.md` — the principles you are applying.
-- `~/.claude/templates/AGENT_TEMPLATE.md` — the canonical shape for any `agents/*.md` file (section order, hard rules R1-R5, size budgets).
+- `$CODEX_ROOT/references/principles/agent-facing-docs.md` where the host carries the codex principles — the principles you are applying.
+- this skill's `templates/agent.template.md` — the canonical shape for any `agents/*.md` file (section order, hard rules R1-R5, size budgets).
 
 1. Apply the principles — existing doc: rewrite to them; new doc: fill the skeleton. For an `agents/*.md` file, fill the template's skeleton directly.
 2. **Coverage gate** (existing doc): enumerate every load-bearing claim in the original and confirm each survives, or note why it was dropped.

@@ -46,12 +46,10 @@ not just the diff.
    `removed {}`/`moved {}`, HCL, CLI flags) as wrong or silently-ignored, run
    `<tool> validate` or a minimal sandbox check and quote the result.
    ⚠ an inferred "fix" that breaks CI is not a hygiene improvement.
-8. **Rust module** — if the diff touches `Cargo.toml` or `.rs` files, load
-   `~/.claude/references/language/rust-review.md` and apply its checklist.
-9. **Efficiency** — flag structural wastefulness only (redundant passes,
+8. **Efficiency** — flag structural wastefulness only (redundant passes,
    uncached recomputation, N+1 patterns, two walks where one suffices), not
    micro-optimization.
-10. **History injection** — in-scope: PROCEDURE.md, agent files, principles,
+9. **History injection** — in-scope: PROCEDURE.md, agent files, principles,
     references, skills, CLAUDE.md — anything an agent loads to decide what to
     do now. Out of scope: `EVOLUTION.md`, `references/research/`,
     `references/solutions/`, `references/decisions/`, `references/failure-modes/`,
@@ -87,19 +85,7 @@ not just the diff.
 
     **Remedy is relocation, not deletion** — move it to the sibling
     `EVOLUTION.md` or a research/solution record in the same commit. Authority:
-    `references/principles/agent-facing-docs.md` rule 7 ("Exile rationale").
-
-    Worked example:
-    `references/procedures/planner-orchardist-loop/fleet-burn-gear-up/PROCEDURE.md`
-    once carried a step 1 and a step 1b totalling hundreds of words, narrating
-    three rounds of corrections about which usage cache had a writer, where the actionable
-    content was a few sentences. A validation run against that file flagged four
-    fragments; the one a phrase-scan would have missed was *"This step itself
-    carried ... for a day after the linked issue closed, and separately asserted a CLI
-    breakage sourced from a code comment that a 30-second probe disproved"* —
-    pure backstory, zero marker words. **Do not let this example become the new
-    anchor** — it is one shape among many, exactly as the marker list is. Re-run
-    the test on the prose in front of you; do not pattern-match against this one.
+    `docs/principles/agent-facing-docs.md` rule 7 ("Exile rationale").
 
 Output format:
 
@@ -130,11 +116,3 @@ Output format:
 
 - Do not fix out-of-scope problems — flag them in Follow-Up Issues only.
 - Do not praise or summarize what's good; concerns and follow-ups only.
-
-# Pointers
-
-- `~/.claude/references/mandates/hygiene-reviewer.md` — purpose-anchor
-  consulted at every Stop hook fire (this file is the operational guide).
-- `~/.claude/references/language/rust-review.md` — Rust checklist.
-- `references/terraform-state-blocks.md`,
-  `references/failure-modes/unverified-tooling-semantics.md` — tooling-semantics backing.

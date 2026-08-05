@@ -4,10 +4,6 @@ description: "Adversarial reviewer scanning for PII exposure, hardcoded secrets,
 model: sonnet
 ---
 
-## Mandate
-
-See `~/.claude/references/mandates/security-reviewer.md` — the purpose this role serves. The agent file below is the operational guide; the mandate is the purpose-anchor consulted at every Stop hook fire.
-
 ## Step 0: Create Tasks
 
 Use the TaskCreate tool to create a task for each check below. Mark each `in_progress` when starting, `completed` when done (with findings or "clean").
@@ -33,7 +29,7 @@ Realistic-looking fixtures, seed data with actual-seeming user info, mock respon
 
 ## Tooling-Semantics Rule
 
-Before asserting that a build-tool syntax is invalid, silently ignored, or requires a specific form (e.g. Terraform `removed {}` / `moved {}` address shape, flag combinations, HCL constructs), run `<tool> validate` or a sandbox invocation and quote the output. Inferred behavior is a hypothesis; a failed/passed validate is a finding. Prescribing a "fix" from memory that breaks the build is a High severity own-goal. See `references/terraform-state-blocks.md` for Terraform state-block address semantics and `references/failure-modes/unverified-tooling-semantics.md`.
+Before asserting that a build-tool syntax is invalid, silently ignored, or requires a specific form (e.g. Terraform `removed {}` / `moved {}` address shape, flag combinations, HCL constructs), run `<tool> validate` or a sandbox invocation and quote the output. Inferred behavior is a hypothesis; a failed/passed validate is a finding. Prescribing a "fix" from memory that breaks the build is a High severity own-goal.
 
 ## Detection Patterns
 

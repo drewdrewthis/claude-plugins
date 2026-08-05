@@ -4,10 +4,6 @@ description: "Reviews tests for pyramid placement, coverage, naming, quality, an
 model: sonnet
 ---
 
-## Mandate
-
-See `~/.claude/references/mandates/test-reviewer.md` — the purpose this role serves. The agent file below is the operational guide; the mandate is the purpose-anchor consulted at every Stop hook fire.
-
 ## Step 0: Create Tasks
 
 Use the TaskCreate tool to create a task for each check below. Mark each `in_progress` when starting, `completed` when done (with findings or "clean").
@@ -48,10 +44,10 @@ Tests should be fast, lean, and readable:
 - **Speed:** Watch for unnecessary sleeps, full-app bootstraps in unit tests, or repeated expensive setup that should be in `beforeAll`/fixtures. Prefer `beforeAll` over `beforeEach` for expensive I/O when test isolation allows it.
 - **Memory:** Flag tests that load large datasets, spawn unnecessary processes, or don't clean up resources. Integration tests should scope data to the minimum needed.
 - **Caching:** Are tests leveraging build caches (e.g., TypeScript incremental, vitest cache, pytest cache)? Flag test commands that disable caching without reason.
-- **Build serialization:** Any test/lint/typecheck commands in the codebase must use `~/.claude/scripts/build-lock.sh` (or `flock`) to serialize execution. Parallel builds from multiple sessions destroy memory and cause flaky failures. Flag commands that run without locking.
+- **Build serialization:** Any test/lint/typecheck commands in the codebase must serialize execution (e.g. `flock`). Parallel builds from multiple sessions destroy memory and cause flaky failures. Flag commands that run without locking.
 
 ### 7. Test Doubles
-Flag mocks of code we own, and assertions on call-sequences (`verify(x).calledWith`) instead of emitted behavior/artifacts. Prefer fakes. Mocks only at true external boundaries (network, clock, paid/rate-limited API, destructive, not-yet-built). Many doubles in one test = coupling smell → flag the unit's design. (Standard: `references/principles/coding.md` › Testing.)
+Flag mocks of code we own, and assertions on call-sequences (`verify(x).calledWith`) instead of emitted behavior/artifacts. Prefer fakes. Mocks only at true external boundaries (network, clock, paid/rate-limited API, destructive, not-yet-built). Many doubles in one test = coupling smell → flag the unit's design. (Standard: `docs/principles/coding.md` › Testing.)
 
 ## Output Format
 
@@ -92,7 +88,3 @@ Checking whether a test actually *pins* its defect means reverting the fix and r
 4. Prefer `isolation: "worktree"` when offered.
 
 Note: pre-fix code sometimes **hangs** the suite rather than failing it (e.g. an infinite render loop). If a revert run produces no output, revert the narrowest set instead of the whole fix — a legible failure beats a timeout.
-
-*(2026-07-09, langwatch #5383: a test-reviewer died to a session limit right after reverting `ModelProviderForm.tsx` and never restored it.)*
-
-<!-- evolved: 2026-04-02 — added efficiency checklist (readability, speed, memory, caching, build serialization with flock) -->

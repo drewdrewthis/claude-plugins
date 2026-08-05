@@ -76,6 +76,12 @@ Design rules the gates follow:
   all stores. There are no materialized views and no index files: the
   procedure-scout compiles a digest per query, so nothing can go stale
   between a record and its copy.
+- **Two naming namespaces, deliberately.** Host procedure records live as
+  directories (`references/procedures/<area>/<name>/PROCEDURE.md` plus a
+  sibling `EVOLUTION.md`); the reference and template files a plugin *ships*
+  use the flat `<name>.procedure.md` / `<name>.template.md` form. A plugin file
+  is read-only payload with no evolution log of its own, so it needs no
+  directory.
 - **Mistakes are events, failure-modes are records.** Each mistake appends
   one structured jsonl row at correction time; a recurring pattern is
   promoted to a durable failure-mode record only at ≥3 occurrences (the

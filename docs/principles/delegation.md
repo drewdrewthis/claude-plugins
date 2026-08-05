@@ -32,7 +32,7 @@ The implementation ladder is `fast-coder` → `coder` → `advanced-coder`.
 
 ### Coder vs advanced-coder — the canonical selection rule (SOURCE OF TRUTH)
 
-This is the single source of truth for the `coder`/`advanced-coder` split. Every other doc (`references/model-selection.md`, `agents/lead.md`, `agents/advanced-coder.md`) links here rather than restating it. Test-completeness is the PRIMARY gate; file-count and unknown-failure are secondary triggers that only apply when tests are incomplete.
+This is the single source of truth for the `coder`/`advanced-coder` split. Every other doc (`agents/advanced-coder.md`) links here rather than restating it. Test-completeness is the PRIMARY gate; file-count and unknown-failure are secondary triggers that only apply when tests are incomplete.
 
 > **Route to `coder` (Sonnet)** when the caller hands a COMPLETE set of failing tests that fully specify the change — making them pass is bounded to "write the minimum code to turn red green." File count does NOT matter here: a clear 4-file change with complete tests is still `coder`.
 > **Route to `advanced-coder` (Opus)** when the implementer must exercise design/diagnostic judgment, specifically when ANY of:
@@ -55,7 +55,7 @@ Before reaching for `general-purpose`, run `scripts/route-delegation.sh --kind o
 
 When an agent wants a generalist and NO existing specialist fits the task, **mint a new specialist** instead of approving a `general-purpose` call:
 
-1. Write `~/.claude/agents/<name>.md` — mirror an existing specialist's frontmatter shape; pick the right model tier from `references/model-selection.md`.
+1. Write `~/.claude/agents/<name>.md` — mirror an existing specialist's frontmatter shape; pick the right model tier: haiku for mechanical fully-specified execution, sonnet for standard implementation and research, opus for judgment-bearing design, debugging-of-unknowns, and verification.
 2. Run `/reload-plugins` to load the new agent file into the current session.
 3. Dispatch the new agent by name.
 
@@ -63,7 +63,7 @@ Only a genuine one-off task that fits no specialist AND is not worth the 3-line 
 
 **Effort is NOT a per-delegation lever.** The `Agent` tool exposes `model` but no `effort`/thinking-budget parameter. Effort is a SESSION-level setting (`settings.json` `effortLevel`, `/effort max`, `--effort max` at spawn) that subagents inherit — you cannot dial it per `Agent()` call. So the delegation knobs are: agent-type (carries the model), an explicit `model:` override (rare), `isolation`, and `run_in_background`. Effort is fixed by the session.
 
-Operational restatement of this rule for the lead identity: `agents/lead.md` tripwires point at `references/procedures/codex-meta/delegation-routing/PROCEDURE.md`. Tier reference table: `references/model-selection.md`.
+Operational restatement of this rule for the orchestrating agent: its tripwires point back to this delegation-routing rule. Tier guidance: haiku for mechanical fully-specified execution; sonnet for standard implementation and research; opus for judgment-bearing design, debugging-of-unknowns, and verification.
 
 ## Concurrent mutating agents → worktree isolation
 
@@ -121,4 +121,4 @@ Always include the `Flags:` block, even when all three sub-bullets are `(none)`.
 
 - Full pre/post templates, followup-triage gate, interrupt rules: `references/interrupt-discipline.md`
 - Done bar: `references/verification.md`
-- Decision procedure for genuine escalations: `references/procedures/research-think/decide/PROCEDURE.md`
+- Decision procedure for genuine escalations: escalate only on genuine goal ambiguity — never methodology, approach, or format.

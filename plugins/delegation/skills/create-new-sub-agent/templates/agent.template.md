@@ -4,15 +4,16 @@ The canonical shape for any file in `agents/*.md`. Fill in the skeleton below;
 delete this explanatory prose from your copy.
 
 Philosophy (thin form, rationale-exile, say-each-thing-once): `prin.agent-facing-docs`
-(`references/principles/agent-facing-docs.md`). This template states shape and
-rules only — read that file for why.
+(`$CODEX_ROOT/references/principles/agent-facing-docs.md` where the host carries
+the codex principles). This template states shape and rules only — read that
+file for why.
 
 ## Enforcement
 
-`scripts/lint-agent-files.sh` runs in pre-commit over `agents/*.md` (excluding
-`agents/EVOLUTION.md`). Hard rules below are BLOCK; a file listed in
-`agents/.lint-legacy` gets every violation downgraded to WARN until converted —
-see that file's header for the shrink-only-ratchet rule.
+Run `scripts/lint-agent-files.sh` (from the plugin root) manually over
+`agents/*.md` (excluding `agents/EVOLUTION.md`) before shipping a new or edited
+agent file. Hard rules below are BLOCK; a file listed in `agents/.lint-legacy`
+gets every violation downgraded to WARN until converted.
 
 **Hard rules (BLOCK, exit 1):**
 - R1 — frontmatter block present, with `name:` and `description:` keys
@@ -108,7 +109,6 @@ Omit this section if the agent never delegates.>
 
   ⚠ An `@<path>` that does not resolve expands to NOTHING — no error, no
   warning, and the agent acts without the rules it thinks it has.
-  `scripts/lint-claude-imports.sh` covers `agents/*.md`; run it after adding one.
 - **Delegation** — only for agents that hand work to others; state what stays
   in-house vs. what gets delegated and to which named agent/procedure.
 - **Boundaries** — explicit NOTs. This is what keeps an agent from scope-creeping
