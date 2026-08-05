@@ -23,7 +23,12 @@ root below is `$KNOWLEDGE_REFS` if set, else `~/.claude/references`.
 | **solution** | a reusable fix/pattern for a problem that will recur | `<root>/solutions/<YYYY-MM-DD>-<kebab-name>.md` (template: `SOLUTION_TEMPLATE.md`) |
 | **principle** | a durable how-to-think rule that shapes many tasks | `<root>/principles/<kebab-name>.md` (template: `PRINCIPLE_TEMPLATE.md`) |
 | **failure-mode** | a mistake pattern learned from a correction, so it never recurs | `<root>/failure-modes/<kebab-name>.md` (template: `FAILURE_MODE_TEMPLATE.md`) |
-| **mistake** | one correction event (yours or the user's) — the raw log failure-modes are promoted from | append one JSON line to `<root>/mistakes.jsonl`: `{"ts","category","description","correction","severity","trigger","recurrence_of"}` — `recurrence_of` points at the earliest same-pattern entry, or null |
+| **mistake** | one correction event (yours or the user's) — the raw log failure-modes are promoted from | run `${CLAUDE_SKILL_DIR}/scripts/log-mistake.sh --category <c> --description "..." --correction "..." --severity <low\|medium\|high> --trigger <human\|self> [--recurrence-of <ts>]` — appends to `<root>/mistakes.jsonl`. You supply the judgment: grep the jsonl for a same-pattern ancestor first and pass its `ts` as `--recurrence-of` |
+
+Mistakes are NOT compiled into CLAUDE.md by this plugin — a plugin doesn't
+own the host CLAUDE.md. Recurring mistakes reach future turns two ways:
+`/how-do-i` searches the mistakes surface, and the scout/handoff briefing
+must carry the relevant ones forward.
 
 ## Frontmatter — every record, no exceptions
 

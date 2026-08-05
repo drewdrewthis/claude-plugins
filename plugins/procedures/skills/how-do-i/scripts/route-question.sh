@@ -13,6 +13,7 @@ SOLUTIONS="$REFS/solutions"
 PRINCIPLES="$REFS/principles"
 FAILMODES="$REFS/failure-modes"
 DECISIONS="${KNOWLEDGE_DECISIONS:-$REFS/decisions.jsonl}"
+MISTAKES="${KNOWLEDGE_MISTAKES:-$REFS/mistakes.jsonl}"
 SHIPPED="${HOW_DO_I_EXTRA_DOCS:-}"
 RECALL="${RECALL_SCRIPT:-$HOME/.claude/skills/recall/scripts/recall.sh}"
 
@@ -70,6 +71,13 @@ if [ -n "$SHIPPED" ] && [ -d "$SHIPPED" ]; then
     echo "$f"
     grep -im1 -E "$words" "$f" | sed 's/^/    > /'
   done
+fi
+
+section "mistakes ($MISTAKES)"
+if [ -f "$MISTAKES" ]; then
+  grep -i -E "$words" "$MISTAKES" 2>/dev/null | tail -5 | cut -c1-200
+else
+  echo "(no mistakes logged yet)"
 fi
 
 section "history (/recall)"
