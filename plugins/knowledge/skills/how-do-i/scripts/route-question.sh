@@ -11,7 +11,7 @@ REFS="${KNOWLEDGE_REFS:-$HOME/.claude/references}"
 PROCS="$REFS/procedures"
 SOLUTIONS="$REFS/solutions"
 DECISIONS="${KNOWLEDGE_DECISIONS:-$REFS/decisions.jsonl}"
-SHIPPED="${HOW_DO_I_EXTRA_DOCS:-$HOME/.claude/references/appletree}"
+SHIPPED="${HOW_DO_I_EXTRA_DOCS:-}"
 RECALL="${RECALL_SCRIPT:-$HOME/.claude/skills/recall/scripts/recall.sh}"
 
 # Build a grep alternation from the meaningful words (drop stopwords/short).
@@ -51,11 +51,13 @@ else
   echo "(no decisions logged yet)"
 fi
 
-section "shipped docs ($SHIPPED)"
-grep -ril -E "$words" "$SHIPPED" 2>/dev/null | head -5 | while read -r f; do
-  echo "$f"
-  grep -im1 -E "$words" "$f" | sed 's/^/    > /'
-done
+if [ -n "$SHIPPED" ] && [ -d "$SHIPPED" ]; then
+  section "shipped docs ($SHIPPED)"
+  grep -ril -E "$words" "$SHIPPED" 2>/dev/null | head -5 | while read -r f; do
+    echo "$f"
+    grep -im1 -E "$words" "$f" | sed 's/^/    > /'
+  done
+fi
 
 section "history (/recall)"
 if [ -x "$RECALL" ] || [ -f "$RECALL" ]; then
