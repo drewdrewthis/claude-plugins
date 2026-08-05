@@ -1,4 +1,4 @@
-<!-- TEMPLATE — copy to ~/workspace/references/procedures/<kebab-name>.md and fill.
+<!-- TEMPLATE — copy to your knowledge root's procedures/ (default ~/.claude/references/procedures/)<kebab-name>.md and fill.
      A procedure = a repeatable operation written so future-you can follow it
      without re-deriving anything. -->
 ---

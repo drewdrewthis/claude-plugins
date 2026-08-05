@@ -1,4 +1,4 @@
-<!-- TEMPLATE — copy to ~/workspace/references/solutions/<YYYY-MM-DD>-<kebab-name>.md.
+<!-- TEMPLATE — copy to your knowledge root's solutions/ (default ~/.claude/references/solutions/)<YYYY-MM-DD>-<kebab-name>.md.
      A solution = a reusable fix for a problem shape that will recur. -->
 ---
 title: <the takeaway as a sentence — the rule, not the topic>

@@ -1,4 +1,4 @@
-<!-- TEMPLATE — a decision is ONE JSON line appended to ~/workspace/decisions.jsonl.
+<!-- TEMPLATE — a decision is ONE JSON line appended to the decisions.jsonl in your knowledge root (default ~/.claude/references/decisions.jsonl).
      Shape (keep every key; empty string over missing key):
 
 {"ts":"<ISO-8601>","title":"<the takeaway as a sentence>","type":"decision","context":"<what raised the question>","what":"<what was decided, concretely>","rationale_or_lesson":"<why — the reasoning that makes it stick>","decided_by":"<person|assistant|together>","tags":["<search-words>"]}
