@@ -91,6 +91,8 @@ Design rules the gates follow:
   is promoted from draft only after it has been followed as written and
   worked.
 - **Behavioral corrections start from the incident**, not from prose: log
-  the mistake, find the pattern, then patch the procedure/skill directly and
-  record the change in its `EVOLUTION.md` — so evolution is driven by what
-  actually went wrong, not by what sounded better.
+  the mistake, find the pattern, then patch the procedure/skill and record
+  the change in its `EVOLUTION.md` — so evolution is driven by what actually
+  went wrong, not by what sounded better. For a procedure, that patch loop
+  is `/evolve-procedure`; other artifacts (skills, agents, records) are
+  edited directly.
