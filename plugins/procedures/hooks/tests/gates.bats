@@ -78,6 +78,29 @@ assistant_tool() {
   [[ "$output" == *"deny"* ]]
 }
 
+@test "record: namespaced procedures:how-do-i stamps the how_do_i marker" {
+  start_turn
+  ran_skill "procedures:how-do-i"
+  run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "record: namespaced procedures:am-i-done stamps its marker" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  ran_skill "procedures:am-i-done"
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "record: an unrelated namespaced skill foo:bar marks nothing" {
+  start_turn
+  ran_skill "foo:bar"
+  run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [[ "$output" == *"deny"* ]]
+}
+
 @test "record: a non-Skill tool is ignored and exits clean" {
   start_turn
   run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/turn-state-record.sh'"
