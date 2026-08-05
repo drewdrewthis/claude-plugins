@@ -1,0 +1,29 @@
+{
+  "name": "drewdrewthis",
+  "owner": {
+    "name": "Drü",
+    "email": "drewdrewthis@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "procedures",
+      "source": "./plugins/procedures",
+      "description": "Procedural knowledge system: /how-do-i, /log (+templates), /am-i-done, and the how-do-i/am-i-done gate hooks with turn-state wiring."
+    },
+    {
+      "name": "delegation",
+      "source": "./plugins/delegation",
+      "description": "Delegation machinery: /delegate routes a task shape to a specialist from the host's own agent roster, /create-new-sub-agent mints one when none fits (template + linter)."
+    },
+    {
+      "name": "about-my-person",
+      "source": "./plugins/about-my-person",
+      "description": "One curated file tracking who your person is + the /about-my-person maintenance procedure."
+    },
+    {
+      "name": "take-note",
+      "source": "./plugins/take-note",
+      "description": "Daily working notes: /take-note scratchpad + SessionStart daily-note loader."
+    }
+  ]
+}

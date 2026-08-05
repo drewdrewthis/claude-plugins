@@ -1,0 +1,6 @@
+{
+  "name": "delegation",
+  "version": "0.1.0",
+  "description": "Delegation machinery: /delegate routes a task shape to the right specialist from the HOST's own agent roster (live model lookup, no hardcoded table), and /create-new-sub-agent mints the specialist when none fits — template + linter included. Ships the router and the rule for making agents, never the agents.",
+  "author": { "name": "Drü" }
+}
