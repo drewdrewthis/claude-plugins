@@ -6,9 +6,14 @@
   },
   "plugins": [
     {
-      "name": "knowledge",
-      "source": "./plugins/knowledge",
-      "description": "Daily notes + personal knowledge system: /take-note, /log (procedures, decisions, solutions + templates), /how-do-i router, SessionStart daily-note loader."
+      "name": "procedures",
+      "source": "./plugins/procedures",
+      "description": "Procedural knowledge system: /how-do-i, /log (+templates), /am-i-done, and the how-do-i/am-i-done gate hooks with turn-state wiring."
+    },
+    {
+      "name": "take-note",
+      "source": "./plugins/take-note",
+      "description": "Daily working notes: /take-note scratchpad + SessionStart daily-note loader."
     }
   ]
 }

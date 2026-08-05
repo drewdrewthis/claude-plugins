@@ -1,0 +1,6 @@
+{
+  "name": "take-note",
+  "version": "0.1.0",
+  "description": "Daily working notes: /take-note scratchpad (one file per day, rollover with carry-over) + SessionStart hook loading today's note (and ABOUT_MY_PERSON.md when present).",
+  "author": { "name": "Drü" }
+}
