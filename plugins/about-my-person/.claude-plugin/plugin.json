@@ -1,0 +1,6 @@
+{
+  "name": "about-my-person",
+  "version": "0.1.0",
+  "description": "One curated file tracking who your person is — identity, preferences, standing context, dated changelog — plus the /about-my-person maintenance procedure. Not a knowledge base.",
+  "author": { "name": "Drü" }
+}

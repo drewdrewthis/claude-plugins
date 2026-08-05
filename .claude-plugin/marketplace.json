@@ -11,6 +11,11 @@
       "description": "Procedural knowledge system: /how-do-i, /log (+templates), /am-i-done, and the how-do-i/am-i-done gate hooks with turn-state wiring."
     },
     {
+      "name": "about-my-person",
+      "source": "./plugins/about-my-person",
+      "description": "One curated file tracking who your person is + the /about-my-person maintenance procedure."
+    },
+    {
       "name": "take-note",
       "source": "./plugins/take-note",
       "description": "Daily working notes: /take-note scratchpad + SessionStart daily-note loader."

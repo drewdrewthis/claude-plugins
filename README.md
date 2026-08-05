@@ -11,6 +11,7 @@ design record.
 ```
 /plugin marketplace add drewdrewthis/claude-plugins
 /plugin install procedures@drewdrewthis
+/plugin install about-my-person@drewdrewthis
 /plugin install take-note@drewdrewthis
 ```
 
@@ -35,6 +36,14 @@ Config (env, optional): `KNOWLEDGE_REFS` — record root (default
 (`KNOWLEDGE_DECISIONS` overrides the jsonl path). `HOW_DO_I_EXTRA_DOCS` —
 extra shipped-docs dir the router also searches. `RECALL_SCRIPT` — recall
 search script for the history surface; degrades gracefully if absent.
+
+### about-my-person (0.1.0)
+
+`/about-my-person` — maintains the ONE whole-readable file about who your
+person is (Identity / Preferences / Standing context / dated Changelog):
+read whole, replace stale facts, never append blind, no secrets ever.
+Config: `ABOUT_MY_PERSON_FILE` (default
+`~/workspace/references/docs/ABOUT_MY_PERSON.md`).
 
 ### take-note (0.1.0)
 
