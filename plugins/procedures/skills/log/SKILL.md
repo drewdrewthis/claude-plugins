@@ -23,6 +23,7 @@ root below is `$KNOWLEDGE_REFS` if set, else `~/.claude/references`.
 | **solution** | a reusable fix/pattern for a problem that will recur | `<root>/solutions/<YYYY-MM-DD>-<kebab-name>.md` (template: `SOLUTION_TEMPLATE.md`) |
 | **principle** | a durable how-to-think rule that shapes many tasks | `<root>/principles/<kebab-name>.md` (template: `PRINCIPLE_TEMPLATE.md`) |
 | **failure-mode** | a mistake pattern learned from a correction, so it never recurs | `<root>/failure-modes/<kebab-name>.md` (template: `FAILURE_MODE_TEMPLATE.md`) |
+| **mistake** | one correction event (yours or the user's) — the raw log failure-modes are promoted from | append one JSON line to `<root>/mistakes.jsonl`: `{"ts","category","description","correction","severity","trigger","recurrence_of"}` — `recurrence_of` points at the earliest same-pattern entry, or null |
 
 ## Frontmatter — every record, no exceptions
 
@@ -47,7 +48,11 @@ edit was settled, not accidental.
 - **Frontmatter keywords are the findability** — choose the words future-you
   would actually search with, including your person's own vocabulary.
 - A correction from your person is the highest-value trigger: log it as a
-  procedure (the rule going forward), and put the preference itself in
-  `/about-my-person` if it's about them rather than about a task.
+  **mistake** right then, and as a procedure (the rule going forward) if it's
+  about a task — the preference itself goes in `/about-my-person` if it's
+  about them. A mistake that recurs (`recurrence_of` chains) is your signal
+  to promote it to a **failure-mode** record.
+- Patching an existing artifact from a lesson is `/evolve`; creating a new
+  procedure/reference/skill for uncovered work is `/create-new`.
 - These files hold task knowledge, not private content beyond what the
   procedure needs. Not credentials, ever.

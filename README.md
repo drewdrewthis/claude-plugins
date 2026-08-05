@@ -26,7 +26,9 @@ orchard-codex `develop-sweatshop`):
 |---|---|
 | `/how-do-i` | routes a question across procedures, solutions, decisions.jsonl, shipped docs, and `/recall` history before improvising |
 | `/log` | durable records: procedure / decision / solution / principle / failure-mode — `*_TEMPLATE.md` files in `skills/log/templates/` (PROCEDURE, DECISION, SOLUTION, PRINCIPLE, FAILURE_MODE, EVOLUTION) |
-| `/am-i-done` | cold-read review of a handoff report by the `work-reviewer` agent before calling work done |
+| `/am-i-done` | cold-read review of a handoff report (incl. the "Procedures followed" evolution table) by the `work-reviewer` agent before calling work done |
+| `/evolve` | patch an existing procedure/skill/record from a correction or friction — wraps the codex-meta evolve procedures |
+| `/create-new` | create a new procedure/reference/skill for uncovered work — wraps the codex-meta create procedures; draft-then-promote |
 | `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(how-do-i)` has run this turn; fail-open, blind fail-opens recorded |
 | `am-i-done-gate` (Stop) | requires one `Skill(am-i-done)` review on any turn that called tools; asks at most once |
 | `turn-state-reset` (UserPromptSubmit) / `turn-state-record` (PostToolUse:Skill) | the turn-boundary state the gates read (`$TURN_STATE_DIR`, default `/tmp/claude-turn-state`) |
