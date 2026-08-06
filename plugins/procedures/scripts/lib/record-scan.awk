@@ -35,8 +35,9 @@ FNR == 1 {
 
 infm == 1 {
     if ($0 == "---") { infm = 0; fmdone = 1; next }
-    if ($0 ~ /^id:/)    { id = $0;    sub(/^id:[[:space:]]*/, "", id);    sub(/[[:space:]].*$/, "", id) }
-    if ($0 ~ /^kind:/)  { kind = $0;  sub(/^kind:[[:space:]]*/, "", kind); sub(/[[:space:]].*$/, "", kind) }
+    # PLUGIN ADAPTATION: quoted-scalar fix ahead of upstream (CodeRabbit PR #5); upstream orchard-codex#268-phase-2 inherits
+    if ($0 ~ /^id:/)    { id = $0;    sub(/^id:[[:space:]]*/, "", id);    sub(/[[:space:]].*$/, "", id);    id = stripq(id) }
+    if ($0 ~ /^kind:/)  { kind = $0;  sub(/^kind:[[:space:]]*/, "", kind); sub(/[[:space:]].*$/, "", kind); kind = stripq(kind) }
     if ($0 ~ /^links:/) { links = $0; sub(/^links:[[:space:]]*/, "", links) }
     next
 }
@@ -76,4 +77,15 @@ function emit(   g, n, toks, i, t, found) {
     if (length(g) > 90) g = substr(g, 1, 87) "..."
     if (g == "") g = "(record)"
     printf "%s\t%s\n", fpath, g
+}
+
+# strips one matching pair of outer quotes (double or single) from an
+# already-trimmed id/kind scalar, so a quoted YAML value compares equal to
+# an unquoted query token.
+function stripq(v,   n) {
+    n = length(v)
+    if (n < 2) return v
+    if (substr(v, 1, 1) == "\"" && substr(v, n, 1) == "\"") return substr(v, 2, n - 2)
+    if (substr(v, 1, 1) == "'"  && substr(v, n, 1) == "'")  return substr(v, 2, n - 2)
+    return v
 }

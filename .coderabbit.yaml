@@ -1,14 +1,15 @@
 # CodeRabbit config: review contributions against CONTRIBUTING.md.
 # Judgment layer only — the deterministic gate is `bats hooks/tests` (green
 # before merge). CodeRabbit is advisory; merging stays a manual owner action.
-# NOTE: this repo is PUBLIC, so branch protection IS available — if
-# required-review protection is ever enabled on main, request_changes_workflow
-# below turns CodeRabbit into a mechanical merge blocker. Keep it advisory:
-# don't count its review in required_approving_review_count.
+# request_changes_workflow stays false to keep it advisory-by-construction:
+# this repo is public, branch protection IS available, and a request-changes
+# review would become a mechanical merge blocker the moment required-review
+# protection is enabled on main. Findings still land as review comments.
+# A real verdict gate, if ever wanted, is issue #6 (workflow-checked verdict).
 
 reviews:
   profile: assertive
-  request_changes_workflow: true
+  request_changes_workflow: false
 
   tone_instructions: >
     Terse and specific. Cite file:line. No praise, no platitudes. Flag only what
@@ -19,13 +20,16 @@ reviews:
       instructions: >
         This plugin is VENDORED from orchard-codex@develop-sweatshop (see
         CONTRIBUTING.md "Vendoring rule"). Flag any divergence from upstream
-        that is not marked with a `# PLUGIN ADAPTATION: <why>` comment at the
-        point of divergence — including reformats, renames, and "while I'm
-        here" edits. The only legitimate reasons to diverge are
-        plugin-hosting context (data-root defaults, ${CLAUDE_PLUGIN_ROOT} /
-        ${CLAUDE_SKILL_DIR} paths). Also flag: new or changed hook/script
-        behavior (including a marked adaptation) with no bats test added in
-        the SAME PR under hooks/tests/ or scripts/tests/.
+        that is not marked at the point of divergence: in *.sh/*.awk/*.bats
+        files the marker is a literal `# PLUGIN ADAPTATION: <why>` comment;
+        in *.md and *.json files (no comment syntax for this) the divergence
+        must instead match one of README.md's documented adaptation classes
+        (${CLAUDE_PLUGIN_ROOT}/${CLAUDE_SKILL_DIR} paths, data-root
+        defaults) — flag any .md/.json divergence outside those classes.
+        Also flag reformats, renames, and "while I'm here" edits, and any
+        new or changed hook/script behavior (including a marked adaptation)
+        with no bats test added in the SAME PR under hooks/tests/ or
+        scripts/tests/.
 
     - path: "**/*.sh"
       instructions: >

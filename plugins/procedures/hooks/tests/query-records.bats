@@ -517,3 +517,48 @@ EOF
   [[ "$output" == *"sample-decision.md"* ]]
   [[ "$output" != *"empty-record.md"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# PLUGIN ADAPTATION: quoted-scalar fix ahead of upstream (CodeRabbit PR #5);
+# upstream orchard-codex#268-phase-2 inherits. record-scan.awk used to keep
+# the surrounding quote characters on `id`/`kind` scalar values, so a quoted
+# YAML value never equaled an unquoted query token.
+# ---------------------------------------------------------------------------
+
+@test "--id matches a record whose frontmatter id is double-quoted" {
+  cat > "$FIX/references/decisions/quoted-id-probe.md" <<'EOF'
+---
+id: "dec.quoted-probe"
+kind: decision
+date: 2026-06-12
+keywords: [quotedidkw]
+links: {}
+status: active
+---
+# Quoted id record
+
+Body of the quoted id record.
+EOF
+  run bash -c "bash '$SCRIPT' --id dec.quoted-probe"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/quoted-id-probe.md"* ]]
+}
+
+@test "--kind matches a record whose frontmatter kind is single-quoted" {
+  cat > "$FIX/references/decisions/quoted-kind-probe.md" <<'EOF'
+---
+id: dec.quoted-kind-probe
+kind: 'decision'
+date: 2026-06-12
+keywords: [quotedkindkw]
+links: {}
+status: active
+---
+# Quoted kind record
+
+Body of the quoted kind record.
+EOF
+  run bash -c "bash '$SCRIPT' --kind decision"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/quoted-kind-probe.md"* ]]
+}
