@@ -58,20 +58,32 @@ confident voice and carries a `proc.` id.
    reading you took. A wrong reading found here is cheap; found after they act
    it is not.
 
-2. **Search every store, not just procedures.** The traps live in the other
+2. **Survey every store, not just procedures.** The traps live in the other
    kinds:
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --keyword "<term>"
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --kind procedure --keyword "<term>"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --keyword "<term set>"
+   ```
+   One gloss call (no `--full`) per synonym set — expand synonyms, since the
+   caller's words rarely match the corpus's. Search the *capability* as well
+   as the identifier: "the cache", not just the function name. If keyword
+   search misses, fall back to:
+   ```bash
    grep -rn '^keywords:' "${CODEX_ROOT:-$HOME/.claude}/references/procedures/" | grep -i '<term>'
    ```
-   Expand synonyms — the caller's words rarely match the corpus's. Search the
-   *capability* as well as the identifier: "the cache", not just the function
-   name.
 
-3. **Read every candidate in full.** Skimming a procedure to its first code
-   block is how the step after it gets missed. Read to the end — an
-   Investigation or Evolution section below the steps can supersede them.
+3. **Select, then batch-read.** From all survey lists, pick every plausibly
+   relevant path — err inclusive, a gloss can undersell a record — dedupe, and
+   read them in one call:
+   ```bash
+   awk 'FNR==1{print "\n==> " FILENAME " <=="}1' <path> <path> ...
+   ```
+   Read to the end of each — an Investigation or Evolution section below the
+   steps can supersede them; the batch output is the full text, not a preview.
+   Reserve `--full` for a narrow query only: `--id`, or a tight `--kind` +
+   `--keyword` where the match list is already the read set. Never run `--full`
+   on a broad first-pass keyword survey — the dump caps at 10 records with a
+   truncation notice, and dumping before selecting wastes context on records a
+   gloss would have excluded.
 
 4. **Pull the traps.** For the same terms, sweep `references/failure-modes/`,
    `references/solutions/`, and `mistakes.jsonl`. A procedure tells the caller

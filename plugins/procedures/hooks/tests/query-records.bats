@@ -81,6 +81,8 @@ EOF
 
 teardown() {
   [ -n "${FIX:-}" ] && rm -rf "$FIX"
+  [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"
+  true
 }
 
 # ---- --keyword returns a known fixture record ----
@@ -138,6 +140,23 @@ teardown() {
   run bash -c "bash '$SCRIPT' --id no.such.id.exists"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+# ---------------------------------------------------------------------------
+# BLOCKING fix regression: a broken scan must be LOUD (exit 3), never mistaken
+# for the silent "no matches" case above — "awk couldn't run" is not "no
+# matches". Sandbox a copy of the script + lib dir with record-scan.awk
+# removed, so the structural-scan command substitution fails.
+# ---------------------------------------------------------------------------
+@test "record scan failure (missing awk lib) exits 3 with a loud stderr message" {
+  SANDBOX="$(mktemp -d)"
+  mkdir -p "$SANDBOX/scripts"
+  cp "$BATS_TEST_DIRNAME/../../scripts/query-records.sh" "$SANDBOX/scripts/query-records.sh"
+  cp -r "$BATS_TEST_DIRNAME/../../scripts/lib" "$SANDBOX/scripts/lib"
+  rm -f "$SANDBOX/scripts/lib/record-scan.awk"
+  run bash -c "bash '$SANDBOX/scripts/query-records.sh' --kind decision"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"query-records: record scan failed (awk unusable or lib missing) — NOT 'no matches'"* ]]
 }
 
 # ---- multiple flags combine (AND logic) ----
@@ -223,6 +242,37 @@ EOF
   [ "$count" -eq 5 ]
 }
 
+# Seeds a store the base fixture never touches (references/research), so a
+# structural --kind query against it has zero pre-existing pollution and the
+# match count is exactly the number of files seeded here.
+_seed_structural25_fixture() {
+  mkdir -p "$FIX/references/research"
+  for i in $(seq 1 25); do
+    cat > "$FIX/references/research/structural25-$i.md" <<EOF
+---
+id: res.structural25-$i
+kind: research
+date: 2026-06-25
+keywords: [structural25kw]
+links: {}
+status: active
+---
+# structural-only fixture $i
+
+body
+EOF
+  done
+}
+
+@test "structural-only --kind query with no --limit returns all 25 records uncapped" {
+  _seed_structural25_fixture
+  run bash -c "bash '$SCRIPT' --kind research"
+  [ "$status" -eq 0 ]
+  local lines
+  lines="$(printf '%s\n' "$output" | grep -c .)"
+  [ "$lines" -eq 25 ]
+}
+
 @test "--limit also caps structural-only (no-keyword) queries" {
   _seed_many_matches_fixture
   run bash -c "bash '$SCRIPT' --kind solution --limit 4"
@@ -230,6 +280,18 @@ EOF
   local count
   count=$(printf '%s\n' "$output" | grep -c 'manyresult[0-9]*\.md')
   [ "$count" -eq 4 ]
+}
+
+@test "--limit rejects a non-integer value with exit 2 and the contract message" {
+  run bash -c "bash '$SCRIPT' --keyword quokkadec --limit abc"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"query-records: --limit needs a non-negative integer (0 = uncapped)"* ]]
+}
+
+@test "QUERY_RECORDS_LIMIT=abc with no --limit flag rejects with exit 2 and the contract message" {
+  run bash -c "QUERY_RECORDS_LIMIT=abc bash '$SCRIPT' --keyword quokkadec"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"query-records: --limit needs a non-negative integer (0 = uncapped)"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -302,4 +364,156 @@ EOF
   [[ "$output" == *"qrrelstrong.md"* ]]
   [[ "$output" == *"qrrelfill1.md"* ]]
   [[ "$output" == *"qrrelfill2.md"* ]]
+}
+
+# ---- --full ----
+
+@test "--full on a structural query dumps full content with a path header" {
+  run bash -c "bash '$SCRIPT' --kind decision --full"
+  [ "$status" -eq 0 ]
+  # the plain match-list line is still present
+  [[ "$output" == *"references/decisions/sample-decision.md — Sample decision record"* ]]
+  # the full-dump header is present
+  [[ "$output" == *"==> references/decisions/sample-decision.md <=="* ]]
+  # a known body line from the record is present
+  [[ "$output" == *"Body about a quokkadec decision."* ]]
+}
+
+@test "--full on a --keyword query dumps full content with a path header" {
+  run bash -c "bash '$SCRIPT' --keyword quokkadec --full"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/sample-decision.md — Sample decision record"* ]]
+  [[ "$output" == *"==> references/decisions/sample-decision.md <=="* ]]
+  [[ "$output" == *"Body about a quokkadec decision."* ]]
+}
+
+@test "--full with no matches prints nothing and exits 0" {
+  run bash -c "bash '$SCRIPT' --keyword florblezzqqnonsense --full"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "--full caps the dump at 10 records and prints a truncation notice" {
+  # add 11 more decision records so --kind decision has 12 candidates total.
+  for i in $(seq 1 11); do
+    cat > "$FIX/references/decisions/full-extra-$i.md" <<EOF
+---
+id: dec.full-extra-$i
+kind: decision
+date: 2026-06-12
+keywords: [fullextrakw$i]
+links: {}
+status: active
+---
+# Full extra decision $i
+
+Body of full extra decision $i.
+EOF
+  done
+  run bash -c "bash '$SCRIPT' --kind decision --full --limit 20"
+  [ "$status" -eq 0 ]
+  headers="$(printf '%s\n' "$output" | grep -c '^==> ')"
+  [ "$headers" -eq 10 ]
+  # notice line present with the correct dumped/total counts
+  [[ "$output" == *"(--full: dumped 10 of 12 matched records"* ]]
+}
+
+@test "--full under the cap prints no truncation notice" {
+  run bash -c "bash '$SCRIPT' --kind decision --full"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"--full: dumped"* ]]
+}
+
+# PLUGIN ADAPTATION: --limit defaults to uncapped here, so FULL_CAP is the ONLY
+# bound on a default --full query — upstream's default --limit 20 would cap the
+# match list first. Guards that pairing on the keyword path.
+@test "--full caps the dump at 10 under the plugin's uncapped default --limit" {
+  _seed_many_matches_fixture
+  run bash -c "bash '$SCRIPT' --keyword manyresultkw --full"
+  [ "$status" -eq 0 ]
+  local headers
+  headers="$(printf '%s\n' "$output" | grep -c '^==> ')"
+  [ "$headers" -eq 10 ]
+  [[ "$output" == *"(--full: dumped 10 of 25 matched records"* ]]
+}
+
+# Regression guard: a small explicit --limit (below FULL_CAP) must dump
+# exactly that many records and print NO truncation notice — the notice must
+# compare against the LIMITED match set, not the pre-limit total.
+@test "--limit 3 --full dumps exactly 3 records and prints no truncation notice" {
+  _seed_many_matches_fixture
+  run bash -c "bash '$SCRIPT' --keyword manyresultkw --limit 3 --full"
+  [ "$status" -eq 0 ]
+  local headers
+  headers="$(printf '%s\n' "$output" | grep -c '^==> ')"
+  [ "$headers" -eq 3 ]
+  [[ "$output" != *"--full: dumped"* ]]
+}
+
+# ---- record-scan.awk direct edge cases ----
+
+@test "record-scan.awk glosses a file with no frontmatter from its first line" {
+  AWK_LIB="$BATS_TEST_DIRNAME/../../scripts/lib/record-scan.awk"
+  NOFM="$FIX/no-frontmatter.md"
+  cat > "$NOFM" <<'EOF'
+Just a plain first line as gloss.
+
+More content below, should not appear in the gloss.
+EOF
+  run bash -c "awk -v qkind='' -v qid='' -v qlinks='' -f '$AWK_LIB' '$NOFM'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Just a plain first line as gloss."* ]]
+}
+
+@test "record-scan.awk --links-to matches an id written with quotes in the links map" {
+  AWK_LIB="$BATS_TEST_DIRNAME/../../scripts/lib/record-scan.awk"
+  QUOTED="$FIX/quoted-links.md"
+  cat > "$QUOTED" <<'EOF'
+---
+id: sol.quoted-linker
+kind: solution
+date: 2026-06-12
+keywords: [quotedlink]
+links: { decisions: ["dec.quoted-target"] }
+status: active
+---
+# Quoted links record
+
+Body of the quoted links record.
+EOF
+  run bash -c "awk -v qkind='' -v qid='' -v qlinks='dec.quoted-target' -f '$AWK_LIB' '$QUOTED'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$QUOTED"* ]]
+}
+
+@test "record-scan.awk --links-to does not match a record whose links map is empty" {
+  AWK_LIB="$BATS_TEST_DIRNAME/../../scripts/lib/record-scan.awk"
+  # the fixture decision record carries links: {} — must not match any --links-to query.
+  run bash -c "awk -v qkind='' -v qid='' -v qlinks='dec.quoted-target' -f '$AWK_LIB' '$FIX/references/decisions/sample-decision.md'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# ---- regression guard: --kind parity across a multi-kind fixture ----
+
+@test "--kind over a fixture of >=3 kinds returns exactly the matching files" {
+  # fixture has 4 kinds: decision, solution, procedure, principle.
+  run bash -c "bash '$SCRIPT' --kind solution"
+  [ "$status" -eq 0 ]
+  lines="$(printf '%s\n' "$output" | grep -c .)"
+  [ "$lines" -eq 1 ]
+  [[ "$output" == *"references/solutions/sample-solution.md"* ]]
+  [[ "$output" != *"sample-decision.md"* ]]
+  [[ "$output" != *"PROCEDURE.md"* ]]
+  [[ "$output" != *"sample-principle.md"* ]]
+}
+
+# ---- regression guard: 0-byte record files are silently skipped, not errors ----
+
+@test "a 0-byte .md file inside a store is silently skipped by a structural query" {
+  : > "$FIX/references/decisions/empty-record.md"
+  run bash -c "bash '$SCRIPT' --kind decision"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sample-decision.md"* ]]
+  [[ "$output" != *"empty-record.md"* ]]
 }

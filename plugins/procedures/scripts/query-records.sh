@@ -18,6 +18,17 @@
 #   --links-to <id>    records whose `links:` value references <id>.
 #   --limit <N>        cap the total result count (env QUERY_RECORDS_LIMIT).
 #                      0/absent = all matches (the default).
+#   --full             after the match list, print the FULL CONTENT of every
+#                      matched record, separated by `==> path <==` headers —
+#                      one call returns everything a reader needs (frontmatter
+#                      incl. status/enforced_by, body, all sections), instead
+#                      of forcing a follow-up read per file. Dumped records are
+#                      capped at FULL_CAP (10), regardless of --limit; beyond
+#                      that, a `(--full: dumped N of M matched records — ...)`
+#                      notice line is printed instead of silently truncating.
+#                      Piping --full to a truncating consumer (head/less-q) may
+#                      print a benign `xargs: awk: terminated by signal 13` on
+#                      stderr (SIGPIPE); stdout is unaffected.
 #   --rel-ratio <X>    matcher's relative floor, within a kind bucket a
 #                      candidate scoring < X * (bucket top score) is dropped
 #                      (env QUERY_RECORDS_REL_RATIO). 0 disables this
@@ -40,6 +51,7 @@
 #   scripts/query-records.sh --id dec.2026-06-12-skill-is-invokable-procedure
 #   scripts/query-records.sh --links-to fm.unverified-claim-acted-on
 #   scripts/query-records.sh --kind solution --keyword autonomy   # AND
+#   scripts/query-records.sh --keyword gitflow --full --limit 5
 
 set -uo pipefail
 
@@ -62,8 +74,10 @@ ALL_STORES=("${STORES[@]}")
 
 # PLUGIN ADAPTATION: owner call — a query returns ALL matches by default;
 # truncation and ranking floors are opt-in knobs, because the scout needs the
-# full match set. LIMIT=0 means uncapped (total-result cap, applied below).
+# full match set. LIMIT=0 means uncapped (total-result cap, applied below);
+# upstream defaults to 20 and passes it to the matcher as a per-kind cap.
 LIMIT="${QUERY_RECORDS_LIMIT:-0}"
+FULL_CAP=10
 REL_RATIO="${QUERY_RECORDS_REL_RATIO:-}"
 K_FLOOR="${QUERY_RECORDS_K_FLOOR:-}"
 
@@ -72,6 +86,7 @@ Q_KEYWORD=""
 Q_KIND=""
 Q_ID=""
 Q_LINKS_TO=""
+Q_FULL=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --keyword)   Q_KEYWORD="${2:-}"; shift 2 ;;
@@ -79,11 +94,13 @@ while [ "$#" -gt 0 ]; do
         --id)        Q_ID="${2:-}"; shift 2 ;;
         --links-to)  Q_LINKS_TO="${2:-}"; shift 2 ;;
         --limit)     LIMIT="${2:-0}"; shift 2 ;;
+        --full)      Q_FULL=1; shift ;;
         --rel-ratio) REL_RATIO="${2:-}"; shift 2 ;;
         --k-floor)   K_FLOOR="${2:-}"; shift 2 ;;
         *) echo "query-records: unknown flag: $1" >&2; exit 2 ;;
     esac
 done
+case "$LIMIT" in ''|*[!0-9]*) echo "query-records: --limit needs a non-negative integer (0 = uncapped)" >&2; exit 2 ;; esac
 
 if [ -z "$Q_KEYWORD" ] && [ -z "$Q_KIND" ] && [ -z "$Q_ID" ] && [ -z "$Q_LINKS_TO" ]; then
     echo "query-records: need at least one of --keyword/--kind/--id/--links-to" >&2
@@ -97,73 +114,43 @@ ALL_FILES="$(for d in "${ALL_STORES[@]}"; do
 done | sort)"
 [ -z "$ALL_FILES" ] && exit 0
 
-# Extract the frontmatter `<key>:` raw RHS value from a file.
-fm_value() {
-    # $1 = file, $2 = key. Reads only the frontmatter block (between fences).
-    awk -v k="$2" '
-        NR==1 && $0!="---" { exit }
-        NR==1 { next }
-        /^---$/ { exit }
-        $0 ~ "^"k":" { sub("^"k":[[:space:]]*",""); print; exit }
-    ' "$1"
+# ---- structural filters (kind / id / links-to): ONE awk pass over the corpus
+# record-scan.awk parses each file's frontmatter + gloss and applies the
+# filters in-process — replaces the previous per-file fork loop (~2 forks per
+# file per queried key, ~2-5s over the live corpus; now one process, <0.5s).
+# Emits `path \t gloss` for every passing file.
+# PLUGIN ADAPTATION: fail loud, not silently-empty — plugin runs on arbitrary
+# hosts whose awk may lack nextfile.
+if ! SCANNED="$(printf '%s\n' "$ALL_FILES" | tr '\n' '\0' \
+    | xargs -0 awk -v qkind="$Q_KIND" -v qid="$Q_ID" -v qlinks="$Q_LINKS_TO" \
+        -f "$LIB_DIR/record-scan.awk")"; then
+    echo "query-records: record scan failed (awk unusable or lib missing) — NOT 'no matches'" >&2
+    exit 3
+fi
+[ -z "$SCANNED" ] && exit 0
+NARROWED="$(printf '%s\n' "$SCANNED" | cut -f1)"
+
+# print_full <paths on stdin> — dump each record in full with a path header.
+print_full() {
+    tr '\n' '\0' | xargs -0 awk '
+        FNR==1 { printf "\n==> %s <==\n", FILENAME }
+        { print }
+    '
 }
 
-# Gloss extraction reused for the structural-filter output path. Same shape as
-# the matcher: first body heading, else first non-empty body line.
-gloss_of() {
-    awk '
-        NR==1 && $0=="---" { infm=1; next }
-        infm==1 && $0=="---" { infm=0; next }
-        infm==1 { next }
-        glossset==1 { next }
-        /^#+[[:space:]]/ { g=$0; sub(/^#+[[:space:]]*/,"",g); print g; glossset=1; exit }
-        /[^[:space:]]/ { print; glossset=1; exit }
-    ' "$1" | awk '{ gsub(/[[:space:]]+/," "); sub(/^ /,""); sub(/ $/,"");
-                    if (length($0)>90) $0=substr($0,1,87) "...";
-                    if ($0=="") $0="(record)"; print }'
+# print_full_capped <paths on stdin> — dump at most FULL_CAP records via
+# print_full; if more paths were matched, append one truncation notice
+# instead of silently dumping the rest (context-bomb guard).
+print_full_capped() {
+    local paths total
+    paths="$(cat)"
+    total="$(printf '%s\n' "$paths" | grep -c .)"
+    printf '%s\n' "$paths" | head -n "$FULL_CAP" | print_full
+    if [ "$total" -gt "$FULL_CAP" ]; then
+        printf '(--full: dumped %d of %d matched records — narrow the query, or batch-read the rest with: awk '"'"'FNR==1{print "==> " FILENAME " <=="}1'"'"' <paths>)\n' \
+            "$FULL_CAP" "$total"
+    fi
 }
-
-# ---- apply the structural filters (kind / id / links-to) to narrow files ----
-# Each filter intersects the candidate set. --keyword is applied last via the
-# shared matcher (it needs the rarity pre-pass over the narrowed set).
-filter_structural() {
-    # reads file paths on stdin, prints the ones passing kind/id/links-to.
-    local f val
-    while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        if [ -n "$Q_KIND" ]; then
-            val="$(fm_value "$f" kind)"
-            val="${val%%[[:space:]]*}"
-            [ "$val" = "$Q_KIND" ] || continue
-        fi
-        if [ -n "$Q_ID" ]; then
-            val="$(fm_value "$f" id)"
-            val="${val%%[[:space:]]*}"
-            [ "$val" = "$Q_ID" ] || continue
-        fi
-        if [ -n "$Q_LINKS_TO" ]; then
-            val="$(fm_value "$f" links)"
-            # strip braces/brackets and the sub-key names, split on separators,
-            # then look for an exact id token match.
-            local ids
-            ids="$(printf '%s' "$val" \
-                | tr -d '{}[]' \
-                | sed -E "s/(${STORES_BASENAME_ALT}):/ /g" \
-                | tr ',' ' ')"
-            local found=0 lid
-            for lid in $ids; do
-                lid="${lid//\"/}"; lid="${lid//\'/}"
-                [ -n "$lid" ] || continue
-                if [ "$lid" = "$Q_LINKS_TO" ]; then found=1; break; fi
-            done
-            [ "$found" -eq 1 ] || continue
-        fi
-        printf '%s\n' "$f"
-    done
-}
-
-NARROWED="$(printf '%s\n' "$ALL_FILES" | filter_structural)"
-[ -z "$NARROWED" ] && exit 0
 
 # ---- keyword path: hand the narrowed set to the SHARED matcher ----
 if [ -n "$Q_KEYWORD" ]; then
@@ -199,26 +186,30 @@ if [ -n "$Q_KEYWORD" ]; then
         -v rel_ratio="$REL_RATIO" \
         -v k_floor="$K_FLOOR" \
         -f "$LIB_DIR/record-match.awk")"
-    if [ "$LIMIT" -gt 0 ] 2>/dev/null; then
-        printf '%s\n' "$MATCH_OUT" | head -n "$LIMIT"
+    if [ "$LIMIT" -gt 0 ]; then
+        MATCHED="$(printf '%s\n' "$MATCH_OUT" | head -n "$LIMIT")"
     else
-        printf '%s\n' "$MATCH_OUT"
+        MATCHED="$MATCH_OUT"
+    fi
+    [ -z "$MATCHED" ] && exit 0
+    printf '%s\n' "$MATCHED"
+    if [ "$Q_FULL" -eq 1 ]; then
+        printf '%s\n' "$MATCHED" | sed 's/ — .*//' | print_full_capped
     fi
     exit 0
 fi
 
 # ---- no keyword: emit the structurally-narrowed records as path — gloss ----
-# PLUGIN ADAPTATION: owner call — all matches by default; the old hardcoded
-# early break at LIMIT=20 is gone. --limit/QUERY_RECORDS_LIMIT (0 = uncapped)
-# now caps the TOTAL result count, checked per emitted line below.
-n=0
-while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    if [ "$LIMIT" -gt 0 ] 2>/dev/null && [ "$n" -ge "$LIMIT" ]; then
-        break
-    fi
-    printf '%s — %s\n' "$f" "$(gloss_of "$f")"
-    n=$((n + 1))
-done <<< "$NARROWED"
+# PLUGIN ADAPTATION: owner call — all matches by default, so the cap is applied
+# only when LIMIT>0 (upstream always caps: `head -n "$LIMIT"` with LIMIT=20 by
+# default, where `head -n 0` would emit nothing).
+if [ "$LIMIT" -gt 0 ]; then
+    SCANNED="$(printf '%s\n' "$SCANNED" | head -n "$LIMIT")"
+fi
+MATCHED="$(printf '%s\n' "$SCANNED" | awk -F'\t' '{ printf "%s — %s\n", $1, $2 }')"
+printf '%s\n' "$MATCHED"
+if [ "$Q_FULL" -eq 1 ]; then
+    printf '%s\n' "$MATCHED" | sed 's/ — .*//' | print_full_capped
+fi
 
 exit 0
