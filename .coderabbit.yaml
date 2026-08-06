@@ -1,0 +1,52 @@
+# CodeRabbit config: review contributions against CONTRIBUTING.md.
+# Judgment layer only — the deterministic gate is `bats hooks/tests` (green
+# before merge). CodeRabbit is advisory; merging stays a manual owner action.
+# request_changes_workflow stays false to keep it advisory-by-construction:
+# this repo is public, branch protection IS available, and a request-changes
+# review would become a mechanical merge blocker the moment required-review
+# protection is enabled on main. Findings still land as review comments.
+# A real verdict gate, if ever wanted, is issue #6 (workflow-checked verdict).
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+
+  tone_instructions: >
+    Terse and specific. Cite file:line. No praise, no platitudes. Flag only what
+    fails a stated rule in CONTRIBUTING.md or a real bug.
+
+  path_instructions:
+    - path: "plugins/procedures/**"
+      instructions: >
+        This plugin is VENDORED from orchard-codex@develop-sweatshop (see
+        CONTRIBUTING.md "Vendoring rule"). Flag any divergence from upstream
+        that is not marked at the point of divergence: in *.sh/*.awk/*.bats
+        files the marker is a literal `# PLUGIN ADAPTATION: <why>` comment;
+        in *.md and *.json files (no comment syntax for this) the divergence
+        must instead match one of README.md's documented adaptation classes
+        (${CLAUDE_PLUGIN_ROOT}/${CLAUDE_SKILL_DIR} paths, data-root
+        defaults) — flag any .md/.json divergence outside those classes.
+        Also flag reformats, renames, and "while I'm here" edits, and any
+        new or changed hook/script behavior (including a marked adaptation)
+        with no bats test added in the SAME PR under hooks/tests/ or
+        scripts/tests/.
+
+    - path: "**/*.sh"
+      instructions: >
+        Flag ONLY on newly added or modified lines. Review for real bugs:
+        unquoted variable expansions that break on spaces/globs, missing
+        error handling where a command's failure is indistinguishable from a
+        legitimate empty result, fragile parsing of command output, and
+        fail-open paths that record nothing (ADR-001: hooks fail open AND
+        record blind fail-opens). No style nits, no rewrite suggestions for
+        working code.
+
+    - path: "**/*.md"
+      instructions: >
+        Markdown here is agent-facing machinery documentation — apply
+        docs/principles/agent-facing-docs.md. Flag: prose beyond what an
+        agent needs to act, change-narration ("no longer", "now supports",
+        "previously"), rationale/recap sections, and any generated knowledge
+        content (records, notes, personal data) — this repo ships machinery
+        only; knowledge lives on the host, never here (CONTRIBUTING.md
+        opening rule).
