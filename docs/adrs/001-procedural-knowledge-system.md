@@ -77,7 +77,9 @@ Design rules the gates follow:
   coarser and loses the skills too. A switched-off gate is a *fourth* release
   class: not blind, so it never enters `gate-failopen.jsonl`, but recorded in
   its own `gate-escape.jsonl` — an off-switch nobody can see is how a gate
-  stays off for months. See `hooks/lib/gate-escape.sh`.
+  stays off for months. Assumes Claude Code >= v2.1.207, where `pluginConfigs`
+  stopped being read from project-level settings — below that floor a cloned
+  repo can disarm the host's gates. See `hooks/lib/gate-escape.sh`.
 
 ## Records
 
