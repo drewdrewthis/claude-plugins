@@ -27,6 +27,13 @@ fm_key() {
   # no nullglob, "$SKILLS"/*/SKILL.md iterates once over the literal pattern
   # when the dir is wrong, every check falls through, and the test would
   # otherwise pass having verified nothing.
+  # Expected count is DERIVED from the corpus, not a hardcoded floor: a floor
+  # decays silently the moment a third fork skill is added and stops being
+  # checked. grep is the independent oracle; the next test anchors the pair of
+  # gate skills so a broken glob (which would zero both sides of this equality)
+  # still fails loudly.
+  local expected
+  expected=$(grep -l '^context: fork' "$SKILLS"/*/SKILL.md 2>/dev/null | wc -l)
   local checked=0
   for f in "$SKILLS"/*/SKILL.md; do
     [ "$(fm_key "$f" context)" = "fork" ] || continue
@@ -38,8 +45,8 @@ fm_key() {
     [ "$sm" = "$am" ] || { echo "$f pins '$sm' but agents/$a.md declares '$am'"; false; }
     checked=$((checked + 1))
   done
-  [ "$checked" -ge 2 ] \
-    || { echo "expected >=2 context:fork skills, checked $checked — glob or path is wrong"; false; }
+  [ "$checked" -eq "$expected" ] \
+    || { echo "corpus has $expected context:fork skills but the loop checked $checked"; false; }
 }
 
 @test "both gate skills are among the context:fork skills checked above" {
