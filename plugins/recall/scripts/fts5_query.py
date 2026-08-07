@@ -22,10 +22,11 @@ valid expression that searched for something other than what was asked. None
 raised. That is why the tests assert which documents come back from a real FTS5
 index (polarity), never merely the rendered string.
 
-`Fts5QueryError` is raised for exactly two inputs: a non-string, and a query
-whose parentheses do not balance. Everything else is repaired rather than
-refused, because a caller building a union programmatically emits dangling
-operators routinely and a refusal there would be noise.
+`Fts5QueryError` is raised for three inputs: a non-string, a query whose
+parentheses do not balance, and a NOT with no left operand. Everything else is
+repaired rather than refused, because a caller building a union
+programmatically emits dangling operators routinely and a refusal there would
+be noise.
 """
 
 import re
@@ -78,31 +79,47 @@ def _collapse_run(run):
 
 
 def _lex(query):
-    """Split on whitespace, then peel grouping parens off each token.
+    """Split into paren tokens and everything-between-parens-and-whitespace.
 
-    Peeling only at the edges is deliberate: `(finally)` is grouping, but
-    `foo(bar` is something a human typed and stays one quoted literal.
+    Lexing the WHOLE string rather than peeling parens off each whitespace
+    token is what makes grouping uniform. Peeling at token edges left two holes,
+    both found in review: an interior `)(` was never structure, so
+    `(a OR b)(c)` silently became the phrase `"b)(c"` and dropped a document;
+    and any trailing punctuation — `(a OR b).` — hid the `)`, turning a balanced
+    query into an unbalanced-parens refusal that blamed the user.
+
+    The trade, ratified deliberately: `foo(bar)` is now grouping rather than a
+    literal. A paren a human meant literally is no longer honoured anywhere,
+    which is the price of there being no positional exception to trip over.
     """
-    for raw in query.split():
-        while raw.startswith("("):
-            yield "("
-            raw = raw[1:]
-        trailing = 0
-        while raw.endswith(")"):
-            trailing += 1
-            raw = raw[:-1]
-        if raw == "NEAR":
+    for raw in re.findall(r"[()]|[^\s()]+", query):
+        if raw in ("(", ")"):
+            yield raw
+        elif raw == "NEAR":
             # FTS5 spells proximity NEAR(a b, N); a bare NEAR is not an infix
             # operator, and quoting it searches for the literal word — so
             # `running NEAR` returned 0 hits instead of every "running" doc.
             # Dropping it widens the result set, the safe direction for recall.
-            pass
+            continue
         elif raw in BINARY_OPS:
             yield raw
-        elif raw:
-            yield raw if PREFIX_TERM.match(raw) else _quote(raw)
-        for _ in range(trailing):
-            yield ")"
+        elif not re.search(r"\w", raw):
+            # ⚠ A token with nothing tokenizable in it — a stray `.`, `!`, `-`
+            # left by ordinary prose — must be DROPPED, not quoted. Quoting it
+            # yields an empty FTS5 phrase, and an empty phrase ANDed against
+            # real terms matches NOTHING: `kubernetes AND (postgres OR notes).`
+            # silently returned zero rows. Introduced by the whole-string lexer
+            # and caught before commit, same class as everything else here.
+            continue
+        else:
+            # ⚠ A prefix term whose STEM is syntax must stay quoted: `NOT*`
+            # matches PREFIX_TERM but is not in BINARY_OPS, so passing it
+            # through bare emitted `... AND NOT* AND ...` and FTS5 raised
+            # `syntax error near "NOT"` — a raw OperationalError escaping a
+            # module that documents only Fts5QueryError.
+            stem = raw[:-1]
+            bare = PREFIX_TERM.match(raw) and stem not in BINARY_OPS and stem != "NEAR"
+            yield raw if bare else _quote(raw)
 
 
 def _parse(tokens):
@@ -127,6 +144,20 @@ def _parse(tokens):
     return root
 
 
+def _refuse_leading_not(out, run):
+    """Refuse a NOT with no left operand, wherever it is stranded.
+
+    FTS5's NOT is binary. With nothing to subtract from, DROPPING it returns the
+    exact complement of what was asked — a silent inversion, the defect class
+    this module exists to end. Called at all three places a run can die: before
+    an operand, when an empty group eats the run, and at end of group.
+    """
+    if not out and "NOT" in run:
+        raise Fts5QueryError(
+            "NOT needs a left operand — FTS5 excludes with 'a NOT b'"
+        )
+
+
 def _normalise(items):
     """Drop what carries no meaning, and reduce each operator run to one token.
 
@@ -145,17 +176,14 @@ def _normalise(items):
             item = _normalise(item)
             if not item:
                 # `a AND ()` — the group contributed nothing, so the operator
-                # that would have joined it must go too.
+                # that would have joined it must go too. ⚠ Check for a stranded
+                # NOT FIRST: clearing the run here used to swallow it, so
+                # `NOT () kubernetes` silently returned the complement while
+                # `() NOT kubernetes` was correctly refused.
+                _refuse_leading_not(out, run)
                 run.clear()
                 continue
-        if not out and "NOT" in run:
-            # FTS5's NOT is binary. With no left operand there is nothing to
-            # subtract from, and DROPPING it would return the exact complement
-            # of what was asked — a silent inversion. Refuse instead. Checked
-            # per group, so `(NOT a) OR b` is caught too.
-            raise Fts5QueryError(
-                "a query cannot begin with NOT — FTS5 excludes with 'a NOT b'"
-            )
+        _refuse_leading_not(out, run)
         if out:
             if not run:
                 # Two operands with nothing between them: FTS5 reads adjacency
@@ -166,7 +194,10 @@ def _normalise(items):
                 out.append(_collapse_run(run))
         run.clear()
         out.append(item)
-    # A trailing run has no right operand; there is nothing to preserve.
+    # A trailing run has no right operand; there is nothing to preserve —
+    # except a NOT, which had no left operand either and so is a refusal, not a
+    # no-op. That is what makes a group of only `(NOT)` loud.
+    _refuse_leading_not(out, run)
     return out
 
 
@@ -185,9 +216,4 @@ def translate(query):
     """
     if not isinstance(query, str):
         raise Fts5QueryError("query must be a string, got %s" % type(query).__name__)
-    tree = _normalise(_parse(_lex(query)))
-    # A leading NOT cannot be honoured — FTS5's NOT is binary, so an expression
-    # opening on it is a syntax error, and dropping it would silently return the
-    # exact complement of what was asked. _normalise has already removed every
-    # dangling operator, so nothing reaches here needing repair.
-    return _render(tree)
+    return _render(_normalise(_parse(_lex(query))))
