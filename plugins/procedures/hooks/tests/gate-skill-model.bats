@@ -1,4 +1,8 @@
 #!/usr/bin/env bats
+# PLUGIN ADAPTATION: this suite has no upstream counterpart — it guards a
+# plugin-only divergence (the `model:` pin the gate SKILL.md files carry), so it
+# exists in this repo alone by construction.
+#
 # Tests that both gate skills pin their fork's model in SKILL.md frontmatter.
 #
 # A `context: fork` skill does NOT inherit the model from its `agent:`'s own
@@ -7,8 +11,10 @@
 # `model: sonnet` in agents/procedure-scout.md. The agent-side declaration is
 # only honoured on the Agent(subagent_type:) path.
 #
-# These assert the declaration is PRESENT. They cannot prove the harness
-# honours it — that needs a live dispatch, see the PR's verification section.
+# These assert the declaration is PRESENT. Proving the harness HONOURS it needs
+# a live dispatch; that was measured separately (an opus-parent fork moved to
+# claude-haiku-4-5 when the skill declared `model: haiku`, with the parent's own
+# turns staying on opus) and is recorded on the PR, not here.
 #
 # Run: bats hooks/tests/gate-skill-model.bats
 
@@ -48,6 +54,9 @@ frontmatter_key() {
 @test "the agent-side model declaration is still present (belt and braces)" {
   # Honoured on the Agent(subagent_type:) path even though the fork path ignores
   # it — removing it would break direct dispatch of these agents.
-  run bash -c "grep -c '^model: sonnet' '$BATS_TEST_DIRNAME/../../agents/procedure-scout.md' '$BATS_TEST_DIRNAME/../../agents/work-reviewer.md'"
-  [ "$status" -eq 0 ]
+  # Asserted per file: `grep -c pat f1 f2` exits 0 when EITHER file matches, so a
+  # single grep over both would pass with one agent's declaration deleted.
+  local agents="$BATS_TEST_DIRNAME/../../agents"
+  [ "$(frontmatter_key "$agents/procedure-scout.md" model)" = "sonnet" ]
+  [ "$(frontmatter_key "$agents/work-reviewer.md" model)" = "sonnet" ]
 }

@@ -4,6 +4,10 @@ description: "The gateway to everything the codex knows. Use when you (or the us
 user-invocable: true
 context: fork
 agent: procedure-scout
+# PLUGIN ADAPTATION: a context:fork skill inherits the PARENT SESSION's model,
+# not the model agents/procedure-scout.md declares. Without this pin the scout
+# runs at whatever tier the caller happens to be on. Upstream has no equivalent
+# because the gate does not run as a forked skill there.
 model: sonnet
 background: false
 argument-hint: "<what you're trying to do>"
