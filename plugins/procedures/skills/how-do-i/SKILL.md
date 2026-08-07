@@ -4,6 +4,7 @@ description: "The gateway to everything the codex knows. Use when you (or the us
 user-invocable: true
 context: fork
 agent: procedure-scout
+model: sonnet
 background: false
 argument-hint: "<what you're trying to do>"
 ---

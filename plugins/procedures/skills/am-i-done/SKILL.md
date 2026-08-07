@@ -4,6 +4,7 @@ description: "Get a cold read on finished work before calling it done. Write the
 user-invocable: true
 context: fork
 agent: work-reviewer
+model: sonnet
 background: false
 argument-hint: "<the am-i-done report>"
 ---
