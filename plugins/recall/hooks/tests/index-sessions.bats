@@ -74,6 +74,21 @@ with open('$SESSION_INDEX_PROJECTS/-home-me-proj/$1.jsonl', 'w') as f:
   [ -f "${ref/\$\{CLAUDE_PLUGIN_ROOT\}/$PLUGIN_ROOT}" ]
 }
 
+@test "every script path SKILL.md invokes resolves to a real file" {
+  # Same contract as the hook test above, applied to the skill: resolve the path
+  # OUT of the artifact rather than asserting one the test already knows. The
+  # script moved from ${CLAUDE_SKILL_DIR}/scripts to plugin root so the skill and
+  # the hook share one copy; nothing but this would catch a stale reference.
+  local ref found=0
+  while read -r ref; do
+    found=1
+    [ -f "${ref/\$\{CLAUDE_PLUGIN_ROOT\}/$PLUGIN_ROOT}" ]
+  done < <(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[^ "]+\.py' "$PLUGIN_ROOT/skills/recall/SKILL.md" | sort -u)
+  [ "$found" -eq 1 ]
+  # The old skill-relative form must not survive the move.
+  ! grep -q 'CLAUDE_SKILL_DIR' "$PLUGIN_ROOT/skills/recall/SKILL.md"
+}
+
 @test "hooks.json declares the hook for SessionEnd" {
   run python3 -c "
 import json
