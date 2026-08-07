@@ -61,6 +61,61 @@ assert_hits() {
   assert_hits "kubernetes OR OR postgres"   "a b c"
 }
 
+@test "a mixed operator run collapses to the narrowest, whatever the order" {
+  # The one adjacency the first round of tests missed: two DIFFERENT non-NOT
+  # operators next to each other. Taking run[0] made the answer depend on which
+  # the caller happened to emit first — `AND OR` gave c, `OR AND` gave a b c,
+  # for queries that mean the same thing. Narrowest wins, so both give c.
+  assert_hits "kubernetes AND OR postgres" "c"
+  assert_hits "kubernetes OR AND postgres" "c"
+  assert_hits "kubernetes OR AND NOT postgres" "a"
+  assert_hits "kubernetes NOT OR AND postgres" "a"
+}
+
+@test "parentheses group instead of being flattened into the expression" {
+  # BLOCKING defect, found by review. Quoting a paren the way a hyphen is quoted
+  # neutralises a GROUPING token: `"(postgres"` still tokenizes to `postgres`,
+  # so the term survives while the grouping evaporates. FTS5 precedence then
+  # re-associates `k AND (p OR n)` into `(k AND p) OR n`, which returned doc b —
+  # a document containing no term the caller asked for. Valid expression, no
+  # exception, wrong answer: exactly the class this module exists to end.
+  assert_hits "kubernetes AND (postgres OR notes)" "a c"
+  assert_hits "(kubernetes OR postgres) NOT migration" "a b"
+  assert_hits "(kubernetes)"                  "a c"
+  assert_hits "((kubernetes))"                "a c"
+  assert_hits "kubernetes AND (postgres)"     "c"
+}
+
+@test "unbalanced parentheses are refused, not guessed at" {
+  # Guessing where the missing paren goes IS re-association — the defect above
+  # wearing a different hat. There is no safe default, so refuse.
+  local q
+  for q in "kubernetes AND (postgres OR notes" "kubernetes) AND postgres" "((kubernetes)"; do
+    run python3 "$HARNESS" "$q"
+    [ "$status" -eq 2 ] || { echo "not refused: $q -> $output" >&2; return 1; }
+    [[ "$output" == *"unbalanced parentheses"* ]] || { echo "wrong error: $q -> $output" >&2; return 1; }
+  done
+}
+
+@test "an empty group takes its dangling operator with it" {
+  assert_hits "kubernetes AND ()" "a c"
+  assert_hits "() OR kubernetes"  "a c"
+  assert_hits "()"                "EMPTY"
+  # The discriminating shape: an empty group BETWEEN two operators. The
+  # operator that would have joined the group must go with it, or it survives
+  # to bind the two real operands and silently changes the answer — `AND`
+  # instead of `OR` here, which is doc c instead of docs a b c.
+  assert_hits "kubernetes AND () OR postgres" "a b c"
+}
+
+@test "a leading NOT is refused inside a group too" {
+  # Same inversion, one level down. _normalise checks per group, so this is
+  # caught rather than silently returning the complement within the group.
+  run python3 "$HARNESS" "(NOT postgres) OR kubernetes"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cannot begin with NOT"* ]]
+}
+
 @test "a dangling operator is dropped at either end" {
   assert_hits "kubernetes AND"     "a c"
   assert_hits "AND kubernetes"     "a c"
