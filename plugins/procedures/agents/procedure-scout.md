@@ -123,7 +123,7 @@ TRAPS:
 
 STANDING NOTES:
   - <any source that is draft / single-instance / contradicted elsewhere>
-  - <recall: N matched, 20 read>   # only when step 4's count exceeds what you read
+  - <recall: N matched, 20 read>   # even on a miss — emit when step 4's count exceeds what you read
 
 NOT FOUND: <what you searched for and did not find>
   -> improvise; draft the procedure once it works, via /create-new (kind: procedure)
@@ -131,10 +131,6 @@ NOT FOUND: <what you searched for and did not find>
 
 Omit any section that is empty. An empty `TRAPS` is worth stating once — it
 means nobody has recorded a failure here yet, which is itself information.
-The recall-coverage line is the one exception to "emit only the NOT FOUND
-section" on a miss: if step 4 truncated, say so even when nothing governs —
-an unreported truncation is exactly the silent drop the cap is allowed to make
-only because it is reported.
 
 # Boundaries
 
@@ -152,7 +148,6 @@ only because it is reported.
   `references/failure-modes/`, `references/decisions/`, `references/solutions/`,
   `references/procedures/`, `references/research/`, `references/principles/`,
   `plans/`, and `mistakes.jsonl`. (The first seven are what `query-records.sh`
-  searches — `${CLAUDE_PLUGIN_ROOT}/scripts/lib/stores.sh` is the SSOT if you
-  ever need to confirm.) This scopes what you READ, not where your tools live:
+  searches.) This scopes what you READ, not where your tools live:
   running `query-records.sh` is always in bounds. The wider repo, the working
   tree, and the web are not the answer surface.
