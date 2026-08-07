@@ -562,3 +562,104 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"references/decisions/quoted-kind-probe.md"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Silent-wrong-answer guards (#21).
+#
+# Both shapes below used to exit 0 with plausible output, so a caller could not
+# distinguish a bad query from a genuine miss. These tests fail on the parent
+# commit: pre-fix, the repeat case exited 0 with gitflow results and the
+# short-token case exited 0 with empty stdout.
+# ---------------------------------------------------------------------------
+
+@test "repeating --keyword is refused instead of silently keeping the last" {
+  run bash -c "bash '$SCRIPT' --keyword quokkadec --keyword fixpattern"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"more than once"* ]]
+  # The pre-fix bug: last flag won and the first vanished. Assert the dropped
+  # term's record is absent from output, so this fails if last-wins returns.
+  [[ "$output" != *"references/solutions/sample-solution.md"* ]]
+}
+
+@test "repeating a non-keyword flag is also refused" {
+  run bash -c "bash '$SCRIPT' --kind decision --kind solution"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"more than once"* ]]
+}
+
+@test "repeating --full is allowed (idempotent, takes no value)" {
+  run bash -c "bash '$SCRIPT' --keyword quokkadec --full --full"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/sample-decision.md"* ]]
+}
+
+@test "a keyword with no token above the floor exits non-zero, not a silent miss" {
+  run bash -c "bash '$SCRIPT' --keyword 'a b'"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"nothing to search"* ]]
+  [[ "$output" == *"NOT 'no matches'"* ]]
+}
+
+# PLUGIN ADAPTATION: the PULL path indexes 2-char tokens; upstream's 3-char
+# floor made `pr` (135 keyword slots in the live corpus), `ci` and `gh`
+# permanently unmatchable. These fail on the parent commit.
+
+@test "a 2-char keyword matches records carrying it (pr, ci, gh are searchable)" {
+  cat > "$FIX/references/decisions/short-token-probe.md" <<'EOF'
+---
+id: dec.short-token-probe
+kind: decision
+date: 2026-08-07
+keywords: [pr, review, gitflow]
+links: {}
+status: active
+---
+# Short token record
+
+Body of the short token record.
+EOF
+  run bash -c "bash '$SCRIPT' --keyword pr"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/short-token-probe.md"* ]]
+}
+
+@test "a 2-char token inside a hyphenated keyword is reachable" {
+  # `pr-review` tokenizes to {pr, review}; at the old 3-char floor the `pr`
+  # half was dropped from the record side, so --keyword pr could never hit it.
+  cat > "$FIX/references/procedures/sample/hyphen-probe.md" <<'EOF'
+---
+id: proc.sample.hyphen-probe
+kind: procedure
+date: 2026-08-07
+keywords: [pr-review, checklist]
+links: {}
+status: active
+---
+# Hyphenated keyword record
+
+Body of the hyphenated keyword record.
+EOF
+  run bash -c "bash '$SCRIPT' --keyword pr"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/procedures/sample/hyphen-probe.md"* ]]
+}
+
+@test "single-char tokens are still dropped (the floor is 2, not 0)" {
+  run bash -c "bash '$SCRIPT' --keyword 'a'"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"2+ characters"* ]]
+}
+
+@test "a genuine miss still exits 0 with empty stdout" {
+  # The other half of the pair — the fix must not turn real misses into errors.
+  run bash -c "bash '$SCRIPT' --keyword zzzznonexistentquux 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "multiple terms in ONE --keyword string still union" {
+  run bash -c "bash '$SCRIPT' --keyword 'quokkadec fixpattern'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/sample-decision.md"* ]]
+  [[ "$output" == *"references/solutions/sample-solution.md"* ]]
+}

@@ -10,9 +10,19 @@
 # Covers ALL SEVEN record stores (the original four plus research, plans,
 # principles).
 #
-# Flags (combine with AND logic — every condition must hold):
-#   --keyword <tok>    records whose frontmatter `keywords` contain the token
-#                      (same tokenization + shared matcher as the router).
+# Flags (combine with AND logic — every condition must hold). Each flag may be
+# given AT MOST ONCE; repeating one is a usage error (exit 2), not a silent
+# last-wins overwrite. To search several terms, put them in ONE --keyword
+# string — they are tokenized into a ranked OR union:
+#   --keyword "recall fts5 benchmark"        # one union query, correct
+#   --keyword recall --keyword benchmark     # exit 2, not "benchmark only"
+#   --keyword <toks>   records whose frontmatter `keywords` contain any token.
+#                      Tokens shorter than MIN_TOKEN_LEN (2) are dropped; if
+#                      that leaves nothing to search (e.g. --keyword "a b"),
+#                      the script exits 2 rather than returning an empty
+#                      result that reads as "searched, found nothing".
+#                      2-char terms ARE searchable here (`pr`, `ci`, `gh`) even
+#                      though the PUSH router ignores them as prompt noise.
 #   --kind <kind>      records whose frontmatter `kind:` equals <kind>.
 #   --id <id>          the record whose frontmatter `id:` equals <id> exactly.
 #   --links-to <id>    records whose `links:` value references <id>.
@@ -42,6 +52,13 @@
 #
 # Output: `path — gloss` lines (same shape as the router). All matches by
 # default; pass --limit to cap. No match: empty stdout, exit 0.
+#
+# Exit codes — a caller MUST be able to tell "searched, found nothing" from
+# "never searched", because both otherwise look like empty stdout:
+#   0  the query ran; empty stdout means a genuine miss
+#   2  usage error — unknown/repeated flag, bad --limit, no filter given, or a
+#      --keyword whose tokens were all dropped (nothing left to search)
+#   3  scan failed (awk unusable or lib missing) — NOT 'no matches'
 #
 # Pure bash/grep/awk; no network, no LLM.
 #
@@ -78,6 +95,14 @@ ALL_STORES=("${STORES[@]}")
 # upstream defaults to 20 and passes it to the matcher as a per-kind cap.
 LIMIT="${QUERY_RECORDS_LIMIT:-0}"
 FULL_CAP=10
+# PLUGIN ADAPTATION: the PULL path indexes 2-char keyword tokens; the PUSH
+# router keeps its 3-char floor. Same reasoning as gate=0 below — an explicit
+# --keyword is a term the caller chose, not prompt noise to be filtered. At 3,
+# `pr` (135 keyword slots in the live corpus), `ci` (29) and `gh` (16) were
+# unmatchable: `--keyword pr` could never reach pr-review or pr-ready-check.
+# Passed to record-match.awk AND record-rarity.awk — they must agree, or df/idf
+# is computed over a different token set than the one scored.
+MIN_TOKEN_LEN=2
 REL_RATIO="${QUERY_RECORDS_REL_RATIO:-}"
 K_FLOOR="${QUERY_RECORDS_K_FLOOR:-}"
 
@@ -87,16 +112,39 @@ Q_KIND=""
 Q_ID=""
 Q_LINKS_TO=""
 Q_FULL=0
+
+# PLUGIN ADAPTATION: upstream silently keeps the last occurrence of a repeated
+# flag. For a discovery tool a confident wrong answer is worse than an error, so
+# this copy refuses instead.
+# Repeating a value-taking flag used to silently keep the last occurrence, so
+# `--keyword recall --keyword gitflow` returned gitflow-only results at full
+# speed with no warning — a confidently wrong answer, which for a discovery
+# tool is worse than an error. SEEN_FLAGS records which flags have been
+# consumed so a repeat can be refused. --full is idempotent and exempt.
+SEEN_FLAGS=" "
+seen_once() {
+    case "$SEEN_FLAGS" in
+        *" $1 "*)
+            echo "query-records: $1 given more than once — each flag may appear at most once." >&2
+            if [ "$1" = "--keyword" ]; then
+                echo "query-records: to search several terms, put them in ONE string: --keyword \"term1 term2\" (ranked OR union)." >&2
+            fi
+            exit 2
+            ;;
+    esac
+    SEEN_FLAGS="$SEEN_FLAGS$1 "
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --keyword)   Q_KEYWORD="${2:-}"; shift 2 ;;
-        --kind)      Q_KIND="${2:-}"; shift 2 ;;
-        --id)        Q_ID="${2:-}"; shift 2 ;;
-        --links-to)  Q_LINKS_TO="${2:-}"; shift 2 ;;
-        --limit)     LIMIT="${2:-0}"; shift 2 ;;
+        --keyword)   seen_once "$1"; Q_KEYWORD="${2:-}"; shift 2 ;;
+        --kind)      seen_once "$1"; Q_KIND="${2:-}"; shift 2 ;;
+        --id)        seen_once "$1"; Q_ID="${2:-}"; shift 2 ;;
+        --links-to)  seen_once "$1"; Q_LINKS_TO="${2:-}"; shift 2 ;;
+        --limit)     seen_once "$1"; LIMIT="${2:-0}"; shift 2 ;;
         --full)      Q_FULL=1; shift ;;
-        --rel-ratio) REL_RATIO="${2:-}"; shift 2 ;;
-        --k-floor)   K_FLOOR="${2:-}"; shift 2 ;;
+        --rel-ratio) seen_once "$1"; REL_RATIO="${2:-}"; shift 2 ;;
+        --k-floor)   seen_once "$1"; K_FLOOR="${2:-}"; shift 2 ;;
         *) echo "query-records: unknown flag: $1" >&2; exit 2 ;;
     esac
 done
@@ -161,14 +209,23 @@ if [ -n "$Q_KEYWORD" ]; then
     printf '%s' "$Q_KEYWORD" \
         | tr '[:upper:]' '[:lower:]' \
         | tr -cs 'a-z0-9' '\n' \
-        | awk 'length($0) >= 3' \
+        | awk -v min="$MIN_TOKEN_LEN" 'length($0) >= min' \
         | sort -u > "$TOKEN_FILE"
     if [ ! -s "$TOKEN_FILE" ]; then
-        # keyword tokenized to nothing (e.g. all <3 chars) — no matches.
-        exit 0
+        # PLUGIN ADAPTATION: upstream exits 0 here, which a caller cannot tell
+        # apart from a genuine miss. This copy fails loud, matching the exit-3
+        # scan-error path already in this file.
+        # Every token fell under MIN_TOKEN_LEN, so no search ran at all. Exiting
+        # 0 here made that indistinguishable from a genuine miss — the caller
+        # concluded "the corpus has nothing" when nothing was ever queried.
+        # Real shapes that hit this: --keyword ci / pr / gh / db.
+        echo "query-records: --keyword \"$Q_KEYWORD\" has no token of $MIN_TOKEN_LEN+ characters — nothing to search." >&2
+        echo "query-records: this is NOT 'no matches'. Tokens shorter than $MIN_TOKEN_LEN characters are dropped; use a longer term." >&2
+        exit 2
     fi
     # IDF pre-pass over the narrowed set, shared lib (df + idf + corpus stats).
-    printf '%s\n' "$NARROWED" | awk -f "$LIB_DIR/record-rarity.awk" > "$IDF_FILE"
+    printf '%s\n' "$NARROWED" | awk -v min_tok="$MIN_TOKEN_LEN" \
+        -f "$LIB_DIR/record-rarity.awk" > "$IDF_FILE"
     # The PULL path is deliberately permissive: an explicit single-token query
     # (e.g. --keyword issue) must still surface that token's records even though
     # the PUSH gate would suppress a lone common token. So pass gate=0 to turn
@@ -185,6 +242,7 @@ if [ -n "$Q_KEYWORD" ]; then
         -v limit=0 \
         -v rel_ratio="$REL_RATIO" \
         -v k_floor="$K_FLOOR" \
+        -v min_tok="$MIN_TOKEN_LEN" \
         -f "$LIB_DIR/record-match.awk")"
     if [ "$LIMIT" -gt 0 ]; then
         MATCHED="$(printf '%s\n' "$MATCH_OUT" | head -n "$LIMIT")"

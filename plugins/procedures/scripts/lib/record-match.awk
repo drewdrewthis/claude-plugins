@@ -72,6 +72,10 @@ BEGIN {
     if (rel_ratio == "") rel_ratio = 0.3
     if (k_floor == "")   k_floor = 2
     if (alpha == "")     alpha = 0.1
+    # PLUGIN ADAPTATION: min_tok is settable so the PULL path (query-records.sh)
+    # can index 2-char keyword tokens that the PUSH router still ignores as
+    # prompt noise. Default 3 keeps every existing caller's behavior identical.
+    if (min_tok == "")   min_tok = 3
 
     # ---- load prompt token set ----
     while ((getline t < tokfile) > 0) {
@@ -166,7 +170,7 @@ BEGIN {
     dl = 0
     for (i = 1; i <= nt; i++) {
         tk = arr[i]
-        if (length(tk) < 3) continue
+        if (length(tk) < min_tok) continue
         if (tk in seen) continue
         seen[tk] = 1
         dl++                                  # record length = #distinct keywords
