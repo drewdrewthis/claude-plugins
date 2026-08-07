@@ -92,15 +92,25 @@ existing install keeps running the old copy.
 Do not edit those `version` fields by hand — a manual bump collides with the
 release PR.
 
-What you do instead: **write a conventional-commit subject**, since that is what
-picks the next version.
+What you do instead: **write a conventional-commit PR title.**
 
-| Prefix | Bump |
+The repo squashes with `squash_merge_commit_title=PR_TITLE`, so the **PR title
+becomes the commit subject on `main`** — and that subject is the only text
+release-please parses. Branch commit messages are collapsed into the body and
+never read. A branch of immaculate `feat:` commits under a PR titled
+`update stuff` releases nothing.
+
+`.github/workflows/pr-title.yml` enforces this on every PR.
+
+| PR title prefix | Bump |
 | --- | --- |
 | `fix:` / `perf:` | patch |
 | `feat:` | minor |
-| any type with `!` (e.g. `feat(procedures)!:`) or a `BREAKING CHANGE:` footer | major |
-| `chore:` / `docs:` / `test:` | none — **ships nothing to installed boxes** |
+| any type with `!` (e.g. `feat(procedures)!:`) | major |
+| `chore:` / `docs:` / `test:` / `ci:` / `build:` | none — **ships nothing to installed boxes** |
+
+⚠ A `BREAKING CHANGE:` footer in a *branch commit* does not survive the squash.
+Put `!` in the PR title — it is the only reliable major-bump signal here.
 
 Scope by plugin (`fix(procedures): …`) so the release lands on the right one;
 each plugin versions and tags independently as `<plugin>-v<version>`.

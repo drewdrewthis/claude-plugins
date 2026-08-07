@@ -1,0 +1,51 @@
+name: pr-title
+
+# The repo squashes with squash_merge_commit_title=PR_TITLE, so THIS TITLE
+# becomes the commit subject on main — and that subject is the only thing
+# release-please parses to decide the next version. A non-conventional title
+# therefore ships nothing to installed boxes, silently.
+#
+# `pull_request`, deliberately NOT `pull_request_target`: the latter loads the
+# workflow from the BASE branch, so a change to this guard could never be tested
+# by its own PR. This way the guard grades itself before it lands.
+#
+# `edited` is load-bearing — without it a title fixed after a red check never
+# re-runs, and the stale failure blocks the PR forever.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Kept identical to release-please-config.json's changelog-sections,
+          # plus the three that legitimately release nothing. If these two lists
+          # disagree, a title can pass here and still produce no release.
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            docs
+            test
+            chore
+            ci
+            build
+            revert
+          requireScope: false
+          # release-please reads the squashed SUBJECT; a body-only
+          # "BREAKING CHANGE:" footer from a branch commit is discarded by the
+          # squash, so `!` in the title is the only reliable major-bump signal.
+          validateSingleCommit: false
