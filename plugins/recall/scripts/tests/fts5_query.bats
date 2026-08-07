@@ -86,6 +86,57 @@ assert_hits() {
   assert_hits "kubernetes AND (postgres)"     "c"
 }
 
+@test "parens are structural wherever they sit, not only at token edges" {
+  # Round-five defects, both from peeling parens off each whitespace token
+  # instead of lexing the whole string.
+  #
+  # An interior `)(` was never structure, so the group boundary MOVED: the
+  # expression became the phrase `"postgres)(notes"` and doc b vanished.
+  assert_hits "(kubernetes OR postgres)(notes)"  "a b c"
+  assert_hits "(kubernetes OR postgres) (notes)" "a b c"
+  # A `)` followed by ordinary punctuation was hidden, turning a BALANCED query
+  # into an unbalanced-parens refusal that blamed the user's parentheses.
+  assert_hits "kubernetes AND (postgres OR notes)." "a c"
+  assert_hits "notes (kubernetes OR postgres)!"    "a b c"
+}
+
+@test "a token with nothing tokenizable in it is dropped, not quoted" {
+  # Quoting such a token yields an EMPTY FTS5 phrase, and an empty phrase ANDed
+  # against real terms matches nothing — so a trailing period silently emptied
+  # the whole result set. Introduced by the whole-string lexer above; this row
+  # is what caught it.
+  assert_hits "kubernetes ."     "a c"
+  assert_hits "kubernetes AND ." "a c"
+  assert_hits "..."              "EMPTY"
+  assert_hits "- ! ."            "EMPTY"
+}
+
+@test "an operator-shaped prefix term is quoted, never emitted as syntax" {
+  # `NOT*` matches the prefix-term pattern but is NOT in BINARY_OPS, so it was
+  # emitted bare: `"the" AND NOT* AND "pass"`, and FTS5 raised `syntax error
+  # near "NOT"` — a raw OperationalError escaping a module that documents only
+  # Fts5QueryError. A detonation prints ERROR and exits 3, so a document-set
+  # assertion discriminates it from an honest empty result.
+  assert_hits "the NOT* pass"  "NONE"
+  assert_hits "the AND* pass"  "NONE"
+  assert_hits "the OR* pass"   "NONE"
+  assert_hits "the NEAR* pass" "NONE"
+  # The ordinary prefix term must still survive — the fix must not over-quote.
+  assert_hits "kuber*" "a c"
+}
+
+@test "a NOT stranded by an empty group is refused, not swallowed" {
+  # `() NOT kubernetes` was correctly refused while `NOT () kubernetes` was
+  # not: clearing the operator run for the empty group ate the NOT before the
+  # guard could see it, and the query silently returned the complement.
+  local q
+  for q in "NOT () kubernetes" "(NOT) kubernetes" "NOT (()) kubernetes" "() NOT kubernetes"; do
+    run python3 "$HARNESS" "$q"
+    [ "$status" -eq 2 ] || { echo "not refused: $q -> $output" >&2; return 1; }
+    [[ "$output" == *"NOT needs a left operand"* ]] || { echo "wrong error: $q -> $output" >&2; return 1; }
+  done
+}
+
 @test "unbalanced parentheses are refused, not guessed at" {
   # Guessing where the missing paren goes IS re-association — the defect above
   # wearing a different hat. There is no safe default, so refuse.
@@ -113,7 +164,7 @@ assert_hits() {
   # caught rather than silently returning the complement within the group.
   run python3 "$HARNESS" "(NOT postgres) OR kubernetes"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"cannot begin with NOT"* ]]
+  [[ "$output" == *"NOT needs a left operand"* ]]
 }
 
 @test "a dangling operator is dropped at either end" {
@@ -123,13 +174,13 @@ assert_hits() {
   assert_hits "kubernetes AND NOT" "a c"
 }
 
-@test "a leading NOT is refused, never silently inverted" {
+@test "a NOT with no left operand is refused, never silently inverted" {
   # FTS5's NOT is binary. Dropping a leading NOT returns the exact complement
   # of what was asked, so refusing loudly is the only honest option.
   run python3 "$HARNESS" "NOT postgres"
   [ "$status" -eq 2 ]
   [[ "$output" == ERROR:* ]]
-  [[ "$output" == *"cannot begin with NOT"* ]]
+  [[ "$output" == *"NOT needs a left operand"* ]]
 }
 
 # --- the tokens FTS5 treats as syntax ---------------------------------------
@@ -171,8 +222,10 @@ assert_hits() {
   # the polarity rows above: this one asserts nothing DETONATES, so a future
   # token added to the translator cannot regress into a syntax error unseen.
   local a b
-  for a in kubernetes kuber\* AND OR NOT NEAR rate-limiter '"x' '(y)' 'z:1' '^q'; do
-    for b in kubernetes kuber\* AND OR NOT NEAR rate-limiter '"x' '(y)' 'z:1' '^q'; do
+  local alphabet=(kubernetes 'kuber*' AND OR NOT NEAR rate-limiter '"x' '(y)' 'z:1' '^q' \
+                  'NOT*' 'AND*' 'OR*' 'NEAR*' ')(' '(' ')' '.' '-')
+  for a in "${alphabet[@]}"; do
+    for b in "${alphabet[@]}"; do
       run python3 "$HARNESS" "$a $b"
       [ "$status" -ne 3 ] || {
         echo "FTS5 rejected the expression from: $a $b" >&2
