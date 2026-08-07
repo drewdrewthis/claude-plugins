@@ -121,6 +121,27 @@ carry-over) + a SessionStart hook loading today's (or yesterday's) note and
 `ABOUT_MY_PERSON.md` when present. Config: `KNOWLEDGE_WS` (default
 `~/workspace`) or `NOTES_DIR` directly.
 
+### recall (0.1.0)
+
+`/recall <topic>` — searches your past Claude Code conversations and
+synthesizes them into the current session (what it is, what was decided, where
+it stands, what's open). Runs in a fork, so reading transcripts never lands in
+the main context. Ships the indexer it depends on: `scripts/session-index.py`
+(incremental SQLite FTS5 index over the session transcripts) plus a `SessionEnd`
+hook that refreshes it between sessions. Config: `CLAUDE_CONFIG_DIR` (default
+`~/.claude`) or `SESSION_INDEX_DB` / `SESSION_INDEX_PROJECTS` to override either
+path directly.
+
+Vendored from the codex's `scripts/session-index.py` + `hooks/index-sessions.sh`,
+with the two standard adaptation classes and one further fix, all marked
+`PLUGIN ADAPTATION`: upstream decoded project directory names with a hardcoded
+literal for one operator's home path, which also mis-rendered hidden directories
+(`~/.claude` rendered as `/home/<user>//claude`). Tests:
+
+```
+cd plugins/recall && bats scripts/tests hooks/tests
+```
+
 ## docs/
 
 `docs/adrs/001-procedural-knowledge-system.md` — the design rationale behind
