@@ -15,6 +15,23 @@
 
 set -uo pipefail
 
+# Resolved WITHOUT the external `dirname`: this now runs before the jq check,
+# and that path is exercised with PATH emptied entirely
+# (enforce-frontmatter.bats "jq-less PATH"). `${x%/*}` is parameter expansion
+# and `cd`/`pwd` are builtins, so nothing here needs PATH — same shape as the
+# two gates.
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
+SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
+
+# PLUGIN ADAPTATION: this check's own off-switch — userConfig
+# `enable_frontmatter_check`, on by default. See lib/gate-escape.sh. First
+# thing after the shell options, as in the two gates; an unreadable lib leaves
+# the check ARMED.
+# shellcheck source=lib/gate-escape.sh
+. "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
+if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "FRONTMATTER_CHECK"; then exit 0; fi
+
 command -v jq >/dev/null 2>&1 || exit 0
 INPUT="$(cat 2>/dev/null || true)"
 
@@ -26,7 +43,6 @@ ROOT="${KNOWLEDGE_ROOT:-${CODEX_ROOT:-$HOME/.claude}}"
 case "$FILE" in "$ROOT"/*) ;; *) exit 0 ;; esac
 REL="${FILE#"$ROOT"/}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || exit 0
 LINTER="$SCRIPT_DIR/../scripts/lint-frontmatter.sh"
 [ -x "$LINTER" ] || exit 0
 

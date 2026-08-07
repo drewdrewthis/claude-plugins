@@ -25,7 +25,9 @@ real outcomes — and each of those needs a mechanism, not a convention.
   skills are not demotable to procedure docs — the handle is the point.
 - **A hook is deterministic enforcement.** Anything that must *always*
   happen (gates, frontmatter schema) is a script wired to a lifecycle event,
-  never a request in prose.
+  never a request in prose. Deterministic, not unconditional: each gate
+  carries an owner-set off-switch (below), on by default and recorded when
+  used.
 
 ## Per-turn invariant gates
 
@@ -67,6 +69,15 @@ Design rules the gates follow:
   unwired reset hook — all release the gate. A gate that blocks on its own
   bug bricks the session. Every *blind* fail-open (as opposed to a legitimate
   release) is appended to a jsonl log so silent degradation is visible.
+- **Each gate has an owner-set off-switch, on by default.** A `userConfig`
+  boolean per gate (`enable_how_do_i_gate`, `enable_am_i_done_gate`,
+  `enable_frontmatter_check`), read by that gate alone — no wildcard, no
+  parsed spec, no central list of the switches. Installed as a plugin, the
+  only other way to silence a gate is uninstalling the plugin, which is
+  coarser and loses the skills too. A switched-off gate is a *fourth* release
+  class: not blind, so it never enters `gate-failopen.jsonl`, but recorded in
+  its own `gate-escape.jsonl` — an off-switch nobody can see is how a gate
+  stays off for months. See `hooks/lib/gate-escape.sh`.
 
 ## Records
 

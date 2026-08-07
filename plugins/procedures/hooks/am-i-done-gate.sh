@@ -33,6 +33,14 @@ INPUT="$(cat 2>/dev/null || true)"
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
+
+# PLUGIN ADAPTATION: this gate's own off-switch — userConfig
+# `enable_am_i_done_gate`, on by default. See lib/gate-escape.sh. Top level with
+# its own condition; an unreadable lib leaves the gate ARMED.
+# shellcheck source=lib/gate-escape.sh
+. "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
+if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "AM_I_DONE_GATE"; then exit 0; fi
+
 # gate_failopen <gate> <why> [session_id] — hooks/lib/gate-failopen.sh
 # (orchard-codex#210 AC-4). Sourced FIRST, before the jq check, so every
 # degenerate path below can reach it. If THIS is unreadable we cannot record

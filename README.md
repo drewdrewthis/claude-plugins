@@ -19,7 +19,7 @@ design record.
 
 ## Plugins
 
-### procedures (0.1.0)
+### procedures (0.3.0)
 
 The procedural-knowledge system, gates included (gate hooks vendored from
 orchard-codex `develop-sweatshop`):
@@ -32,10 +32,10 @@ orchard-codex `develop-sweatshop`):
 | record stores | ten, one per GRC artifact class: `failure-modes` (risk register), `decisions` (governance choices), `solutions` (control patterns), `procedures` (control implementations), `research` (evidence), `plans` (roadmap), `principles` (judgment rules), `invariants` (absolute constraints), `policies` (standing authority), `standards` (control objectives). Defined once in `scripts/lib/stores.sh`; discover at runtime with `query-records.sh --list-stores`, never by enumerating them in prose |
 | `/am-i-done` | cold-read review of an am-i-done report (incl. the "Procedures followed" evolution table) by the `work-reviewer` agent before calling work done |
 | `/evolve-procedure` | patch an EXISTING procedure from a correction, incident, or friction — deviation, missing step, or stale/broken ref; procedures only, every material patch appends a dated line to that procedure dir's `EVOLUTION.md` |
-| `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded |
-| `am-i-done-gate` (Stop) | requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once |
+| `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded; off-switch `enable_how_do_i_gate` |
+| `am-i-done-gate` (Stop) | requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once; off-switch `enable_am_i_done_gate` |
 | `turn-state-reset` (UserPromptSubmit) / `turn-state-record` (PostToolUse:Skill) | the turn-boundary state the gates read (`$TURN_STATE_DIR`, default `/tmp/claude-turn-state`) |
-| `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation |
+| `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation; off-switch `enable_frontmatter_check` |
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (`evolution.template.md` in `skills/update-records/templates/`) — one dated line per material change, newest first; `/update-records` explains it |
 
 The machinery is vendored from orchard-codex `develop-sweatshop` (skills,
@@ -131,6 +131,13 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   the bare and the scoped form alike, so either satisfies a gate. When the named
   skill file is not readable beside the hooks (`../skills/<name>/SKILL.md`) the
   gate releases instead of denying, recorded as `why:"skill-unresolvable"`.
+
+- **Configuration surface:** `hooks/lib/gate-escape.sh` and the `userConfig`
+  block in `.claude-plugin/plugin.json` have no upstream counterpart. In a
+  checkout you silence a gate by editing it; installed as a plugin you cannot,
+  and the only alternative is uninstalling the whole plugin. One boolean per
+  gate, on by default, read by that gate alone, and recorded to
+  `gate-escape.jsonl` when it releases.
 
 Host-neutral wording in place of codex-internal file/hook references is a
 further, prose-only adaptation class and is not individually marked.

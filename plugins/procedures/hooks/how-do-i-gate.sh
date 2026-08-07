@@ -29,6 +29,14 @@ INPUT="$(cat 2>/dev/null || true)"
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
+
+# PLUGIN ADAPTATION: this gate's own off-switch — userConfig
+# `enable_how_do_i_gate`, on by default. See lib/gate-escape.sh. Top level with
+# its own condition; an unreadable lib leaves the gate ARMED.
+# shellcheck source=lib/gate-escape.sh
+. "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
+if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "HOW_DO_I_GATE"; then exit 0; fi
+
 # gate_failopen <gate> <why> [session_id]. Sourced BEFORE the jq check below —
 # jq's absence is itself one of the paths this must record, so the recorder
 # has to be reachable before that check runs. If gate-failopen.sh itself is
