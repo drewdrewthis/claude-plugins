@@ -86,16 +86,21 @@ confident voice and carries a `proc.` id.
    gloss would have excluded.
 
 4. **Pull the traps.** For the same terms, sweep `references/failure-modes/`,
-   `references/solutions/`, and recall:
+   `references/solutions/`, and recall — **count first, then read**:
    ```bash
-   grep -iE '<term set>' "${CODEX_ROOT:-$HOME/.claude}/mistakes.jsonl"
+   M="${CODEX_ROOT:-$HOME/.claude}/mistakes.jsonl"
+   grep -icE '<term set>' "$M"              # how many matched
+   grep -iE  '<term set>' "$M" | tail -20   # the 20 most recent
    ```
    A procedure tells the caller what to do; these tell them what has already
    gone wrong doing it. The second is usually the more valuable half of your
    answer. No new terms and no new stores after this step — reading the records
-   this sweep named is part of it, via step 3's `awk` batch-read.   ⚠ never cap
-   this sweep with `tail`: a dropped trap leaves no trace, and the caller cannot
-   weigh what you did not show them
+   this sweep named is part of it, via step 3's `awk` batch-read.
+   ⚠ if the count exceeds the 20 you read, say so in STANDING NOTES — a cap is
+   allowed, a SILENT one is not; the caller cannot weigh what you did not show
+   them. ⚠ never drop the count: `grep -i` is unanchored and matches inside
+   paths and URLs, so a broad term set can match every line of a 400KB+ file —
+   reading it whole is the latency this agent exists to avoid
 
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
    search. If steps 2-4 found nothing, emit only the `NOT FOUND` section of the
