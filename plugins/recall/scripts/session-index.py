@@ -18,6 +18,7 @@ import os
 import sqlite3
 import sys
 import time
+from urllib.request import pathname2url
 
 # The FTS5 query translator is its own unit with its own table-driven tests; it
 # was extracted after four consecutive fix rounds here each shipped a new
@@ -73,7 +74,14 @@ def open_for_read():
         raise IndexError_(
             "no index yet — run `session-index.py build` first"
         )
-    db = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True, timeout=60)
+    # ⚠ Percent-encode the path. SQLite parses a URI filename, so a `#` in the
+    # path terminates it and makes everything after — INCLUDING `?mode=ro` — a
+    # fragment: the read-only flag was silently dropped and a DIFFERENT,
+    # non-existent file was opened and CREATED, world-readable, by a read. The
+    # os.path.exists() guard above and this open then disagreed about which
+    # file they meant.
+    uri = "file:%s?mode=ro" % pathname2url(os.path.abspath(DB_PATH))
+    db = sqlite3.connect(uri, uri=True, timeout=60)
     db.row_factory = sqlite3.Row
     if _schema_version(db) != SCHEMA_VERSION:
         raise IndexError_(
@@ -96,7 +104,9 @@ def _ensure_wal(db):
     steady-state path a read that cannot contend. Only the genuine first set
     can lose, and there a retry-then-shrug is right: WAL is a performance
     property, not a correctness one, and whichever process wins sets it for
-    everyone.
+    everyone. Crucially this re-runs on EVERY open, so a lost first-set is
+    retried on the next build and self-heals — without that, "gives up
+    silently" would read as "WAL may never be set" and invite a hard error.
     """
     if (db.execute("PRAGMA journal_mode").fetchone()[0] or "").lower() == "wal":
         return
@@ -118,12 +128,13 @@ def _migrate(db):
     transcripts, so the correct migration is to discard it rather than carry a
     ladder of ALTERs.
 
-    ⚠ SQLite returns SQLITE_BUSY IMMEDIATELY for a schema change — the busy
-    timeout is not consulted — so two SessionEnd hooks racing a version bump
-    would leave one dead with "database is locked" ~4 times in 5. BEGIN
-    IMMEDIATE takes the write lock through the path that DOES honour the
-    timeout, and the re-read inside the lock makes the loser a no-op rather
-    than a second destructive drop.
+    ⚠ BEGIN IMMEDIATE is load-bearing, but not for the reason a DROP suggests.
+    A DROP is an ordinary write and DOES consult the busy handler. The hazard
+    is the read-then-write shape: this reads PRAGMA user_version and then
+    writes, and under a DEFERRED transaction that read-lock -> write-lock
+    UPGRADE returns SQLITE_BUSY without invoking the busy handler at all.
+    Taking the write lock up front skips the upgrade. The re-read inside the
+    lock then makes the loser a no-op rather than a second destructive drop.
     """
     if _schema_version(db) == SCHEMA_VERSION:
         return
@@ -146,14 +157,16 @@ def get_db():
     # A build holds one write transaction for the whole pass; the default 5s
     # busy timeout expires when two SessionEnd hooks fire at once, killing the
     # loser with "database is locked".
-    db = sqlite3.connect(DB_PATH, timeout=60)
     if fresh:
         # The index aggregates every prompt typed on this host into one file —
-        # a higher-value target than the transcripts it is built from.
+        # a higher-value target than the transcripts it is built from. Created
+        # 0600 BEFORE sqlite opens it: a chmod afterwards leaves a readable
+        # window, which is the exact reasoning the failure log already applied.
         try:
-            os.chmod(DB_PATH, 0o600)
+            os.close(os.open(DB_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
         except OSError:
             pass
+    db = sqlite3.connect(DB_PATH, timeout=60)
     db.row_factory = sqlite3.Row
     _ensure_wal(db)
     _migrate(db)
@@ -293,6 +306,10 @@ def build_index():
             mtime, size = stat.st_mtime, stat.st_size
         except OSError:
             failed += 1
+            # ⚠ Still count it as present. Omitting it from on_disk makes the
+            # prune below DELETE a perfectly good row because of one transient
+            # stat error — a read hiccup must not cost indexed data.
+            on_disk.add(f)
             continue
 
         on_disk.add(f)
@@ -345,6 +362,19 @@ def build_index():
         # how much work an interrupted pass can lose.
         if indexed % 50 == 0:
             db.commit()
+
+    # ⚠ Refuse to prune on an empty scan. glob() SWALLOWS I/O errors and
+    # returns [], so an unreadable transcripts dir — an NFS/mutagen hiccup, a
+    # permissions blip, a home not yet mounted — made every indexed path look
+    # deleted and wiped the whole index, reporting {"removed": N, "failed": 0}
+    # as success. The hook discards that output, so the first symptom would be
+    # /recall answering "no transcripts indexed". The read path already refuses
+    # to repair by deletion; the write path owes the same refusal.
+    if not files and existing:
+        raise IndexError_(
+            "found no transcripts under %s but the index holds %d — refusing to "
+            "prune. Check the directory is readable." % (PROJECTS_DIR, len(existing))
+        )
 
     removed = 0
     for path in existing:

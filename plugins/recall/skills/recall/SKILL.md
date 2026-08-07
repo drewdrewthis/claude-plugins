@@ -26,6 +26,12 @@ replied. Decisions Claude stated but the human never restated are not in it.
    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session-index.py build
    ```
 
+   Any `{"error": ...}` from ANY of these commands — report it verbatim and
+   stop. It has no `"total"` key, so branching on `total` first would read a
+   missing key and carry on into a second failure. Real cases: a python built
+   without FTS5, and a transcripts dir that went unreadable (which the indexer
+   refuses to treat as "everything was deleted").
+
    If it reports `"total": 0`, stop and say there are no indexed transcripts on
    this host. A non-zero `"failed"` count means that many transcripts could not
    be read — mention it, since the number is otherwise invisible.
@@ -68,7 +74,9 @@ replied. Decisions Claude stated but the human never restated are not in it.
 
 ## Boundaries
 
-- Read-only. Never edit transcripts; never write outside the index.
+- Read-only with respect to your work: never edit a transcript, and never write
+  anywhere but the index. `build` also appends a failure breadcrumb beside the
+  index (`sessions.db.log`) when a transcript cannot be read.
 - Report `project` as provenance only when it looks like a real path. It is the
   session's recorded working directory when known, and otherwise the raw encoded
   directory name — which is not a path and cannot be `cd`'d to.

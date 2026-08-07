@@ -363,25 +363,102 @@ assert len(r) >= 1, "silently returned nothing"' || { echo "empty result for: $q
   [ "$status" -eq 0 ]
 }
 
-@test "concurrent builds survive a schema-version bump" {
-  # The migration DROPs tables, and SQLite returns SQLITE_BUSY IMMEDIATELY for a
-  # schema change — the busy timeout is not consulted — so two hooks racing a
-  # version bump killed the loser ~4 runs in 5. The test above cannot catch it:
-  # it races two builds at the SAME version, where no migration runs at all.
-  local i
-  for i in $(seq 1 40); do write_session "-home-me-proj" "s$i" "" "conversation number $i about assorted topics"; done
+@test "a migration waits for a held write lock instead of dying on it" {
+  # DETERMINISTIC, because the obvious version of this test is vacuous: racing
+  # two builds at a bumped version never once went red across 35 trials with
+  # the lock fully removed — the fixture is far too fast for the two processes
+  # to collide. A race you cannot lose is not a test.
+  #
+  # So hold the write lock deliberately and prove the migration WAITS for it.
+  # The mechanism being pinned: _migrate reads PRAGMA user_version and then
+  # writes, and under a DEFERRED transaction that read-lock -> write-lock
+  # upgrade returns SQLITE_BUSY *without consulting the busy handler at all*.
+  # BEGIN IMMEDIATE takes the write lock up front and therefore honours the
+  # timeout. Remove it and this fails in well under a second, every time.
+  write_session "-home-me-proj" "aaa" "" "a conversation about assorted topics"
   python3 "$SCRIPT" build >/dev/null
-  # Force the next open to migrate, exactly as a real version bump would.
   python3 -c "import sqlite3; d=sqlite3.connect('$SESSION_INDEX_DB'); d.execute('PRAGMA user_version = 1'); d.commit()"
-  python3 "$SCRIPT" build >"$FIX/m1.out" 2>"$FIX/m1.err" &
-  python3 "$SCRIPT" build >"$FIX/m2.out" 2>"$FIX/m2.err" &
-  wait
-  if grep -l "database is locked" "$FIX"/m1.out "$FIX"/m1.err "$FIX"/m2.out "$FIX"/m2.err; then
-    echo "migration race killed a build (see the file listed above)" >&2
-    return 1
-  fi
+
+  # Hold the write lock for ~1.5s, then release. Backgrounded, not raced.
+  python3 -c "
+import sqlite3, time
+d = sqlite3.connect('$SESSION_INDEX_DB', timeout=60)
+d.execute('BEGIN IMMEDIATE')
+time.sleep(1.5)
+d.execute('COMMIT')" &
+  local holder=$!
+  sleep 0.3   # let the holder acquire before the build attempts its migration
+
+  run python3 "$SCRIPT" build
+  wait "$holder"
+  [ "$status" -eq 0 ] || { echo "migration died on a held lock: $output" >&2; return 1; }
+  [[ "$output" != *"database is locked"* ]]
+
   run python3 "$SCRIPT" search "assorted"
   [ "$status" -eq 0 ]
+}
+
+@test "a read hiccup never costs indexed data" {
+  # glob() SWALLOWS I/O errors and returns [], so an unreadable transcripts dir
+  # made every indexed path look deleted: the prune wiped the whole index and
+  # reported {"removed": N, "failed": 0} — success. The SessionEnd hook
+  # discards that, so the first symptom is /recall saying "no transcripts".
+  write_session "-home-me-proj" "aaa" "" "a conversation about assorted topics"
+  python3 "$SCRIPT" build >/dev/null
+  [ "$(row_count)" -eq 1 ]
+
+  chmod 000 "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  run python3 "$SCRIPT" build
+  chmod 755 "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "running as root — chmod 000 does not deny reads, so the hiccup cannot be simulated"
+  fi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"refusing to prune"* ]]
+  # The whole point: the data is still there.
+  [ "$(row_count)" -eq 1 ]
+  run python3 "$SCRIPT" search "assorted"
+  [ "$status" -eq 0 ]
+}
+
+@test "one transcript that stops being statable does not prune its row" {
+  # Narrower sibling of the hiccup above, and the one the prune guard does NOT
+  # cover: here glob() still returns files, so the empty-scan refusal never
+  # fires. A single stat failure counted `failed` but ALSO left the path out of
+  # on_disk, so the prune deleted a good row for one transient error.
+  write_session "-home-me-proj" "aaa" "" "the first conversation about assorted topics"
+  write_session "-home-me-proj" "bbb" "" "the second conversation about assorted topics"
+  python3 "$SCRIPT" build >/dev/null
+  [ "$(row_count)" -eq 2 ]
+
+  # A dangling symlink: glob lists it, os.stat raises on it.
+  rm "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl"
+  ln -s "$FIX/does-not-exist.jsonl" "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl"
+
+  run python3 "$SCRIPT" build
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert r["failed"] == 1, r
+assert r["removed"] == 0, "a stat failure pruned a good row: %r" % (r,)
+assert r["total"] == 2, r'
+  [ "$(row_count)" -eq 2 ]
+}
+
+@test "a path containing '#' is opened as itself, not parsed as a URI" {
+  # SQLite parses a URI filename, so a '#' terminates it and makes everything
+  # after — INCLUDING '?mode=ro' — a fragment. The read-only flag was dropped
+  # and a DIFFERENT, non-existent file was opened and CREATED world-readable
+  # BY A READ, while the exists() guard above it checked the real path.
+  export SESSION_INDEX_DB="$FIX/ses#1.db"
+  write_session "-home-me-proj" "aaa" "" "a conversation about assorted topics"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "assorted"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1'
+  # No stray file conjured from the truncated path.
+  [ ! -e "$FIX/ses" ]
 }
 
 @test "search never destroys an index it cannot read" {
