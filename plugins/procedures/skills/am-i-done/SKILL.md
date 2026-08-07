@@ -4,10 +4,8 @@ description: "Get a cold read on finished work before calling it done. Write the
 user-invocable: true
 context: fork
 agent: work-reviewer
-# PLUGIN ADAPTATION: a context:fork skill inherits the PARENT SESSION's model,
-# not the model agents/work-reviewer.md declares. Without this pin the reviewer
-# runs at whatever tier the caller happens to be on. Upstream has no equivalent
-# because the gate does not run as a forked skill there.
+# PLUGIN ADAPTATION: fork skills ignore their agent's model: — must match
+# agents/work-reviewer.md. See README "Fork-skill model pin".
 model: sonnet
 background: false
 argument-hint: "<the am-i-done report>"

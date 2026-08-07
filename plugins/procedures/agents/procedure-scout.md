@@ -1,6 +1,8 @@
 ---
 name: procedure-scout
 description: "Given a stated goal, return everything the caller needs to do it correctly: the governing procedure, the verbatim commands, the known traps, and how much each source can be trusted. Dispatched by /how-do-i. Read-only — never acts on the goal itself."
+# PLUGIN ADAPTATION: also pinned in skills/how-do-i/SKILL.md — the fork path
+# ignores this key, so change both together (gate-skill-model.bats enforces).
 model: sonnet
 tools: Bash, Read, Grep, Glob
 ---

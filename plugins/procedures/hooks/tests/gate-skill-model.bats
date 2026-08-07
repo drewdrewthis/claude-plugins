@@ -1,54 +1,52 @@
 #!/usr/bin/env bats
 # PLUGIN ADAPTATION: this suite has no upstream counterpart — it guards a
 # plugin-only divergence (the `model:` pin the gate SKILL.md files carry), so it
-# exists in this repo alone by construction.
-#
-# Tests that both gate skills pin their fork's model in SKILL.md frontmatter.
-#
-# A `context: fork` skill does NOT inherit the model from its `agent:`'s own
-# frontmatter — it inherits the PARENT SESSION's model. Measured: dispatched
-# from an opus session, procedure-scout ran claude-opus-5 despite declaring
-# `model: sonnet` in agents/procedure-scout.md. The agent-side declaration is
-# only honoured on the Agent(subagent_type:) path.
-#
-# These assert the declaration is PRESENT. Proving the harness HONOURS it needs
-# a live dispatch; that was measured separately (an opus-parent fork moved to
-# claude-haiku-4-5 when the skill declared `model: haiku`, with the parent's own
-# turns staying on opus) and is recorded on the PR, not here.
+# exists in this repo alone by construction. See README.md, "Fork-skill model
+# pin", for the mechanism and the measurement.
 #
 # Run: bats hooks/tests/gate-skill-model.bats
 
 setup() {
-  SKILLS="$BATS_TEST_DIRNAME/../../skills"
+  PLUGIN="$BATS_TEST_DIRNAME/../.."
+  # shellcheck source=../../scripts/lib/frontmatter.sh
+  source "$PLUGIN/scripts/lib/frontmatter.sh"
+  SKILLS="$PLUGIN/skills"
+  AGENTS="$PLUGIN/agents"
 }
 
-# frontmatter_key <file> <key> — value of <key> inside the first --- block only,
-# so a body mention can never satisfy the assertion.
-frontmatter_key() {
-  awk -v k="$2" '/^---$/{n++; next} n==1 && $1==k":"{ $1=""; sub(/^ /,""); print; exit }' "$1"
+# Value of <key> in <file>'s frontmatter, via the shared reader so a fix there
+# reaches this suite too.
+fm_key() {
+  fm_value "$(frontmatter_block "$1")" "$2"
 }
 
-@test "how-do-i pins its fork to sonnet in SKILL.md frontmatter" {
-  run frontmatter_key "$SKILLS/how-do-i/SKILL.md" model
-  [ "$status" -eq 0 ]
-  [ "$output" = "sonnet" ]
-}
-
-@test "am-i-done pins its fork to sonnet in SKILL.md frontmatter" {
-  run frontmatter_key "$SKILLS/am-i-done/SKILL.md" model
-  [ "$status" -eq 0 ]
-  [ "$output" = "sonnet" ]
-}
-
-@test "every context:fork skill declares a model (none may inherit the session tier)" {
-  # Guards the next fork skill added, not just today's two.
-  local missing=""
+@test "every context:fork skill pins the same model its agent declares" {
+  # One assertion for the whole invariant: a fork skill must pin a model, and
+  # that pin must agree with the agent's own — so a tier change cannot land in
+  # one file alone. The counter guards against the glob failing to expand: with
+  # no nullglob, "$SKILLS"/*/SKILL.md iterates once over the literal pattern
+  # when the dir is wrong, every check falls through, and the test would
+  # otherwise pass having verified nothing.
+  local checked=0
   for f in "$SKILLS"/*/SKILL.md; do
-    if [ "$(frontmatter_key "$f" context)" = "fork" ] && [ -z "$(frontmatter_key "$f" model)" ]; then
-      missing="$missing $(basename "$(dirname "$f")")"
-    fi
+    [ "$(fm_key "$f" context)" = "fork" ] || continue
+    local a sm am
+    a="$(fm_key "$f" agent)"
+    sm="$(fm_key "$f" model)"
+    am="$(fm_key "$AGENTS/$a.md" model)"
+    [ -n "$sm" ] || { echo "$f declares context:fork with no model: pin"; false; }
+    [ "$sm" = "$am" ] || { echo "$f pins '$sm' but agents/$a.md declares '$am'"; false; }
+    checked=$((checked + 1))
   done
-  [ -z "$missing" ] || { echo "fork skills with no model: pin:$missing"; false; }
+  [ "$checked" -ge 2 ] \
+    || { echo "expected >=2 context:fork skills, checked $checked — glob or path is wrong"; false; }
+}
+
+@test "both gate skills are among the context:fork skills checked above" {
+  # Pins WHICH skills the loop covers, so deleting a skill's `context: fork`
+  # cannot quietly drop it from the invariant while the count still passes.
+  [ "$(fm_key "$SKILLS/how-do-i/SKILL.md" context)" = "fork" ]
+  [ "$(fm_key "$SKILLS/am-i-done/SKILL.md" context)" = "fork" ]
 }
 
 @test "the agent-side model declaration is still present (belt and braces)" {
@@ -56,7 +54,6 @@ frontmatter_key() {
   # it — removing it would break direct dispatch of these agents.
   # Asserted per file: `grep -c pat f1 f2` exits 0 when EITHER file matches, so a
   # single grep over both would pass with one agent's declaration deleted.
-  local agents="$BATS_TEST_DIRNAME/../../agents"
-  [ "$(frontmatter_key "$agents/procedure-scout.md" model)" = "sonnet" ]
-  [ "$(frontmatter_key "$agents/work-reviewer.md" model)" = "sonnet" ]
+  [ -n "$(fm_key "$AGENTS/procedure-scout.md" model)" ]
+  [ -n "$(fm_key "$AGENTS/work-reviewer.md" model)" ]
 }
