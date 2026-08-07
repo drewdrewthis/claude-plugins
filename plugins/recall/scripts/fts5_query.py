@@ -41,6 +41,17 @@ BINARY_OPS = ("NOT", "AND", "OR")
 # A bare trailing-* prefix term, e.g. `kuber*` — passed through unquoted.
 PREFIX_TERM = re.compile(r"^\w+\*$")
 
+# Does this token contain anything FTS5's unicode61 tokenizer will actually
+# index? ⚠ NOT `\w`. Python's `\w` includes `_`, which unicode61 treats as a
+# SEPARATOR — so `kubernetes ^_^` quoted `"^_^"` into an empty phrase, and an
+# empty phrase ANDed against real terms matches NOTHING. That is the same
+# empty-phrase defect this check was added to prevent, surviving inside the
+# check itself because the regex was a WIDER oracle than the tokenizer.
+# `[^\W_]` is `\w` minus underscore. test_oracle_matches_tokenizer pins the
+# two against each other over a character sweep, so a future divergence is
+# caught by construction rather than by the next wrong answer.
+TOKENIZABLE = re.compile(r"[^\W_]")
+
 
 class Fts5QueryError(ValueError):
     """A query that cannot be translated without changing what was asked."""
@@ -103,7 +114,7 @@ def _lex(query):
             continue
         elif raw in BINARY_OPS:
             yield raw
-        elif not re.search(r"\w", raw):
+        elif not re.search(TOKENIZABLE, raw):
             # ⚠ A token with nothing tokenizable in it — a stray `.`, `!`, `-`
             # left by ordinary prose — must be DROPPED, not quoted. Quoting it
             # yields an empty FTS5 phrase, and an empty phrase ANDed against

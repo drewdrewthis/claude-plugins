@@ -49,7 +49,14 @@ def main():
         return 0
 
     db = sqlite3.connect(":memory:")
-    db.execute("CREATE VIRTUAL TABLE docs USING fts5(id, body, tokenize='porter unicode61')")
+    # ⚠ id UNINDEXED. Indexed, every doc id is itself a searchable term, so a
+    # row querying `a OR b` would match on the id column and pass no matter
+    # what translate() did — a vacuous row waiting to be written into a suite
+    # whose entire premise is that assertions come from a real index.
+    db.execute(
+        "CREATE VIRTUAL TABLE docs USING fts5("
+        "id UNINDEXED, body, tokenize='porter unicode61')"
+    )
     db.executemany("INSERT INTO docs (id, body) VALUES (?, ?)", sorted(DOCS.items()))
 
     try:
