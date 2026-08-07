@@ -80,3 +80,31 @@ follows the taxonomy in
 
 - Feature branch off `main`.
 - PR review required — no direct pushes to `main`, no force-pushes.
+
+## Versioning — automated, never by hand
+
+Installed plugins are cached per version at
+`plugins/cache/<owner>/<plugin>/<version>/`. A change that ships without a
+version bump **never reaches an already-installed box** — it merges, and every
+existing install keeps running the old copy.
+
+`release-please` owns every `plugins/*/.claude-plugin/plugin.json` version.
+Do not edit those `version` fields by hand — a manual bump collides with the
+release PR.
+
+What you do instead: **write a conventional-commit subject**, since that is what
+picks the next version.
+
+| Prefix | Bump |
+| --- | --- |
+| `fix:` / `perf:` | patch |
+| `feat:` | minor |
+| any type with `!` (e.g. `feat(procedures)!:`) or a `BREAKING CHANGE:` footer | major |
+| `chore:` / `docs:` / `test:` | none — **ships nothing to installed boxes** |
+
+Scope by plugin (`fix(procedures): …`) so the release lands on the right one;
+each plugin versions and tags independently as `<plugin>-v<version>`.
+
+⚠ A behaviour change committed as `chore:` or `docs:` produces no release and
+therefore no bump — so it stays invisible to every installed box. If a change
+should reach users, it is a `fix:` or a `feat:`.
