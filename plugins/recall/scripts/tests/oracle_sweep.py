@@ -17,6 +17,7 @@ tokenizer, an edited regex — fails here by construction, before it can become
 another wrong answer.
 """
 
+import itertools
 import os
 import sqlite3
 import sys
@@ -28,9 +29,12 @@ from fts5_query import Fts5QueryError, translate  # noqa: E402
 # Every ASCII printable, plus the non-ASCII classes a real transcript carries:
 # accented Latin, Greek, Cyrillic, CJK, Hangul, non-Latin digits, superscripts,
 # dashes, combining marks, emoji — and the connector punctuation behind defect 7.
-SWEEP = [chr(c) for c in range(0x20, 0x7F)] + list(
-    "áéîõüßçñ" "αβγδ" "абвг" "日本語中文" "한글" "٤٥٦" "½²³" "—–…" "ّ́" "🚀🔥" "_＿﹍"
-)
+# ⚠ RANGES, not a curated list. A hand-picked sample is exactly what the last
+# eight rounds were: the previous version of this file listed 134 characters,
+# passed, and missed 10,839 divergences — including the 21 that silently
+# emptied every result. Sweep the whole BMP plus SMP-adjacent planes, skipping
+# only the surrogate range (not valid standalone code points).
+SWEEP = [chr(c) for c in range(0x20, 0xD800)] + [chr(c) for c in range(0xE000, 0x11000)]
 
 
 def main():
@@ -55,31 +59,46 @@ def main():
 
     mismatches = []
     refused = []
-    for ch in SWEEP:
+
+    def check(tok):
+        """Record a mismatch if translate's drop decision disagrees with FTS5."""
         try:
-            dropped = translate("kubernetes " + ch) == '"kubernetes"'
+            dropped = translate("kubernetes " + tok) == '"kubernetes"'
         except Fts5QueryError:
-            # A LOUD refusal is the documented third outcome and is never the
-            # defect class this pins — that class is always silent. `(` and `)`
-            # land here, correctly: they are structure, not tokens.
-            refused.append(ch)
-            continue
-        indexed = fts5_indexes(ch)
-        # Dropping must mean exactly "the tokenizer would index nothing here".
-        if dropped == indexed:
+            refused.append(tok)
+            return
+        if dropped == fts5_indexes(tok):
             mismatches.append(
-                (repr(ch), hex(ord(ch)),
+                (repr(tok), "n/a" if len(tok) != 1 else hex(ord(tok)),
                  "dropped" if dropped else "kept",
-                 "indexed" if indexed else "not-indexed")
+                 "indexed" if fts5_indexes(tok) else "not-indexed")
             )
 
+    # ⚠ SINGLE characters are not sufficient. Both defects this pins arrived as
+    # multi-character tokens (`...`, `^_^`), and a token can in principle be
+    # non-empty under a per-character oracle while the tokenizer still yields
+    # nothing for it — the same class, invisible to a single-char sweep. So
+    # sweep every 1-3 character combination over the separator/word alphabet
+    # that actually produced defects 6 and 7.
+    combo_alphabet = list("_.-!^:@~#$%&+=|\\/,;`'?") + ["a", "1", "é", "日", "\u0301", "＿", "﹍"]
+    for n in (1, 2, 3):
+        for combo in itertools.product(combo_alphabet, repeat=n):
+            check("".join(combo))
+
+    for ch in SWEEP:
+        # A LOUD refusal is the documented third outcome and is never this
+        # defect class — that class is always silent. `(` and `)` land there
+        # correctly: they are structure, not tokens.
+        check(ch)
+
+    checked = len(SWEEP) + sum(len(combo_alphabet) ** n for n in (1, 2, 3))
     if mismatches:
         for m in mismatches[:20]:
             print("MISMATCH %s %s: translate %s it, tokenizer %s it" % m)
         print("%d character(s) where the oracle disagrees" % len(mismatches))
         return 1
-    print("ok: oracle agrees with the tokenizer over %d characters "
-          "(%d refused as structure)" % (len(SWEEP) - len(refused), len(refused)))
+    print("ok: oracle agrees with the tokenizer over %d tokens "
+          "(%d refused as structure)" % (checked - len(refused), len(refused)))
     return 0
 
 
