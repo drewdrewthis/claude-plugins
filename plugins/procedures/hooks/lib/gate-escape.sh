@@ -87,6 +87,21 @@ ge__record() {
         >> "$GATE_ESCAPE_LOG" 2>/dev/null || true
 }
 
+# ge_release_or_failopen <GATE_KEY> <gate-label> <why> [sid] — classify a
+# release that is about to happen anyway.
+#
+# Every degenerate path (no jq, unreadable lib, unwired reset hook) releases the
+# gate via gate_failopen, which never returns. A switched-off gate reaching one
+# of those paths would therefore be filed as a BLIND fail-open — inflating the
+# very rate that log exists to measure, one row per tool call for a whole
+# session. The switch is the better explanation when it is set, so ask it first.
+# Both arms exit; neither returns.
+ge_release_or_failopen() {
+    if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "$1"; then exit 0; fi
+    shift
+    gate_failopen "$@"
+}
+
 # ge_enabled <GATE_KEY> — 0 if the gate is on (the default), 1 if either switch
 # turned it off. GATE_KEY is the uppercased option suffix, e.g. HOW_DO_I_GATE.
 # Recording lives here, at the single site that can answer "off", so no caller

@@ -303,8 +303,13 @@ assistant_tool() {
   # The feature's central fail-safe, asserted in three hook comments and
   # previously pinned by nothing. Mutation runs on a COPY — reverting the real
   # tree is how a reviewer wrecked this worktree mid-review.
-  COPY="$(mktemp -d "${BATS_TMPDIR:-/tmp}/esc-copy.XXXXXX")"
+  # Lives under TURN_STATE_DIR so teardown() removes it even when an assertion
+  # below aborts the test — a RETURN trap is not usable here, bats runs with
+  # functrace so it fires on the first helper's return.
+  COPY="$TURN_STATE_DIR/esc-copy"
+  mkdir -p "$COPY"
   cp -r "$HOOKS" "$COPY/hooks"
+  cp -r "$BATS_TEST_DIRNAME/../../scripts" "$COPY/scripts"
   chmod 000 "$COPY/hooks/lib/gate-escape.sh"
 
   start_turn
@@ -319,8 +324,18 @@ assistant_tool() {
     bash -c "echo '$STOP' | bash '$COPY/hooks/am-i-done-gate.sh'"
   [[ "$output" == *"AM-I-DONE"* ]]
 
+  # The third hook. Omitting it let a removed `declare -F` guard in
+  # enforce-frontmatter ship with all 23 tests green.
+  ROOT="$HOME/.claude"
+  mkdir -p "$ROOT/references/decisions"
+  BAD="$ROOT/references/decisions/2026-01-01-unreadable-lib.md"
+  printf '# no frontmatter here\n' > "$BAD"
+  P="{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$BAD\"}}"
+  run env KNOWLEDGE_ROOT="$ROOT" PROCEDURES_ENABLE_FRONTMATTER_CHECK=false \
+    bash -c "echo '$P' | bash '$COPY/hooks/enforce-frontmatter.sh'"
+  [ "$status" -eq 2 ]
+
   chmod 644 "$COPY/hooks/lib/gate-escape.sh"
-  rm -rf "$COPY"
 }
 
 @test "a released gate is recorded only when it would otherwise have fired" {
@@ -341,5 +356,41 @@ assistant_tool() {
     GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" \
     bash -c "echo '$Q' | bash '$HOOKS/enforce-frontmatter.sh'"
   [ "$status" -eq 0 ]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
+
+  # A .md INSIDE the root that is not a record — CLAUDE.md, a README, an
+  # agent file. This clears the *.md and under-$ROOT filters and is stopped
+  # only by the linter's own record predicate, so a switch checked above that
+  # predicate logs a release nothing was going to block.
+  mkdir -p "$HOME/.claude"
+  printf '# just a readme\n' > "$HOME/.claude/README.md"
+  R="{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$HOME/.claude/README.md\"}}"
+  run env KNOWLEDGE_ROOT="$HOME/.claude" PROCEDURES_ENABLE_FRONTMATTER_CHECK=false \
+    GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" \
+    bash -c "echo '$R' | bash '$HOOKS/enforce-frontmatter.sh'"
+  [ "$status" -eq 0 ]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
+}
+
+@test "a degraded gate with its switch off is an escape, not a blind fail-open" {
+  # gate_failopen never returns, so every degenerate path used to pre-empt the
+  # switch — filing a deliberate release as blind, one row per tool call for a
+  # whole session, inflating the very rate that log exists to measure.
+  # No start_turn: no .turn marker => the reset-hook-never-ran path.
+  run env CLAUDE_CODE_AGENT=technician PROCEDURES_ENABLE_HOW_DO_I_GATE=false \
+    GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ]
+  run jq -e '.gate == "HOW_DO_I_GATE"' "$GATE_ESCAPE_LOG"
+  [ "$status" -eq 0 ]
+
+  # Armed, same degraded state: still a blind fail-open, unchanged.
+  : > "$GATE_ESCAPE_LOG"
+  run env CLAUDE_CODE_AGENT=technician \
+    GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  grep -q 'reset-hook-never-ran' "$GATE_FAILOPEN_LOG"
   [ ! -s "$GATE_ESCAPE_LOG" ]
 }

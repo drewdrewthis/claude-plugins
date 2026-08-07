@@ -46,16 +46,21 @@ SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 # shellcheck source=lib/gate-failopen.sh
 . "$SCRIPT_DIR/lib/gate-failopen.sh" 2>/dev/null || exit 0
 
-command -v jq >/dev/null 2>&1 || gate_failopen "how-do-i" "no-jq"
+# If the escape lib was unreadable, this classifier does not exist — fall back
+# to the plain recorder so every degenerate path still RELEASES. A missing lib
+# must never turn a fail-open into a fall-through.
+declare -F ge_release_or_failopen >/dev/null 2>&1 || ge_release_or_failopen() { shift; gate_failopen "$@"; }
+
+command -v jq >/dev/null 2>&1 || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "no-jq"
 
 # Unlike gate-failopen.sh above, these fail with the recorder already loaded —
 # so they are BLIND fail-opens we can and do record, not silent ones.
 # shellcheck source=lib/turn-state.sh
-. "$SCRIPT_DIR/lib/turn-state.sh" 2>/dev/null || gate_failopen "how-do-i" "lib-unreadable:turn-state"
+. "$SCRIPT_DIR/lib/turn-state.sh" 2>/dev/null || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "lib-unreadable:turn-state"
 # shellcheck source=lib/gate-audience.sh
-. "$SCRIPT_DIR/lib/gate-audience.sh" 2>/dev/null || gate_failopen "how-do-i" "lib-unreadable:gate-audience"
+. "$SCRIPT_DIR/lib/gate-audience.sh" 2>/dev/null || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "lib-unreadable:gate-audience"
 # shellcheck source=lib/gate-allowlist.sh
-. "$SCRIPT_DIR/lib/gate-allowlist.sh" 2>/dev/null || gate_failopen "how-do-i" "lib-unreadable:gate-allowlist"
+. "$SCRIPT_DIR/lib/gate-allowlist.sh" 2>/dev/null || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "lib-unreadable:gate-allowlist"
 
 ga_binds_main "$INPUT" || exit 0
 
@@ -65,7 +70,7 @@ gal_is_compliance_path "$TOOL_NAME" "$INPUT" && exit 0
 SID="$(ts_session_id "$INPUT")"
 # No .turn marker => the reset hook never ran => the gate is unwired, not
 # clear. Record (BLIND), then allow.
-ts_turn_started "$SID" || gate_failopen "how-do-i" "reset-hook-never-ran" "$SID"
+ts_turn_started "$SID" || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "reset-hook-never-ran" "$SID"
 ts_is_marked "$SID" how_do_i && exit 0
 
 # PLUGIN ADAPTATION: plugin-scoped skill name in the message below, plus this
