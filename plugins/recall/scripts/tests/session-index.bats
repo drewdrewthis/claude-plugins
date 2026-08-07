@@ -346,6 +346,37 @@ assert len(r) >= 1, "silently returned nothing"' || { echo "empty result for: $q
   echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1, "prefix search returned nothing"'
 }
 
+@test "a build tolerates a held lock while setting journal_mode" {
+  # DETERMINISTIC replacement for a race that could not be lost: the old
+  # version of this detected the loss of _ensure_wal's guard 0 times in 13.
+  # Same lesson as the migration test — a race you cannot lose is not a test.
+  #
+  # Setting journal_mode needs an EXCLUSIVE lock and returns SQLITE_BUSY
+  # immediately, without consulting the busy timeout. So start from a non-WAL
+  # db, hold a write lock, and prove the build survives it.
+  write_session "-home-me-proj" "aaa" "" "a conversation about assorted topics"
+  python3 -c "
+import sqlite3
+d = sqlite3.connect('$SESSION_INDEX_DB')
+d.execute('PRAGMA journal_mode=DELETE')
+d.execute('CREATE TABLE IF NOT EXISTS placeholder (x)')
+d.commit()"
+
+  python3 -c "
+import sqlite3, time
+d = sqlite3.connect('$SESSION_INDEX_DB', timeout=60)
+d.execute('BEGIN IMMEDIATE')
+time.sleep(1.5)
+d.execute('COMMIT')" &
+  local holder=$!
+  sleep 0.3
+
+  run python3 "$SCRIPT" build
+  wait "$holder"
+  [ "$status" -eq 0 ] || { echo "build died setting journal_mode: $output" >&2; return 1; }
+  [[ "$output" != *"database is locked"* ]]
+}
+
 @test "concurrent builds both complete without a lock error" {
   local i
   for i in $(seq 1 40); do write_session "-home-me-proj" "s$i" "" "conversation number $i about assorted topics"; done
