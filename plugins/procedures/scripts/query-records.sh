@@ -16,12 +16,13 @@
 # string — they are tokenized into a ranked OR union:
 #   --keyword "recall fts5 benchmark"        # one union query, correct
 #   --keyword recall --keyword benchmark     # exit 2, not "benchmark only"
-#   --keyword <toks>   records whose frontmatter `keywords` contain any token
-#                      (same tokenization + shared matcher as the router).
-#                      Tokens shorter than MIN_TOKEN_LEN (3) are dropped; if
-#                      that leaves nothing to search (e.g. --keyword "ci pr"),
+#   --keyword <toks>   records whose frontmatter `keywords` contain any token.
+#                      Tokens shorter than MIN_TOKEN_LEN (2) are dropped; if
+#                      that leaves nothing to search (e.g. --keyword "a b"),
 #                      the script exits 2 rather than returning an empty
 #                      result that reads as "searched, found nothing".
+#                      2-char terms ARE searchable here (`pr`, `ci`, `gh`) even
+#                      though the PUSH router ignores them as prompt noise.
 #   --kind <kind>      records whose frontmatter `kind:` equals <kind>.
 #   --id <id>          the record whose frontmatter `id:` equals <id> exactly.
 #   --links-to <id>    records whose `links:` value references <id>.
@@ -94,10 +95,14 @@ ALL_STORES=("${STORES[@]}")
 # upstream defaults to 20 and passes it to the matcher as a per-kind cap.
 LIMIT="${QUERY_RECORDS_LIMIT:-0}"
 FULL_CAP=10
-# Keyword tokens shorter than this are dropped (shared with the router's
-# tokenization). Named rather than inlined so the floor is greppable and can be
-# quoted back to the caller when a query tokenizes to nothing.
-MIN_TOKEN_LEN=3
+# PLUGIN ADAPTATION: the PULL path indexes 2-char keyword tokens; the PUSH
+# router keeps its 3-char floor. Same reasoning as gate=0 below — an explicit
+# --keyword is a term the caller chose, not prompt noise to be filtered. At 3,
+# `pr` (135 keyword slots in the live corpus), `ci` (29) and `gh` (16) were
+# unmatchable: `--keyword pr` could never reach pr-review or pr-ready-check.
+# Passed to record-match.awk AND record-rarity.awk — they must agree, or df/idf
+# is computed over a different token set than the one scored.
+MIN_TOKEN_LEN=2
 REL_RATIO="${QUERY_RECORDS_REL_RATIO:-}"
 K_FLOOR="${QUERY_RECORDS_K_FLOOR:-}"
 
@@ -108,6 +113,9 @@ Q_ID=""
 Q_LINKS_TO=""
 Q_FULL=0
 
+# PLUGIN ADAPTATION: upstream silently keeps the last occurrence of a repeated
+# flag. For a discovery tool a confident wrong answer is worse than an error, so
+# this copy refuses instead.
 # Repeating a value-taking flag used to silently keep the last occurrence, so
 # `--keyword recall --keyword gitflow` returned gitflow-only results at full
 # speed with no warning — a confidently wrong answer, which for a discovery
@@ -204,6 +212,9 @@ if [ -n "$Q_KEYWORD" ]; then
         | awk -v min="$MIN_TOKEN_LEN" 'length($0) >= min' \
         | sort -u > "$TOKEN_FILE"
     if [ ! -s "$TOKEN_FILE" ]; then
+        # PLUGIN ADAPTATION: upstream exits 0 here, which a caller cannot tell
+        # apart from a genuine miss. This copy fails loud, matching the exit-3
+        # scan-error path already in this file.
         # Every token fell under MIN_TOKEN_LEN, so no search ran at all. Exiting
         # 0 here made that indistinguishable from a genuine miss — the caller
         # concluded "the corpus has nothing" when nothing was ever queried.
@@ -213,7 +224,8 @@ if [ -n "$Q_KEYWORD" ]; then
         exit 2
     fi
     # IDF pre-pass over the narrowed set, shared lib (df + idf + corpus stats).
-    printf '%s\n' "$NARROWED" | awk -f "$LIB_DIR/record-rarity.awk" > "$IDF_FILE"
+    printf '%s\n' "$NARROWED" | awk -v min_tok="$MIN_TOKEN_LEN" \
+        -f "$LIB_DIR/record-rarity.awk" > "$IDF_FILE"
     # The PULL path is deliberately permissive: an explicit single-token query
     # (e.g. --keyword issue) must still surface that token's records even though
     # the PUSH gate would suppress a lone common token. So pass gate=0 to turn
@@ -230,6 +242,7 @@ if [ -n "$Q_KEYWORD" ]; then
         -v limit=0 \
         -v rel_ratio="$REL_RATIO" \
         -v k_floor="$K_FLOOR" \
+        -v min_tok="$MIN_TOKEN_LEN" \
         -f "$LIB_DIR/record-match.awk")"
     if [ "$LIMIT" -gt 0 ]; then
         MATCHED="$(printf '%s\n' "$MATCH_OUT" | head -n "$LIMIT")"

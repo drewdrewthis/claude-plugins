@@ -37,7 +37,9 @@
 #
 # Stdin: record file paths, one per line.
 
-BEGIN { N = 0; total_kw = 0 }
+# PLUGIN ADAPTATION: min_tok must match the value record-match.awk is given, or
+# the df/idf table is computed over a different token set than the one scored.
+BEGIN { N = 0; total_kw = 0; if (min_tok == "") min_tok = 3 }
 
 {
     path = $0
@@ -72,7 +74,7 @@ BEGIN { N = 0; total_kw = 0 }
     dl = 0
     for (i = 1; i <= nt; i++) {
         tk = arr[i]
-        if (length(tk) < 3) continue
+        if (length(tk) < min_tok) continue
         if (tk in localseen) continue
         localseen[tk] = 1
         doc_count[tk]++
