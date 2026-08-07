@@ -6,22 +6,25 @@ Builds and queries a SQLite FTS5 index over all session JSONL files.
 Supports incremental updates (only re-parses changed files).
 
 Usage:
-    session-index.py build                        # Build/update the index
-    session-index.py search <query> [--limit N]   # Search sessions, output JSON
-    session-index.py context <path.jsonl> [--tail N]  # Extract recent messages from a session
+    session-index.py build                            # Build/update the index
+    session-index.py search <query> [--limit N]       # Search sessions, output JSON
+    session-index.py context <path.jsonl> [--tail N]  # Recent messages from a session
 """
 
-import sqlite3
+import argparse
+import glob
 import json
 import os
+import sqlite3
 import sys
-import glob
 import time
 
 # PLUGIN ADAPTATION: data-root defaults. Upstream this script lives inside the
 # host codex and hardcodes `~/.claude`. Installed as a plugin it must not write
 # into the plugin dir, and the host's config dir may be relocated, so the root
 # resolves from CLAUDE_CONFIG_DIR (Claude Code's own var) with per-path escapes.
+# The per-path vars are what let the test suite isolate onto a mktemp fixture
+# and prove the "never writes into the plugin dir" property.
 CONFIG_DIR = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
 DB_PATH = os.path.expanduser(
     os.environ.get("SESSION_INDEX_DB") or os.path.join(CONFIG_DIR, "sessions.db")
@@ -30,265 +33,346 @@ PROJECTS_DIR = os.path.expanduser(
     os.environ.get("SESSION_INDEX_PROJECTS") or os.path.join(CONFIG_DIR, "projects")
 )
 
+# Prefixes that mark harness scaffolding rather than something a human said.
+NOISE_PREFIXES = ("Base directory for this skill:", "<local-command")
+MIN_TEXT_LEN = 10
 
-def decode_project_dir(name):
-    """Render Claude Code's path-encoded project dir name back as a filesystem path.
 
-    The encoding replaces every `/` with `-`, so a leading dot survives as a
-    doubled dash (`-home-me--claude` <- `/home/me/.claude`); undo that first or
-    hidden directories decode wrong.
-    """
-    # PLUGIN ADAPTATION: upstream special-cased one operator's literal home path
-    # ("-Users-<name>-"), which is host-specific identity baked into shared code.
-    path = name.replace("--", "/.").replace("-", "/")
-    home = os.path.expanduser("~")
-    return "~" + path[len(home):] if path.startswith(home) else path
+class IndexError_(Exception):
+    """A failure the caller should see as JSON, not as a traceback."""
+
+
+def fail(message):
+    print(json.dumps({"error": message}))
+    sys.exit(1)
 
 
 def get_db():
+    # PLUGIN ADAPTATION: a relocated CLAUDE_CONFIG_DIR may not exist yet.
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-    db = sqlite3.connect(DB_PATH)
+    fresh = not os.path.exists(DB_PATH)
+    # A build holds one write transaction for the whole pass; the default 5s
+    # busy timeout expires when two SessionEnd hooks fire at once, killing the
+    # loser with "database is locked".
+    db = sqlite3.connect(DB_PATH, timeout=60)
+    if fresh:
+        # The index aggregates every prompt typed on this host into one file —
+        # a higher-value target than the transcripts it is built from.
+        try:
+            os.chmod(DB_PATH, 0o600)
+        except OSError:
+            pass
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY,
+            file_path TEXT PRIMARY KEY,
+            session_id TEXT,
             project TEXT,
-            file_path TEXT,
+            cwd TEXT,
             mtime REAL,
+            size INTEGER,
             message_count INTEGER,
             first_prompt TEXT,
             last_prompt TEXT
         )
     """)
-    db.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-            session_id,
-            project,
-            user_text,
-            tokenize='porter unicode61'
-        )
-    """)
+    try:
+        db.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+                file_path,
+                session_id,
+                project,
+                user_text,
+                tokenize='porter unicode61'
+            )
+        """)
+    except sqlite3.OperationalError as exc:
+        if "fts5" in str(exc).lower():
+            raise IndexError_(
+                "this python's sqlite3 was built without the FTS5 extension, "
+                "which recall requires. See the plugin README for details."
+            ) from exc
+        raise
     return db
 
 
-def extract_user_messages(jsonl_path):
-    """Parse a JSONL session file and extract user message text."""
-    messages = []
-    for line in open(jsonl_path):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-            if obj.get("type") != "user":
-                continue
-            content = obj.get("message", {}).get("content", "")
-            text = ""
-            if isinstance(content, list):
-                for c in content:
-                    if isinstance(c, dict) and c.get("type") == "text":
-                        text += c["text"] + " "
-            else:
-                text = str(content)
-            text = text.strip()
-            if len(text) < 10:
-                continue
-            if text.startswith("Base directory for this skill:"):
-                continue
-            if text.startswith("<local-command"):
-                continue
-            messages.append(text)
-        except (json.JSONDecodeError, KeyError):
-            continue
-    return messages
+def iter_messages(jsonl_path, roles):
+    """Yield (role, text) for real conversation turns, skipping harness noise.
 
-
-def build_index():
-    db = get_db()
-    files = glob.glob(os.path.join(PROJECTS_DIR, "*", "*.jsonl"))
-    files = [f for f in files if "/subagents/" not in f]
-
-    # Load existing mtimes
-    existing = {}
-    for row in db.execute("SELECT session_id, mtime FROM sessions"):
-        existing[row["session_id"]] = row["mtime"]
-
-    # Track which session IDs are still on disk
-    on_disk = set()
-    indexed = 0
-    skipped = 0
-    start = time.time()
-
-    for f in files:
-        session_id = os.path.basename(f).replace(".jsonl", "")
-        on_disk.add(session_id)
-        mtime = os.path.getmtime(f)
-
-        if session_id in existing and existing[session_id] == mtime:
-            skipped += 1
-            continue
-
-        project = os.path.basename(os.path.dirname(f))
-        try:
-            messages = extract_user_messages(f)
-        except Exception:
-            continue
-
-        combined = "\n".join(messages)
-        first_prompt = messages[0][:200] if messages else ""
-        last_prompt = messages[-1][:200] if len(messages) > 1 else first_prompt
-
-        # Upsert metadata
-        db.execute("""
-            INSERT INTO sessions (session_id, project, file_path, mtime, message_count, first_prompt, last_prompt)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                project=excluded.project, file_path=excluded.file_path,
-                mtime=excluded.mtime, message_count=excluded.message_count,
-                first_prompt=excluded.first_prompt, last_prompt=excluded.last_prompt
-        """, (session_id, project, f, mtime, len(messages), first_prompt, last_prompt))
-
-        # Upsert FTS (delete old entry first)
-        db.execute("DELETE FROM sessions_fts WHERE session_id = ?", (session_id,))
-        db.execute("INSERT INTO sessions_fts (session_id, project, user_text) VALUES (?, ?, ?)",
-                   (session_id, project, combined))
-
-        indexed += 1
-
-    # Remove sessions whose files no longer exist
-    removed = 0
-    for sid in existing:
-        if sid not in on_disk:
-            db.execute("DELETE FROM sessions WHERE session_id = ?", (sid,))
-            db.execute("DELETE FROM sessions_fts WHERE session_id = ?", (sid,))
-            removed += 1
-
-    db.commit()
-    elapsed = time.time() - start
-    total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-    print(json.dumps({
-        "indexed": indexed,
-        "skipped": skipped,
-        "removed": removed,
-        "total": total,
-        "elapsed_seconds": round(elapsed, 2)
-    }))
-
-
-def search(query, limit=10):
-    db = get_db()
-
-    # Check if index exists
-    total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-    if total == 0:
-        print(json.dumps({"error": "Index is empty. Run: session-index.py build"}))
-        sys.exit(1)
-
-    results = []
-    rows = db.execute("""
-        SELECT
-            f.session_id,
-            s.project,
-            s.file_path,
-            s.mtime,
-            s.message_count,
-            s.first_prompt,
-            s.last_prompt,
-            snippet(sessions_fts, 2, '>>>', '<<<', '...', 24) as snippet,
-            rank
-        FROM sessions_fts f
-        JOIN sessions s ON s.session_id = f.session_id
-        WHERE sessions_fts MATCH ?
-        ORDER BY rank
-        LIMIT ?
-    """, (query, limit)).fetchall()
-
-    for row in rows:
-        proj = decode_project_dir(row["project"])
-        results.append({
-            "session_id": row["session_id"],
-            "project": proj,
-            "file_path": row["file_path"],
-            "mtime": row["mtime"],
-            "message_count": row["message_count"],
-            "first_prompt": row["first_prompt"],
-            "last_prompt": row["last_prompt"],
-            "snippet": row["snippet"],
-            "score": row["rank"],
-        })
-
-    print(json.dumps(results, indent=2))
-
-
-def context(jsonl_path, tail=10):
-    """Extract recent user/assistant messages from a session for context."""
-    messages = []
-    with open(jsonl_path) as f:
-        for line in f:
+    One filter policy for both the indexer and the reader — they drifted apart
+    upstream, so a change landed in one and not the other.
+    """
+    # Transcripts routinely contain non-ASCII; under LC_ALL=C the locale default
+    # raises UnicodeDecodeError and the whole file is silently dropped.
+    with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
             line = line.strip()
             if not line:
                 continue
             try:
                 obj = json.loads(line)
-                msg_type = obj.get("type")
-                if msg_type not in ("user", "assistant"):
-                    continue
-                content = obj.get("message", {}).get("content", "")
-                text = ""
-                if isinstance(content, list):
-                    for c in content:
-                        if isinstance(c, dict) and c.get("type") == "text":
-                            text += c["text"] + " "
-                else:
-                    text = str(content)
-                text = text.strip()
-                if not text or len(text) < 10:
-                    continue
-                if text.startswith("Base directory for this skill:"):
-                    continue
-                if text.startswith("<local-command"):
-                    continue
-                idx = text.find("<system-reminder>")
-                if idx > 0:
-                    text = text[:idx]
-                messages.append({"role": msg_type, "text": text[:400]})
-            except (json.JSONDecodeError, KeyError):
+            except json.JSONDecodeError:
                 continue
+            role = obj.get("type")
+            if role not in roles:
+                continue
+            content = obj.get("message", {}).get("content", "")
+            if isinstance(content, list):
+                text = " ".join(
+                    c["text"] for c in content
+                    if isinstance(c, dict) and c.get("type") == "text"
+                )
+            elif isinstance(content, str):
+                text = content
+            else:
+                # Non-string content would otherwise be indexed as a Python repr.
+                continue
+            text = text.strip()
+            if len(text) < MIN_TEXT_LEN or text.startswith(NOISE_PREFIXES):
+                continue
+            yield role, text
 
-    recent = messages[-tail:]
-    print(json.dumps(recent, indent=2))
+
+def read_cwd(jsonl_path):
+    """The working directory Claude Code recorded for this session, if present.
+
+    Claude Code encodes a project path into its directory name by replacing every
+    `/` with `-`, which is lossy — pre-existing hyphens are indistinguishable from
+    separators, so the name cannot be decoded back to a path. It writes the real
+    cwd into the transcript records instead; that is the only trustworthy source.
+    """
+    try:
+        with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i > 20:
+                    break
+                try:
+                    cwd = json.loads(line).get("cwd")
+                except json.JSONDecodeError:
+                    continue
+                if cwd:
+                    return cwd
+    except OSError:
+        pass
+    return None
+
+
+def display_path(cwd, project):
+    """What to show as a hit's provenance: the real cwd, else the raw dir name."""
+    if not cwd:
+        # Never fabricate a path from the encoded name — return it verbatim so a
+        # reader can tell it is an identifier, not somewhere they can cd to.
+        return project
+    home = os.path.expanduser("~")
+    if cwd == home or cwd.startswith(home + os.sep):
+        return "~" + cwd[len(home):]
+    return cwd
+
+
+def build_index():
+    db = get_db()
+    files = [f for f in glob.glob(os.path.join(PROJECTS_DIR, "*", "*.jsonl"))]
+
+    existing = {
+        row["file_path"]: (row["mtime"], row["size"])
+        for row in db.execute("SELECT file_path, mtime, size FROM sessions")
+    }
+
+    on_disk = set()
+    indexed = skipped = failed = 0
+    start = time.time()
+
+    for f in files:
+        # One unreadable file must not abort the pass — os.path.getmtime raising
+        # here used to discard every session already parsed, and because nothing
+        # was committed, every later build died at the same file forever.
+        try:
+            stat = os.stat(f)
+            mtime, size = stat.st_mtime, stat.st_size
+        except OSError:
+            failed += 1
+            continue
+
+        on_disk.add(f)
+        # mtime alone misses a same-mtime rewrite (rsync -a, cp -p, a restore).
+        if existing.get(f) == (mtime, size):
+            skipped += 1
+            continue
+
+        session_id = os.path.basename(f)[: -len(".jsonl")]
+        project = os.path.basename(os.path.dirname(f))
+        try:
+            messages = [text for _, text in iter_messages(f, {"user"})]
+            cwd = read_cwd(f)
+        except OSError:
+            failed += 1
+            continue
+
+        combined = "\n".join(messages)
+        first_prompt = messages[0][:200] if messages else ""
+        last_prompt = messages[-1][:200] if messages else ""
+
+        # Keyed on file_path: a session id is unique only within a project dir,
+        # so keying on it let one transcript silently overwrite another.
+        db.execute("""
+            INSERT INTO sessions
+                (file_path, session_id, project, cwd, mtime, size,
+                 message_count, first_prompt, last_prompt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET
+                session_id=excluded.session_id, project=excluded.project,
+                cwd=excluded.cwd, mtime=excluded.mtime, size=excluded.size,
+                message_count=excluded.message_count,
+                first_prompt=excluded.first_prompt, last_prompt=excluded.last_prompt
+        """, (f, session_id, project, cwd, mtime, size,
+              len(messages), first_prompt, last_prompt))
+
+        db.execute("DELETE FROM sessions_fts WHERE file_path = ?", (f,))
+        db.execute(
+            "INSERT INTO sessions_fts (file_path, session_id, project, user_text)"
+            " VALUES (?, ?, ?, ?)",
+            (f, session_id, project, combined))
+
+        indexed += 1
+        db.commit()
+
+    removed = 0
+    for path in existing:
+        if path not in on_disk:
+            db.execute("DELETE FROM sessions WHERE file_path = ?", (path,))
+            db.execute("DELETE FROM sessions_fts WHERE file_path = ?", (path,))
+            removed += 1
+
+    db.commit()
+    total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    return {
+        "indexed": indexed,
+        "skipped": skipped,
+        "removed": removed,
+        # Surfaced because the SessionEnd hook discards output: a transcript that
+        # never indexes is otherwise invisible forever.
+        "failed": failed,
+        "total": total,
+        "elapsed_seconds": round(time.time() - start, 2),
+    }
+
+
+def build_match_query(query):
+    """Turn a user's words into a valid FTS5 MATCH expression.
+
+    FTS5 reads its input as a query language, so ordinary prose detonates it: a
+    hyphen reads as a column filter (`rate-limiter` -> "no such column: limiter"),
+    an apostrophe as an unterminated string. Quoting each bare term makes it a
+    literal while leaving the boolean operators the skill relies on intact.
+    """
+    operators = {"OR", "AND", "NOT", "NEAR"}
+    out = []
+    for token in query.split():
+        if token.upper() in operators and token == token.upper():
+            out.append(token)
+        else:
+            out.append('"' + token.replace('"', '""') + '"')
+    # A union built programmatically can end on a dangling operator, which is a
+    # syntax error rather than a no-op.
+    while out and out[-1] in operators:
+        out.pop()
+    while out and out[0] in operators:
+        out.pop(0)
+    return " ".join(out)
+
+
+def search(query, limit=10):
+    db = get_db()
+    total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    if total == 0:
+        raise IndexError_("index is empty — no transcripts have been indexed yet")
+
+    match = build_match_query(query)
+    if not match:
+        raise IndexError_(f"query {query!r} has no searchable terms")
+
+    try:
+        rows = db.execute("""
+            SELECT
+                s.session_id, s.project, s.cwd, s.file_path, s.mtime,
+                s.message_count, s.first_prompt, s.last_prompt,
+                snippet(sessions_fts, 3, '>>>', '<<<', '...', 24) as snippet
+            FROM sessions_fts f
+            JOIN sessions s ON s.file_path = f.file_path
+            WHERE sessions_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        """, (match, limit)).fetchall()
+    except sqlite3.OperationalError as exc:
+        raise IndexError_(f"could not search for {query!r}: {exc}") from exc
+
+    return [{
+        "session_id": row["session_id"],
+        "project": display_path(row["cwd"], row["project"]),
+        "file_path": row["file_path"],
+        "mtime": row["mtime"],
+        "message_count": row["message_count"],
+        "first_prompt": row["first_prompt"],
+        "last_prompt": row["last_prompt"],
+        "snippet": row["snippet"],
+    } for row in rows]
+
+
+def context(jsonl_path, tail=10):
+    """Recent user/assistant turns from one session."""
+    real = os.path.realpath(jsonl_path)
+    projects = os.path.realpath(PROJECTS_DIR)
+    # The contract is "reads indexed transcripts"; without this the subcommand
+    # will open any file the user can read.
+    if os.path.commonpath([projects, real]) != projects:
+        raise IndexError_(f"{jsonl_path} is not under the transcripts directory")
+    if not os.path.isfile(real):
+        raise IndexError_(f"{jsonl_path} is not a file")
+
+    messages = []
+    try:
+        for role, text in iter_messages(real, {"user", "assistant"}):
+            idx = text.find("<system-reminder>")
+            # A message that BEGINS with a reminder has idx == 0, which is the
+            # shape that actually occurs; `> 0` let all of them through.
+            if idx >= 0:
+                text = text[:idx].strip()
+            if not text:
+                continue
+            messages.append({"role": role, "text": text[:400]})
+    except OSError as exc:
+        raise IndexError_(f"could not read {jsonl_path}: {exc}") from exc
+
+    return messages[-tail:]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("build", help="build or update the index")
+    p_search = sub.add_parser("search", help="search indexed sessions")
+    p_search.add_argument("query")
+    p_search.add_argument("--limit", type=int, default=10)
+    p_context = sub.add_parser("context", help="recent messages from one session")
+    p_context.add_argument("path")
+    p_context.add_argument("--tail", type=int, default=10)
+    args = parser.parse_args()
+
+    try:
+        if args.command == "build":
+            result = build_index()
+        elif args.command == "search":
+            result = search(args.query, args.limit)
+        else:
+            result = context(args.path, args.tail)
+    except IndexError_ as exc:
+        fail(str(exc))
+    except sqlite3.OperationalError as exc:
+        fail(f"database error: {exc}")
+
+    print(json.dumps(result, indent=2 if args.command != "build" else None))
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
-
-    cmd = sys.argv[1]
-
-    if cmd == "build":
-        build_index()
-    elif cmd == "search":
-        if len(sys.argv) < 3:
-            print("Usage: session-index.py search <query> [--limit N]")
-            sys.exit(1)
-        query = sys.argv[2]
-        limit = 10
-        if "--limit" in sys.argv:
-            idx = sys.argv.index("--limit")
-            limit = int(sys.argv[idx + 1])
-        search(query, limit)
-    elif cmd == "context":
-        if len(sys.argv) < 3:
-            print("Usage: session-index.py context <path.jsonl> [--tail N]")
-            sys.exit(1)
-        path = sys.argv[2]
-        tail = 10
-        if "--tail" in sys.argv:
-            idx = sys.argv.index("--tail")
-            tail = int(sys.argv[idx + 1])
-        context(path, tail)
-    else:
-        print(f"Unknown command: {cmd}")
-        sys.exit(1)
+    main()
