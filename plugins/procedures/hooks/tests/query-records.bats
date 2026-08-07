@@ -562,3 +562,54 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"references/decisions/quoted-kind-probe.md"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Silent-wrong-answer guards (#21).
+#
+# Both shapes below used to exit 0 with plausible output, so a caller could not
+# distinguish a bad query from a genuine miss. These tests fail on the parent
+# commit: pre-fix, the repeat case exited 0 with gitflow results and the
+# short-token case exited 0 with empty stdout.
+# ---------------------------------------------------------------------------
+
+@test "repeating --keyword is refused instead of silently keeping the last" {
+  run bash -c "bash '$SCRIPT' --keyword quokkadec --keyword fixpattern"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"more than once"* ]]
+  # The pre-fix bug: last flag won and the first vanished. Assert the dropped
+  # term's record is absent from output, so this fails if last-wins returns.
+  [[ "$output" != *"references/solutions/sample-solution.md"* ]]
+}
+
+@test "repeating a non-keyword flag is also refused" {
+  run bash -c "bash '$SCRIPT' --kind decision --kind solution"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"more than once"* ]]
+}
+
+@test "repeating --full is allowed (idempotent, takes no value)" {
+  run bash -c "bash '$SCRIPT' --keyword quokkadec --full --full"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/sample-decision.md"* ]]
+}
+
+@test "a keyword with no token of 3+ chars exits non-zero, not a silent miss" {
+  run bash -c "bash '$SCRIPT' --keyword 'ci pr'"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"nothing to search"* ]]
+  [[ "$output" == *"NOT 'no matches'"* ]]
+}
+
+@test "a genuine miss still exits 0 with empty stdout" {
+  # The other half of the pair — the fix must not turn real misses into errors.
+  run bash -c "bash '$SCRIPT' --keyword zzzznonexistentquux 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "multiple terms in ONE --keyword string still union" {
+  run bash -c "bash '$SCRIPT' --keyword 'quokkadec fixpattern'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/sample-decision.md"* ]]
+  [[ "$output" == *"references/solutions/sample-solution.md"* ]]
+}
