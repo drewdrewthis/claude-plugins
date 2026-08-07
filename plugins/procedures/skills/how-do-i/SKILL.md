@@ -19,9 +19,11 @@ in your output shape — what governs, the commands verbatim, the traps, and a
 standing label on every source.
 
 Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`,
-plus recall in `mistakes.jsonl`. The scout's Boundaries name the search surface
-and hold the stop rule. A miss returns `NOT FOUND` immediately so the caller can
-improvise and draft the procedure afterward.
+which searches `~/.claude/references/{failure-modes,decisions,solutions,procedures,research,principles}/`
+and `~/.claude/plans/`; recall is `~/.claude/mistakes.jsonl`, which it does not
+cover and the scout greps directly. That is the whole surface — the scout's
+Boundaries forbid going outside it, and its step 5 returns `NOT FOUND` on a
+miss so the caller can improvise and draft the procedure afterward.
 
 If the goal is ambiguous, say which reading you took rather than picking one
 silently.
