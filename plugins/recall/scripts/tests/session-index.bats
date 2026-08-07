@@ -217,17 +217,103 @@ m = json.load(sys.stdin)
 assert not any("noise" in x["text"] for x in m), m'
 }
 
-@test "non-UTF-8 bytes do not silently drop a whole transcript" {
-  # Under LC_ALL=C the locale default raised UnicodeDecodeError, which the
-  # per-file guard swallowed — the index came up near-empty with no signal.
+@test "genuinely non-UTF-8 bytes do not drop a whole transcript" {
+  # An earlier version of this test wrote json.dumps(...) which defaults to
+  # ensure_ascii=True — pure ASCII on disk. It stayed green with the utf-8
+  # handling removed entirely. This writes raw latin-1 bytes that are invalid
+  # UTF-8, so errors="replace" is the only reason the record survives.
   mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
   python3 -c "
 import json
 p = '$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl'
-with open(p,'wb') as f:
-    f.write(json.dumps({'type':'user','message':{'content':'la décision du café naïve'}}).encode('utf-8')+b'\n')"
-  LC_ALL=C run python3 "$SCRIPT" build
+rec = json.dumps({'type':'user','message':{'content':'la decision du cafe naive PLACEHOLDER'}}, ensure_ascii=False)
+raw = rec.replace('PLACEHOLDER', 'X').encode('utf-8').replace(b'X', b'\xe9\xef\xff')
+open(p,'wb').write(raw + b'\n')"
+  run python3 "$SCRIPT" build
+  [ "$status" -eq 0 ]
   echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["indexed"]==1, d; assert d["failed"]==0, d'
+}
+
+@test "an index from an older schema is rebuilt, not left broken" {
+  # CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so an old
+  # index kept its columns and every query died on "no such column: size" —
+  # forever, and silently, because the hook discards output.
+  write_session "-home-me-proj" "aaa" "/home/me/proj" "a conversation worth finding again"
+  python3 -c "
+import sqlite3
+db = sqlite3.connect('$SESSION_INDEX_DB')
+db.execute('CREATE TABLE sessions (session_id TEXT PRIMARY KEY, project TEXT, file_path TEXT, mtime REAL, message_count INTEGER, first_prompt TEXT, last_prompt TEXT)')
+db.execute(\"CREATE VIRTUAL TABLE sessions_fts USING fts5(session_id, project, user_text, tokenize='porter unicode61')\")
+db.commit()"
+  run python3 "$SCRIPT" build
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["total"]==1, d'
+  run python3 "$SCRIPT" search "conversation"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1'
+}
+
+@test "a malformed record is skipped without costing its transcript" {
+  # `"message": null` and a text block missing its "text" key are both real
+  # shapes. Asserting only "some other file still indexed" was vacuous — the
+  # broad per-file guard absorbed the failure and the test passed with the
+  # defensive parsing reverted. What must hold is that the offending FILE is
+  # still indexed (failed==0), with only the bad record dropped.
+  mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  python3 -c "
+import json
+p = '$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl'
+with open(p,'w') as f:
+    f.write(json.dumps({'type':'user','message':None})+chr(10))
+    f.write(json.dumps({'type':'user','message':{'content':[{'type':'text'}]}})+chr(10))
+    f.write(json.dumps({'type':'user','message':{'content':'the salvageable sentence in this transcript'}})+chr(10))"
+  run python3 "$SCRIPT" build
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Traceback"* ]]
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["indexed"]==1, d; assert d["failed"]==0, d'
+  run python3 "$SCRIPT" search "salvageable"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1, "a malformed record cost the whole transcript"'
+}
+
+@test "NOT excludes rather than inverting the query" {
+  # Stripping a leading operator turned `NOT running` into `"running"` — the
+  # exact complement of what was asked.
+  write_session "-home-me-proj" "aaa" "" "we were running the deployment script"
+  write_session "-home-me-proj" "bbb" "" "we were running the pottery glazing"
+  python3 "$SCRIPT" build >/dev/null
+  # Positive direction: the binary form must still work and still exclude.
+  run python3 "$SCRIPT" search "running NOT pottery"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+r = json.load(sys.stdin)
+assert len(r) == 1, r
+assert "deployment" in r[0]["snippet"], r'
+  # Negative direction: a leading NOT is refused, never silently inverted.
+  run python3 "$SCRIPT" search "NOT pottery"
+  [ "$status" -eq 1 ]
+  echo "$output" | python3 -c 'import json,sys; assert "NOT" in json.load(sys.stdin)["error"]'
+}
+
+@test "a prefix term still matches" {
+  # Quoting every token turned `kuber*` into a literal and silently killed
+  # prefix search — a recall regression with no error to notice.
+  write_session "-home-me-proj" "aaa" "" "notes on the kubernetes rollout plan"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "kuber*"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1, "prefix search returned nothing"'
+}
+
+@test "concurrent builds both complete without a lock error" {
+  local i
+  for i in $(seq 1 40); do write_session "-home-me-proj" "s$i" "" "conversation number $i about assorted topics"; done
+  python3 "$SCRIPT" build >"$FIX/b1.out" 2>"$FIX/b1.err" &
+  python3 "$SCRIPT" build >"$FIX/b2.out" 2>"$FIX/b2.err" &
+  wait
+  grep -q "database is locked" "$FIX/b1.err" "$FIX/b2.err" && { echo "lock error under concurrency"; return 1; }
+  run python3 "$SCRIPT" search "assorted"
+  [ "$status" -eq 0 ]
 }
 
 @test "CLAUDE_CONFIG_DIR relocates both the projects dir and the db" {

@@ -15,6 +15,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -36,6 +37,17 @@ PROJECTS_DIR = os.path.expanduser(
 # Prefixes that mark harness scaffolding rather than something a human said.
 NOISE_PREFIXES = ("Base directory for this skill:", "<local-command")
 MIN_TEXT_LEN = 10
+
+# Bump whenever the table shape changes; a mismatch drops and rebuilds.
+SCHEMA_VERSION = 2
+
+# A bare trailing-* prefix term, e.g. `kuber*` — passed through unquoted.
+PREFIX_TERM = re.compile(r"^\w+\*$")
+
+
+def _schema_version(db):
+    """0 for a pre-versioning index (or a fresh file), else the stamped version."""
+    return db.execute("PRAGMA user_version").fetchone()[0]
 
 
 class IndexError_(Exception):
@@ -64,6 +76,16 @@ def get_db():
             pass
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
+    # CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so an
+    # index written by an older version keeps its old columns and every query
+    # then fails ("no such column: size") — permanently, and invisibly, because
+    # the SessionEnd hook discards output. The index is a pure derived cache
+    # rebuildable from the transcripts, so the correct migration is to discard
+    # it rather than carry a ladder of ALTERs.
+    if _schema_version(db) != SCHEMA_VERSION:
+        db.execute("DROP TABLE IF EXISTS sessions")
+        db.execute("DROP TABLE IF EXISTS sessions_fts")
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     db.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             file_path TEXT PRIMARY KEY,
@@ -114,13 +136,19 @@ def iter_messages(jsonl_path, roles):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(obj, dict):
+                continue
             role = obj.get("type")
             if role not in roles:
                 continue
-            content = obj.get("message", {}).get("content", "")
+            # A record can carry `"message": null`, and a text block can arrive
+            # without its "text" key — both are real shapes, and both used to
+            # raise out of the whole build.
+            message = obj.get("message")
+            content = message.get("content", "") if isinstance(message, dict) else ""
             if isinstance(content, list):
                 text = " ".join(
-                    c["text"] for c in content
+                    c.get("text", "") for c in content
                     if isinstance(c, dict) and c.get("type") == "text"
                 )
             elif isinstance(content, str):
@@ -141,21 +169,21 @@ def read_cwd(jsonl_path):
     `/` with `-`, which is lossy — pre-existing hyphens are indistinguishable from
     separators, so the name cannot be decoded back to a path. It writes the real
     cwd into the transcript records instead; that is the only trustworthy source.
+
+    A resumed session records more than one cwd; the LAST is where the work
+    actually happened. Scanning the whole file also catches the transcripts
+    whose first record carries no cwd at all.
     """
-    try:
-        with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
-            for i, line in enumerate(fh):
-                if i > 20:
-                    break
-                try:
-                    cwd = json.loads(line).get("cwd")
-                except json.JSONDecodeError:
-                    continue
-                if cwd:
-                    return cwd
-    except OSError:
-        pass
-    return None
+    found = None
+    with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("cwd"):
+                found = obj["cwd"]
+    return found
 
 
 def display_path(cwd, project):
@@ -205,7 +233,11 @@ def build_index():
         try:
             messages = [text for _, text in iter_messages(f, {"user"})]
             cwd = read_cwd(f)
-        except OSError:
+        except Exception:
+            # Deliberately broad: the failures that actually occur are shape
+            # errors in the record, not I/O. A narrower guard let one malformed
+            # transcript abort the pass — which is the whole point of `failed`,
+            # a typed skip surfaced in the result rather than swallowed.
             failed += 1
             continue
 
@@ -235,7 +267,11 @@ def build_index():
             (f, session_id, project, combined))
 
         indexed += 1
-        db.commit()
+        # Batched rather than per-file: committing every file made a cold build
+        # 3.3x slower, and this runs in a SessionEnd hook. Batching still bounds
+        # how much work an interrupted pass can lose.
+        if indexed % 50 == 0:
+            db.commit()
 
     removed = 0
     for path in existing:
@@ -265,20 +301,39 @@ def build_match_query(query):
     hyphen reads as a column filter (`rate-limiter` -> "no such column: limiter"),
     an apostrophe as an unterminated string. Quoting each bare term makes it a
     literal while leaving the boolean operators the skill relies on intact.
+
+    Enumerated over every FTS5 operator, not only the ones seen to break:
+    AND / OR / NOT (binary, kept), NEAR (needs NEAR(a b) grouping the caller
+    cannot express, so quoted as a literal), `*` prefix (preserved — it is the
+    cheapest recall lever the skill has), and `"` / `(` / `:` / `^`, which are
+    neutralised by quoting.
     """
-    operators = {"OR", "AND", "NOT", "NEAR"}
+    binary_ops = {"AND", "OR", "NOT"}
     out = []
     for token in query.split():
-        if token.upper() in operators and token == token.upper():
+        if token in binary_ops:
+            # Collapse a repeated operator ("a OR OR b") rather than emit a
+            # syntax error.
+            if out and out[-1] in binary_ops:
+                continue
+            out.append(token)
+        elif PREFIX_TERM.match(token):
             out.append(token)
         else:
             out.append('"' + token.replace('"', '""') + '"')
-    # A union built programmatically can end on a dangling operator, which is a
-    # syntax error rather than a no-op.
-    while out and out[-1] in operators:
-        out.pop()
-    while out and out[0] in operators:
+
+    # A leading NOT cannot be honoured: FTS5's NOT is binary, so dropping it
+    # silently returns the exact complement of what was asked for.
+    if out and out[0] == "NOT":
+        raise IndexError_(
+            "a query cannot begin with NOT — FTS5 excludes with 'a NOT b'"
+        )
+    # A union built programmatically can start or end on a dangling operator,
+    # which is a syntax error rather than a no-op.
+    while out and out[0] in binary_ops:
         out.pop(0)
+    while out and out[-1] in binary_ops:
+        out.pop()
     return " ".join(out)
 
 
