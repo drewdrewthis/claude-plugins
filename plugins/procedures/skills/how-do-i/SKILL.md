@@ -18,8 +18,13 @@ Search the record stores, read every candidate in full, and return the proposal
 in your output shape — what governs, the commands verbatim, the traps, and a
 standing label on every source.
 
-Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`;
-the record stores live under `~/.claude/references/**` and `~/.claude/mistakes.jsonl`.
+Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`,
+which searches, under `${CODEX_ROOT:-~/.claude}`,
+`references/{failure-modes,decisions,solutions,procedures,research,principles}/`
+and `plans/`; recall is `mistakes.jsonl`, which it does not
+cover and the scout greps directly. That is the whole surface — the scout's
+Boundaries forbid going outside it, and its step 5 returns `NOT FOUND` on a
+miss so the caller can improvise and draft the procedure afterward.
 
 If the goal is ambiguous, say which reading you took rather than picking one
 silently.

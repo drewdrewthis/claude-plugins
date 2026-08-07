@@ -86,12 +86,26 @@ confident voice and carries a `proc.` id.
    gloss would have excluded.
 
 4. **Pull the traps.** For the same terms, sweep `references/failure-modes/`,
-   `references/solutions/`, and `mistakes.jsonl`. A procedure tells the caller
-   what to do; these tell them what has already gone wrong doing it. The second
-   is usually the more valuable half of your answer.
+   `references/solutions/`, and recall — **count first, then read**:
+   ```bash
+   M="${CODEX_ROOT:-$HOME/.claude}/mistakes.jsonl"
+   grep -icE '<term set>' "$M"              # how many matched
+   grep -iE  '<term set>' "$M" | tail -20   # the 20 most recent
+   ```
+   A procedure tells the caller what to do; these tell them what has already
+   gone wrong doing it. The second is usually the more valuable half of your
+   answer. No new terms and no new stores after this step — reading the records
+   this sweep named is part of it, via step 3's `awk` batch-read.
+   ⚠ if the count exceeds the 20 you read, say so in STANDING NOTES — a cap is
+   allowed, a SILENT one is not; the caller cannot weigh what you did not show
+   them. ⚠ never drop the count: `grep -i` is unanchored and matches inside
+   paths and URLs, so a broad term set can match every line of a 400KB+ file —
+   reading it whole is the latency this agent exists to avoid
 
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
-   search.
+   search. If steps 2-4 found nothing, emit only the `NOT FOUND` section of the
+   output shape — including its `/create-new` line — and stop.   ⚠ a miss is a
+   finished answer, not a reason to widen the search
 
 # Output
 
@@ -109,6 +123,7 @@ TRAPS:
 
 STANDING NOTES:
   - <any source that is draft / single-instance / contradicted elsewhere>
+  - <recall: N matched, 20 read>   # even on a miss — emit when step 4's count exceeds what you read
 
 NOT FOUND: <what you searched for and did not find>
   -> improvise; draft the procedure once it works, via /create-new (kind: procedure)
@@ -129,3 +144,10 @@ means nobody has recorded a failure here yet, which is itself information.
 - Do not return the corpus. A proposal is a distillation with paths, not a
   paste of every doc you opened — the whole point is that the caller's context
   stays small.
+- Never search outside these, under `${CODEX_ROOT:-$HOME/.claude}`:
+  `references/failure-modes/`, `references/decisions/`, `references/solutions/`,
+  `references/procedures/`, `references/research/`, `references/principles/`,
+  `plans/`, and `mistakes.jsonl`. (The first seven are what `query-records.sh`
+  searches.) This scopes what you READ, not where your tools live:
+  running `query-records.sh` is always in bounds. The wider repo, the working
+  tree, and the web are not the answer surface.
