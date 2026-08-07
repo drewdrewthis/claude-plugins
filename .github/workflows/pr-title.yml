@@ -5,11 +5,14 @@ name: pr-title
 # release-please parses to decide the next version. A non-conventional title
 # therefore ships nothing to installed boxes, silently.
 #
-# pull_request_target (not pull_request) so the check also runs on fork PRs.
-# Safe here only because this job never checks out or executes PR code — it
-# reads the title through the API. Do not add a checkout step.
+# `pull_request`, deliberately NOT `pull_request_target`: the latter loads the
+# workflow from the BASE branch, so a change to this guard could never be tested
+# by its own PR. This way the guard grades itself before it lands.
+#
+# `edited` is load-bearing — without it a title fixed after a red check never
+# re-runs, and the stale failure blocks the PR forever.
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, edited, reopened, synchronize]
 
 permissions:
