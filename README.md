@@ -53,8 +53,20 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   plugin-shipped scripts via `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}`
   (substituted by Claude Code in skill and agent markdown) instead of
   upstream's repo-relative paths, which would resolve against the caller's
-  cwd. Host-neutral wording in place of codex-internal file/hook references is
-  a third, prose-only adaptation class and is not individually marked.
+  cwd.
+- **Fork-skill model pin:** a `context: fork` skill inherits the PARENT
+  SESSION's model, not the `model:` its `agent:` declares — the agent-side
+  value is only honoured on the `Agent(subagent_type:)` path. So
+  `skills/how-do-i/SKILL.md` and `skills/am-i-done/SKILL.md` each re-declare
+  `model:` in their own frontmatter, and `hooks/tests/gate-skill-model.bats`
+  holds the two declarations in agreement. Measured on this fork path: an
+  opus-parent session's fork moved to `claude-haiku-4-5` when the skill
+  declared `model: haiku`, while the parent's own turns stayed on opus —
+  the pin binds the fork without touching the caller. Upstream has no
+  equivalent because the gate does not run as a forked skill there.
+
+Host-neutral wording in place of codex-internal file/hook references is a
+further, prose-only adaptation class and is not individually marked.
 
 Verified end-to-end with `claude --plugin-dir`: the gate cycle works as
 shipped — `tool_input.skill` arrives as the bare skill name, the reset hook
@@ -96,9 +108,10 @@ agents gets the self-extension rule ("mint one via `/create-new-sub-agent`"),
 not a drift error about a corruption that does not exist. A matched agent
 missing while *other* agents exist is still exit 3 — real drift.
 
-Vendored from the codex with the same two adaptation classes as `procedures`,
+Vendored from the codex with two of the adaptation classes `procedures` uses,
 each marked `PLUGIN ADAPTATION`: data-root defaults, and host-neutral wording
-in place of codex-internal file/hook references. Tests:
+in place of codex-internal file/hook references. (No fork-skill model pin here
+— this plugin ships no `context: fork` skill.) Tests:
 
 ```
 cd plugins/delegation && bats scripts/tests

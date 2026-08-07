@@ -4,6 +4,9 @@ description: "The gateway to everything the codex knows. Use when you (or the us
 user-invocable: true
 context: fork
 agent: procedure-scout
+# PLUGIN ADAPTATION: fork skills ignore their agent's model: — must match
+# agents/procedure-scout.md. See README "Fork-skill model pin".
+model: sonnet
 background: false
 argument-hint: "<what you're trying to do>"
 ---

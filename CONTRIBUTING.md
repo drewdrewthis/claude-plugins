@@ -30,9 +30,10 @@ templates) is vendored from `orchard-codex@develop-sweatshop`.
 
 - Anything that isn't upstream must be marked `# PLUGIN ADAPTATION: <why>` at
   the point of divergence — the plugin-hosting context (data-root defaults,
-  `${CLAUDE_SKILL_DIR}` script paths) is the only legitimate reason to
-  diverge. See `README.md`'s two documented adaptation classes for the
-  pattern.
+  `${CLAUDE_SKILL_DIR}` script paths) and harness dispatch-path differences
+  (the fork-skill `model:` pin) are the only legitimate reasons to diverge.
+  See `README.md`'s documented adaptation classes for the pattern; adding a
+  divergence means adding its class there in the same PR.
 - Everything else stays byte-close to upstream. A re-sync from
   `develop-sweatshop` should be a small, reviewable diff — don't introduce
   unmarked drift, even a reformat or a "while I'm here" rename.
