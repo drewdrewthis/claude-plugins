@@ -1,8 +1,17 @@
 """Translate a human's words into a valid FTS5 MATCH expression.
 
-Pure and dependency-free: `translate(str) -> str`. Nothing here touches a
-database, the filesystem, or the environment, so every behaviour is directly
-table-testable.
+`translate(str) -> str`. Deterministic and free of filesystem or environment
+access, so every behaviour is directly table-testable.
+
+⚠ It DOES open an in-memory SQLite connection, and that is deliberate. Deciding
+which tokens FTS5 will index is not something a regex can do: SQLite's unicode61
+alphanumeric table is a frozen, hardcoded range list and Python's `re` table
+tracks the interpreter build, so the two diverge on every Unicode release, in
+both directions, forever. Approximating one with the other cost eight rounds of
+silent wrong answers (`_`, then 21 Tai Lue / Vedic marks that emptied results,
+plus ~9,700 characters that silently widened them). The module now ASKS the
+tokenizer instead of predicting it. Purity was a means to testability, and it
+was buying the wrong thing.
 
 FTS5 reads its input as a query language, so ordinary prose detonates it: a
 hyphen reads as a column filter (`rate-limiter` -> "no such column: limiter"),
@@ -30,6 +39,7 @@ be noise.
 """
 
 import re
+import sqlite3
 
 __all__ = ["translate", "Fts5QueryError", "BINARY_OPS"]
 
@@ -41,16 +51,45 @@ BINARY_OPS = ("NOT", "AND", "OR")
 # A bare trailing-* prefix term, e.g. `kuber*` — passed through unquoted.
 PREFIX_TERM = re.compile(r"^\w+\*$")
 
-# Does this token contain anything FTS5's unicode61 tokenizer will actually
-# index? ⚠ NOT `\w`. Python's `\w` includes `_`, which unicode61 treats as a
-# SEPARATOR — so `kubernetes ^_^` quoted `"^_^"` into an empty phrase, and an
-# empty phrase ANDed against real terms matches NOTHING. That is the same
-# empty-phrase defect this check was added to prevent, surviving inside the
-# check itself because the regex was a WIDER oracle than the tokenizer.
-# `[^\W_]` is `\w` minus underscore. test_oracle_matches_tokenizer pins the
-# two against each other over a character sweep, so a future divergence is
-# caught by construction rather than by the next wrong answer.
-TOKENIZABLE = re.compile(r"[^\W_]")
+# The one FTS5 question a regex cannot answer: will the tokenizer index
+# anything for this token? A token it indexes nothing for renders to an EMPTY
+# phrase, and an empty phrase ANDed against real terms matches NOTHING.
+_PROBE = None
+_TOKENIZABLE_CACHE = {}
+
+
+def _tokenizable(raw):
+    r"""True when FTS5's unicode61 tokenizer yields at least one token for `raw`.
+
+    Asks the tokenizer rather than approximating it. Two regexes have already
+    tried and both were wrong in ways that shipped: `\w` kept `_` (a separator
+    to unicode61), and `[^\W_]` kept 21 Tai Lue and Vedic marks — each one
+    quoting into an empty phrase that zeroed the result set — while dropping
+    ~9,700 characters unicode61 would have indexed.
+
+    Cached per token: a cold probe is one INSERT and one MATCH against an
+    in-memory table, and real queries repeat their vocabulary heavily.
+    """
+    global _PROBE
+    if raw in _TOKENIZABLE_CACHE:
+        return _TOKENIZABLE_CACHE[raw]
+    if _PROBE is None:
+        _PROBE = sqlite3.connect(":memory:")
+        # unicode61 alone, NOT porter: stemming changes which token you get
+        # back, never whether there is one, and the question here is only
+        # whether there is one.
+        _PROBE.execute("CREATE VIRTUAL TABLE t USING fts5(b, tokenize='unicode61')")
+    _PROBE.execute("DELETE FROM t")
+    _PROBE.execute("INSERT INTO t(b) VALUES (?)", (raw,))
+    try:
+        answer = _PROBE.execute(
+            "SELECT count(*) FROM t WHERE t MATCH ?", (_quote(raw),)
+        ).fetchone()[0] > 0
+    except sqlite3.OperationalError:
+        # A phrase FTS5 will not parse indexes nothing, by definition.
+        answer = False
+    _TOKENIZABLE_CACHE[raw] = answer
+    return answer
 
 
 class Fts5QueryError(ValueError):
@@ -114,7 +153,7 @@ def _lex(query):
             continue
         elif raw in BINARY_OPS:
             yield raw
-        elif not re.search(TOKENIZABLE, raw):
+        elif not _tokenizable(raw):
             # ⚠ A token with nothing tokenizable in it — a stray `.`, `!`, `-`
             # left by ordinary prose — must be DROPPED, not quoted. Quoting it
             # yields an empty FTS5 phrase, and an empty phrase ANDed against
