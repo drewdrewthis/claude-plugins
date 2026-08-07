@@ -282,6 +282,20 @@ def build_index():
 
     db.commit()
     total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+
+    # The SessionEnd hook discards stdout AND stderr, so `failed` in the return
+    # value is invisible on the only path that runs automatically — a skip
+    # absorbed into a success count. Leave a durable breadcrumb instead.
+    if failed:
+        try:
+            with open(DB_PATH + ".log", "a") as fh:
+                fh.write(
+                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
+                    f"skipped {failed} unreadable transcript(s) of {len(files)}\n"
+                )
+        except OSError:
+            pass
+
     return {
         "indexed": indexed,
         "skipped": skipped,
@@ -311,6 +325,13 @@ def build_match_query(query):
     binary_ops = {"AND", "OR", "NOT"}
     out = []
     for token in query.split():
+        if token == "NEAR":
+            # FTS5 spells proximity NEAR(a b, N); a bare NEAR is not an infix
+            # operator, and quoting it searched for the literal word — so
+            # `running NEAR` returned 0 hits instead of every "running" doc.
+            # Dropping it widens the result set, which is the safe direction for
+            # a recall tool; inverting or emptying it is not.
+            continue
         if token in binary_ops:
             # Collapse a repeated operator ("a OR OR b") rather than emit a
             # syntax error.

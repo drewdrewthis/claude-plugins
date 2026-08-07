@@ -295,6 +295,37 @@ assert "deployment" in r[0]["snippet"], r'
   echo "$output" | python3 -c 'import json,sys; assert "NOT" in json.load(sys.stdin)["error"]'
 }
 
+@test "a dangling or lone operator never silently empties the result" {
+  # `running NEAR` returned 0 of 2 matching docs because NEAR was quoted as a
+  # literal word. Same silent-wrong-answer class as the NOT inversion, found
+  # only by enumerating the operator set rather than patching the reported one.
+  write_session "-home-me-proj" "aaa" "" "we were running the deployment script"
+  write_session "-home-me-proj" "bbb" "" "we were running the pottery glazing"
+  python3 "$SCRIPT" build >/dev/null
+  local q
+  for q in "running NEAR" "running AND" "running OR" "AND running" "running AND AND pottery"; do
+    run python3 "$SCRIPT" search "$q"
+    [ "$status" -eq 0 ] || { echo "errored on: $q"; return 1; }
+    echo "$output" | python3 -c '
+import json,sys
+r = json.load(sys.stdin)
+assert len(r) >= 1, "silently returned nothing"' || { echo "empty result for: $q"; return 1; }
+  done
+  # A query of operators alone has nothing to search for and says so.
+  run python3 "$SCRIPT" search "NEAR"
+  [ "$status" -eq 1 ]
+}
+
+@test "a skipped transcript is recorded where the hook path can be seen" {
+  # The SessionEnd hook discards stdout and stderr, so the `failed` count in the
+  # return value is invisible on the only automatic path.
+  write_session "-home-me-proj" "aaa" "" "a perfectly good conversation here"
+  ln -s "$FIX/nonexistent.jsonl" "$SESSION_INDEX_PROJECTS/-home-me-proj/zzz.jsonl"
+  python3 "$SCRIPT" build >/dev/null 2>&1
+  [ -f "$SESSION_INDEX_DB.log" ]
+  grep -q "skipped 1 unreadable transcript" "$SESSION_INDEX_DB.log"
+}
+
 @test "a prefix term still matches" {
   # Quoting every token turned `kuber*` into a literal and silently killed
   # prefix search — a recall regression with no error to notice.
