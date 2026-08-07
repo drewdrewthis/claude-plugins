@@ -93,9 +93,9 @@ confident voice and carries a `proc.` id.
    A procedure tells the caller what to do; these tell them what has already
    gone wrong doing it. The second is usually the more valuable half of your
    answer. No new terms and no new stores after this step — reading the records
-   this sweep named is part of it.   ⚠ never cap this sweep with `tail`: a
-   dropped trap leaves no trace, and the caller cannot weigh what you did not
-   show them
+   this sweep named is part of it, via step 3's `awk` batch-read.   ⚠ never cap
+   this sweep with `tail`: a dropped trap leaves no trace, and the caller cannot
+   weigh what you did not show them
 
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
    search. If steps 2-4 found nothing, emit only the `NOT FOUND` section of the
@@ -138,11 +138,8 @@ means nobody has recorded a failure here yet, which is itself information.
 - Do not return the corpus. A proposal is a distillation with paths, not a
   paste of every doc you opened — the whole point is that the caller's context
   stays small.
-- Never search outside the stores `query-records.sh` covers, plus
-  `mistakes.jsonl`, under `${CODEX_ROOT:-$HOME/.claude}`. This scopes what you
-  READ, not where your tools live — `query-records.sh` sits under
-  `${CLAUDE_PLUGIN_ROOT}` and running it is always in bounds. Steps 2-4 are
-  every pass you get; the wider repo, the working tree, and the web are not the
-  answer surface. Step 2's synonym expansion is your ONLY widening lever — a
-  bounded search makes a false miss a keyword problem, so spend the breadth
-  there rather than after step 4.
+- Never search outside the stores listed in `scripts/lib/stores.sh` (`STORES`),
+  plus `mistakes.jsonl`, under `${CODEX_ROOT:-$HOME/.claude}`. This scopes what
+  you READ, not where your tools live — `query-records.sh` sits under
+  `${CLAUDE_PLUGIN_ROOT}` and running it is always in bounds. The wider repo,
+  the working tree, and the web are not the answer surface.
