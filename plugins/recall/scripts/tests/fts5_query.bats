@@ -109,6 +109,13 @@ assert_hits() {
   assert_hits "kubernetes AND ." "a c"
   assert_hits "..."              "EMPTY"
   assert_hits "- ! ."            "EMPTY"
+  # Underscore specifically: a word character to Python, a SEPARATOR to
+  # unicode61. The `\w` oracle kept it, so `"^_^"` was an empty phrase and
+  # emptied the whole result — defect 7, the same bug living inside the guard
+  # written to stop defect 6.
+  assert_hits "kubernetes ^_^"   "a c"
+  assert_hits "kubernetes _"     "a c"
+  assert_hits "___"              "EMPTY"
 }
 
 @test "an operator-shaped prefix term is quoted, never emitted as syntax" {
@@ -269,4 +276,15 @@ else:
     raise SystemExit('None was accepted')"
   [ "$status" -eq 0 ]
   [[ "$output" == refused:* ]]
+}
+
+# --- the oracle itself --------------------------------------------------------
+
+@test "the drop-oracle agrees with the real tokenizer, character by character" {
+  # See scripts/tests/oracle_sweep.py — this pins the INVARIANT behind defects 6
+  # and 7 (a token rendering to an empty FTS5 phrase silently empties the
+  # result) rather than patching the regex a fifth time.
+  run python3 "$BATS_TEST_DIRNAME/oracle_sweep.py"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+  [[ "$output" == ok:* ]]
 }
