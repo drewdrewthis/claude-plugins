@@ -19,7 +19,8 @@ in your output shape — what governs, the commands verbatim, the traps, and a
 standing label on every source.
 
 Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`;
-the record stores live under `~/.claude/references/**` and `~/.claude/mistakes.jsonl`.
+the record stores live under `~/.claude/references/**` and `~/.claude/plans/`,
+plus recall in `~/.claude/mistakes.jsonl`.
 
 Those stores are the whole search surface. Query them, then sweep recall for
 the traps — and stop. A miss returns `NOT FOUND` immediately so the caller can

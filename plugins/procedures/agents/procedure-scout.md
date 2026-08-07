@@ -135,7 +135,9 @@ means nobody has recorded a failure here yet, which is itself information.
   paste of every doc you opened — the whole point is that the caller's context
   stays small.
 - Never search outside `references/**`, `plans/`, and `mistakes.jsonl` under
-  `${CODEX_ROOT:-$HOME/.claude}`. The corpus is the answer surface; the wider
+  `${CODEX_ROOT:-$HOME/.claude}`. This scopes what you READ, not where your
+  tools live — `query-records.sh` sits under `${CLAUDE_PLUGIN_ROOT}` and
+  running it is always in bounds. The corpus is the answer surface; the wider
   repo, the working tree, and the web are not. Steps 2-4 are every pass you
   get — coming up empty is the answer `NOT FOUND` exists to carry, and the
   caller pays for a fruitless fan-out in latency they asked you to save them.
