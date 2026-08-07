@@ -386,7 +386,26 @@ assistant_tool() {
   run jq -e '.gate == "HOW_DO_I_GATE"' "$GATE_ESCAPE_LOG"
   [ "$status" -eq 0 ]
 
+  # And with the escape lib itself unreadable, the degraded path must STILL
+  # release. Without the ge_release_or_failopen fallback the undefined function
+  # returns 127 and execution falls through into the deny — a gate denying on a
+  # degraded path is the one outcome fail-open exists to prevent. Test 22 cannot
+  # catch this: it asserts the deny.
+  : > "$GATE_ESCAPE_LOG"; : > "$GATE_FAILOPEN_LOG"
+  BROKE="$TURN_STATE_DIR/broke"
+  mkdir -p "$BROKE"
+  cp -r "$HOOKS" "$BROKE/hooks"
+  chmod 000 "$BROKE/hooks/lib/gate-escape.sh"
+  run env CLAUDE_CODE_AGENT=technician PROCEDURES_ENABLE_HOW_DO_I_GATE=false \
+    GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    bash -c "echo '$PAYLOAD_EDIT' | bash '$BROKE/hooks/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  grep -q 'reset-hook-never-ran' "$GATE_FAILOPEN_LOG"
+  chmod 644 "$BROKE/hooks/lib/gate-escape.sh"
+
   # Armed, same degraded state: still a blind fail-open, unchanged.
+  : > "$GATE_FAILOPEN_LOG"
   : > "$GATE_ESCAPE_LOG"
   run env CLAUDE_CODE_AGENT=technician \
     GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \

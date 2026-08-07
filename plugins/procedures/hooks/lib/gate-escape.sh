@@ -99,6 +99,9 @@ ge__record() {
 ge_release_or_failopen() {
     if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "$1"; then exit 0; fi
     shift
+    # enforce-frontmatter sources this lib but NOT gate-failopen.sh, so the
+    # recorder can legitimately be absent. Release anyway — never return.
+    declare -F gate_failopen >/dev/null 2>&1 || exit 0
     gate_failopen "$@"
 }
 

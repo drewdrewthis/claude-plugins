@@ -36,9 +36,12 @@ SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 
 # PLUGIN ADAPTATION: this gate's own off-switch — userConfig
 # `enable_am_i_done_gate`, on by default. See lib/gate-escape.sh. Sourced here,
-# CALLED below: the switch is evaluated only once this gate knows it would
-# otherwise have blocked, so the escape record means "a gate was released" and
-# not "a hook process started". An unreadable lib leaves the gate ARMED.
+# CALLED at the block point, so the escape record means "a gate was released"
+# rather than "a hook process started". EXCEPTION: on degenerate paths (no jq,
+# unreadable lib) the switch is asked FIRST, before audience filtering — a set
+# switch is a better explanation of a release than blindness, and without jq the
+# audience cannot be known. Those rows are not audience-filtered. An unreadable
+# lib leaves the gate ARMED.
 # shellcheck source=lib/gate-escape.sh
 . "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
 
@@ -48,11 +51,6 @@ SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 # our own absence — release silently (gate-failopen.bats "G5 bootstrap hole").
 # shellcheck source=lib/gate-failopen.sh
 . "$SCRIPT_DIR/lib/gate-failopen.sh" 2>/dev/null || exit 0
-
-# If the escape lib was unreadable, this classifier does not exist — fall back
-# to the plain recorder so every degenerate path still RELEASES. A missing lib
-# must never turn a fail-open into a fall-through.
-declare -F ge_release_or_failopen >/dev/null 2>&1 || ge_release_or_failopen() { shift; gate_failopen "$@"; }
 
 # jq: without it we cannot even read the event name, so every later release
 # would be blind.
