@@ -85,17 +85,21 @@ confident voice and carries a `proc.` id.
    truncation notice, and dumping before selecting wastes context on records a
    gloss would have excluded.
 
-4. **Pull the traps — the last search pass.** For the same terms, sweep
-   `references/failure-modes/`, `references/solutions/`, and recall:
+4. **Pull the traps.** For the same terms, sweep `references/failure-modes/`,
+   `references/solutions/`, and recall:
    ```bash
-   grep -iE '<term set>' "${CODEX_ROOT:-$HOME/.claude}/mistakes.jsonl" | tail -5
+   grep -iE '<term set>' "${CODEX_ROOT:-$HOME/.claude}/mistakes.jsonl"
    ```
    A procedure tells the caller what to do; these tell them what has already
    gone wrong doing it. The second is usually the more valuable half of your
-   answer. Nothing searches after this step.
+   answer. No new terms and no new stores after this step — reading the records
+   this sweep named is part of it.   ⚠ never cap this sweep with `tail`: a
+   dropped trap leaves no trace, and the caller cannot weigh what you did not
+   show them
 
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
-   search. If steps 2-4 found nothing, return `NOT FOUND` now.   ⚠ a miss is a
+   search. If steps 2-4 found nothing, emit only the `NOT FOUND` section of the
+   output shape — including its `/create-new` line — and stop.   ⚠ a miss is a
    finished answer, not a reason to widen the search
 
 # Output
@@ -134,10 +138,11 @@ means nobody has recorded a failure here yet, which is itself information.
 - Do not return the corpus. A proposal is a distillation with paths, not a
   paste of every doc you opened — the whole point is that the caller's context
   stays small.
-- Never search outside `references/**`, `plans/`, and `mistakes.jsonl` under
-  `${CODEX_ROOT:-$HOME/.claude}`. This scopes what you READ, not where your
-  tools live — `query-records.sh` sits under `${CLAUDE_PLUGIN_ROOT}` and
-  running it is always in bounds. The corpus is the answer surface; the wider
-  repo, the working tree, and the web are not. Steps 2-4 are every pass you
-  get — coming up empty is the answer `NOT FOUND` exists to carry, and the
-  caller pays for a fruitless fan-out in latency they asked you to save them.
+- Never search outside the stores `query-records.sh` covers, plus
+  `mistakes.jsonl`, under `${CODEX_ROOT:-$HOME/.claude}`. This scopes what you
+  READ, not where your tools live — `query-records.sh` sits under
+  `${CLAUDE_PLUGIN_ROOT}` and running it is always in bounds. Steps 2-4 are
+  every pass you get; the wider repo, the working tree, and the web are not the
+  answer surface. Step 2's synonym expansion is your ONLY widening lever — a
+  bounded search makes a false miss a keyword problem, so spend the breadth
+  there rather than after step 4.

@@ -22,10 +22,9 @@ Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-r
 the record stores live under `~/.claude/references/**` and `~/.claude/plans/`,
 plus recall in `~/.claude/mistakes.jsonl`.
 
-Those stores are the whole search surface. Query them, then sweep recall for
-the traps — and stop. A miss returns `NOT FOUND` immediately so the caller can
-write the missing procedure; it never widens into the repo, the working tree,
-or the web, which costs the caller the latency this skill exists to save.
+Those stores are the whole search surface — the scout's Boundaries hold the
+rule. A miss returns `NOT FOUND` immediately so the caller can improvise and
+draft the procedure afterward.
 
 If the goal is ambiguous, say which reading you took rather than picking one
 silently.
