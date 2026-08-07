@@ -85,13 +85,18 @@ confident voice and carries a `proc.` id.
    truncation notice, and dumping before selecting wastes context on records a
    gloss would have excluded.
 
-4. **Pull the traps.** For the same terms, sweep `references/failure-modes/`,
-   `references/solutions/`, and `mistakes.jsonl`. A procedure tells the caller
-   what to do; these tell them what has already gone wrong doing it. The second
-   is usually the more valuable half of your answer.
+4. **Pull the traps — the last search pass.** For the same terms, sweep
+   `references/failure-modes/`, `references/solutions/`, and recall:
+   ```bash
+   grep -iE '<term set>' "${CODEX_ROOT:-$HOME/.claude}/mistakes.jsonl" | tail -5
+   ```
+   A procedure tells the caller what to do; these tell them what has already
+   gone wrong doing it. The second is usually the more valuable half of your
+   answer. Nothing searches after this step.
 
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
-   search.
+   search. If steps 2-4 found nothing, return `NOT FOUND` now.   ⚠ a miss is a
+   finished answer, not a reason to widen the search
 
 # Output
 
@@ -129,3 +134,8 @@ means nobody has recorded a failure here yet, which is itself information.
 - Do not return the corpus. A proposal is a distillation with paths, not a
   paste of every doc you opened — the whole point is that the caller's context
   stays small.
+- Never search outside `references/**`, `plans/`, and `mistakes.jsonl` under
+  `${CODEX_ROOT:-$HOME/.claude}`. The corpus is the answer surface; the wider
+  repo, the working tree, and the web are not. Steps 2-4 are every pass you
+  get — coming up empty is the answer `NOT FOUND` exists to carry, and the
+  caller pays for a fruitless fan-out in latency they asked you to save them.

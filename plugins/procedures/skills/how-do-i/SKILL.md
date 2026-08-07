@@ -21,5 +21,10 @@ standing label on every source.
 Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`;
 the record stores live under `~/.claude/references/**` and `~/.claude/mistakes.jsonl`.
 
+Those stores are the whole search surface. Query them, then sweep recall for
+the traps — and stop. A miss returns `NOT FOUND` immediately so the caller can
+write the missing procedure; it never widens into the repo, the working tree,
+or the web, which costs the caller the latency this skill exists to save.
+
 If the goal is ambiguous, say which reading you took rather than picking one
 silently.
