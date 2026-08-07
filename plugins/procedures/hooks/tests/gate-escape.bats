@@ -244,6 +244,11 @@ assistant_tool() {
   # The manifest and the hooks are two halves of one contract; a declared
   # switch nothing reads is a dead knob that reads as armed.
   MANIFEST="$HOOKS/../.claude-plugin/plugin.json"
+  # Non-empty FIRST: a `for` over an empty key list runs zero assertions and
+  # reports ok, so without this the test passed with .userConfig deleted
+  # entirely — vacuous in exactly the state it exists to detect.
+  run jq -e '[.userConfig | keys[] | select(startswith("enable_"))] | length >= 1' "$MANIFEST"
+  [ "$status" -eq 0 ]
   for k in $(jq -r '.userConfig | keys[] | select(startswith("enable_"))' "$MANIFEST"); do
     KEY="$(printf '%s' "${k#enable_}" | tr '[:lower:]' '[:upper:]')"
     # Hooks only — recursing would let a string in THIS file satisfy the
@@ -251,4 +256,90 @@ assistant_tool() {
     run grep -lF "ge_enabled \"$KEY\"" "$HOOKS"/*.sh
     [ "$status" -eq 0 ]
   done
+}
+
+@test "every gate key a hook reads is declared in the manifest" {
+  # The reverse direction. Without it: wire ge_enabled "NEW_GATE" into a hook,
+  # forget the plugin.json entry, and zero manifest keys iterate for it — every
+  # test passes while shipping a gate whose only off-switch is invisible in the
+  # config dialog.
+  MANIFEST="$HOOKS/../.claude-plugin/plugin.json"
+  KEYS="$(grep -ohP 'ge_enabled "\K[A-Z_]+' "$HOOKS"/*.sh | sort -u)"
+  [ -n "$KEYS" ]
+  for KEY in $KEYS; do
+    OPT="enable_$(printf '%s' "$KEY" | tr '[:upper:]' '[:lower:]')"
+    run jq -e --arg k "$OPT" '.userConfig | has($k)' "$MANIFEST"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "each gate records under its OWN key" {
+  # Only how-do-i's record was content-checked, so a copy-paste bug hardcoding
+  # "HOW_DO_I_GATE" into all three call sites would have passed the suite.
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician PROCEDURES_ENABLE_AM_I_DONE_GATE=false \
+    GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" \
+    bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ "$status" -eq 0 ]
+  run jq -e 'select(.gate == "AM_I_DONE_GATE") | .released_by == "PROCEDURES_ENABLE_AM_I_DONE_GATE"' "$GATE_ESCAPE_LOG"
+  [ "$status" -eq 0 ]
+
+  ROOT="$HOME/.claude"
+  mkdir -p "$ROOT/references/decisions"
+  BAD="$ROOT/references/decisions/2026-01-01-no-frontmatter.md"
+  printf '# no frontmatter here\n' > "$BAD"
+  P="{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$BAD\"}}"
+  run env KNOWLEDGE_ROOT="$ROOT" PROCEDURES_ENABLE_FRONTMATTER_CHECK=false \
+    GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" \
+    bash -c "echo '$P' | bash '$HOOKS/enforce-frontmatter.sh'"
+  [ "$status" -eq 0 ]
+  run jq -e 'select(.gate == "FRONTMATTER_CHECK") | .released_by == "PROCEDURES_ENABLE_FRONTMATTER_CHECK"' "$GATE_ESCAPE_LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "an unreadable escape lib leaves every gate ARMED" {
+  # The feature's central fail-safe, asserted in three hook comments and
+  # previously pinned by nothing. Mutation runs on a COPY — reverting the real
+  # tree is how a reviewer wrecked this worktree mid-review.
+  COPY="$(mktemp -d "${BATS_TMPDIR:-/tmp}/esc-copy.XXXXXX")"
+  cp -r "$HOOKS" "$COPY/hooks"
+  chmod 000 "$COPY/hooks/lib/gate-escape.sh"
+
+  start_turn
+  run env CLAUDE_CODE_AGENT=technician PROCEDURES_ENABLE_HOW_DO_I_GATE=false \
+    bash -c "echo '$PAYLOAD_EDIT' | bash '$COPY/hooks/how-do-i-gate.sh'"
+  [[ "$output" == *"HOW-DO-I-GATE"* ]]
+
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician PROCEDURES_ENABLE_AM_I_DONE_GATE=false \
+    bash -c "echo '$STOP' | bash '$COPY/hooks/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
+
+  chmod 644 "$COPY/hooks/lib/gate-escape.sh"
+  rm -rf "$COPY"
+}
+
+@test "a released gate is recorded only when it would otherwise have fired" {
+  # The log must count RELEASES, not hook invocations. Both payloads below are
+  # ones the armed hook ignores anyway, so neither may write a row.
+  start_turn
+  # A subagent — this gate never binds subagents.
+  P="{\"session_id\":\"$SID\",\"agent_id\":\"sub1\",\"tool_name\":\"Edit\",\"tool_input\":{}}"
+  run env CLAUDE_CODE_AGENT=technician PROCEDURES_ENABLE_HOW_DO_I_GATE=false \
+    GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" \
+    bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
+
+  # A write far outside any record store.
+  Q="{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/not-a-record.txt\"}}"
+  run env KNOWLEDGE_ROOT="$HOME/.claude" PROCEDURES_ENABLE_FRONTMATTER_CHECK=false \
+    GATE_ESCAPE_LOG="$GATE_ESCAPE_LOG" \
+    bash -c "echo '$Q' | bash '$HOOKS/enforce-frontmatter.sh'"
+  [ "$status" -eq 0 ]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
 }

@@ -77,9 +77,19 @@ Design rules the gates follow:
   coarser and loses the skills too. A switched-off gate is a *fourth* release
   class: not blind, so it never enters `gate-failopen.jsonl`, but recorded in
   its own `gate-escape.jsonl` — an off-switch nobody can see is how a gate
-  stays off for months. Assumes Claude Code >= v2.1.207, where `pluginConfigs`
-  stopped being read from project-level settings — below that floor a cloned
-  repo can disarm the host's gates. See `hooks/lib/gate-escape.sh`.
+  stays off for months. The record is written at the **release point**, once a
+  gate knows it would otherwise have fired, so the log counts releases and not
+  hook invocations.
+- **Only the userConfig channel carries an isolation property.**
+  `CLAUDE_PLUGIN_OPTION_ENABLE_*` resolves from user/managed settings only from
+  Claude Code v2.1.207 (a floor nothing enforces). The plain
+  `PROCEDURES_ENABLE_*` var is untrusted ambient config — a project's settings
+  `env` block reaches hook subprocesses on every version, so a cloned repo can
+  disarm a gate through it. It exists because a userConfig option has no
+  per-invocation override. Neither channel is tamper-evident: whoever can set
+  the switch can also point `GATE_ESCAPE_LOG` elsewhere. The log is for seeing
+  a gate you left off, not for catching an adversary. See
+  `hooks/lib/gate-escape.sh`.
 
 ## Records
 

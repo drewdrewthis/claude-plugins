@@ -137,11 +137,17 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   checkout you silence a gate by editing it; installed as a plugin you cannot,
   and the only alternative is uninstalling the whole plugin. One boolean per
   gate, on by default, read by that gate alone, and recorded to
-  `gate-escape.jsonl` when it releases. **Requires Claude Code >= v2.1.207**:
-  from that version `pluginConfigs` is read from user/managed settings only, so
-  a cloned repo's own `.claude/settings.json` cannot switch your gates off. On
-  an older CLI it can — the manifest cannot express a version floor, so this
-  line is the only thing enforcing it.
+  `gate-escape.jsonl` when it releases.
+
+  Two channels, and **only one of them is trusted**. The userConfig option
+  (`CLAUDE_PLUGIN_OPTION_ENABLE_*`) resolves from user/managed settings only
+  from Claude Code v2.1.207, so a cloned repo's `.claude/settings.json` cannot
+  set it — a floor nothing here enforces, so an older CLI loses even that. The
+  plain `PROCEDURES_ENABLE_*` var is **untrusted ambient config**: a project's
+  own settings `env` block reaches hook subprocesses on every version, as do
+  `.envrc`, a Makefile, or a wrapper launcher. It exists because a userConfig
+  option has no per-invocation override, not because it is safe. If you need
+  the anti-clone property, set the option and do not rely on the env var.
 
 Host-neutral wording in place of codex-internal file/hook references is a
 further, prose-only adaptation class and is not individually marked.

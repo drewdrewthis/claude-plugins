@@ -21,10 +21,17 @@
 #     option to hook processes under this name, read from USER settings only
 #     (~/.claude/settings.json pluginConfigs[...]). Project-level
 #     .claude/settings.json is ignored for pluginConfigs as of Claude Code
-#     v2.1.207, so a cloned repo cannot disarm a gate on the machine that
-#     clones it — BUT that protection is version-conditional and unenforced:
-#     on an older CLI a repo's own settings.json could set the option.
+#     v2.1.207, and that floor is unenforced here — on an older CLI a repo's
+#     own settings.json could set the option.
 #   PROCEDURES_ENABLE_<KEY>            — plain env, for one-off invocations.
+#     UNTRUSTED AMBIENT CONFIG. It carries no isolation property at all: a
+#     project's .claude/settings.json `env` block reaches hook subprocesses on
+#     EVERY version, and so do .envrc, a Makefile, an npm script, or a wrapper
+#     launcher. A cloned repo CAN disarm a gate through this channel. It exists
+#     because there is no per-invocation override for a userConfig option —
+#     options resolve from settings only — not because it is safe. Anything
+#     relying on "a repo cannot switch my gates off" must say
+#     CLAUDE_PLUGIN_OPTION_* specifically; the claim is false of this channel.
 #
 # EITHER saying false turns the gate off; neither is authoritative over the
 # other. Precedence would make the plain var dead on an installed plugin: the
@@ -35,6 +42,11 @@
 #
 # DEFAULT ON. Only an explicit `false` or `0` turns a gate off; unset, empty, or
 # unrecognised keeps it armed — the fail-safe direction for an off-switch is off.
+#
+# NOT TAMPER-EVIDENT. GATE_ESCAPE_LOG is a plain env var and the append is
+# best-effort, so whoever can set a switch can also send the record to
+# /dev/null. This log exists to show you a gate you left off months ago — not
+# to catch an adversary, which it cannot do.
 #
 # RECORDED, in its OWN log. A switched-off gate is not a fail-open and must
 # never enter gate-failopen.jsonl — that log means "a gate released without

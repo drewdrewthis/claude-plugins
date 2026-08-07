@@ -31,11 +31,12 @@ SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 
 # PLUGIN ADAPTATION: this gate's own off-switch — userConfig
-# `enable_how_do_i_gate`, on by default. See lib/gate-escape.sh. Top level with
-# its own condition; an unreadable lib leaves the gate ARMED.
+# `enable_how_do_i_gate`, on by default. See lib/gate-escape.sh. Sourced here,
+# CALLED below: the switch is evaluated only once this gate knows it would
+# otherwise have denied, so the escape record means "a gate was released" and
+# not "a hook process started". An unreadable lib leaves the gate ARMED.
 # shellcheck source=lib/gate-escape.sh
 . "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
-if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "HOW_DO_I_GATE"; then exit 0; fi
 
 # gate_failopen <gate> <why> [session_id]. Sourced BEFORE the jq check below —
 # jq's absence is itself one of the paths this must record, so the recorder
@@ -88,6 +89,10 @@ ts_is_marked "$SID" how_do_i && exit 0
 # Costs one builtin test, no fork.
 [ -r "$SCRIPT_DIR/../skills/how-do-i/SKILL.md" ] \
     || gate_failopen "how-do-i" "skill-unresolvable" "$SID"
+
+# Everything above said this call WOULD be denied. Only now does the switch
+# matter, so only now is a release worth recording.
+if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "HOW_DO_I_GATE"; then exit 0; fi
 
 # The reason string is the ONLY channel this gate has to the blocked agent —
 # it is read at the moment of denial, by an agent that may have run how-do-i

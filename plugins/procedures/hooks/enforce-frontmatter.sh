@@ -25,12 +25,13 @@ SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 
 # PLUGIN ADAPTATION: this check's own off-switch — userConfig
-# `enable_frontmatter_check`, on by default. See lib/gate-escape.sh. First
-# thing after the shell options, as in the two gates; an unreadable lib leaves
-# the check ARMED.
+# `enable_frontmatter_check`, on by default. See lib/gate-escape.sh. Sourced
+# here, CALLED below the scope filters: the switch is evaluated only once this
+# hook knows the write is a record it would have linted, so the escape record
+# means "a check was released" and not "a Write happened somewhere on disk".
+# An unreadable lib leaves the check ARMED.
 # shellcheck source=lib/gate-escape.sh
 . "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
-if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "FRONTMATTER_CHECK"; then exit 0; fi
 
 command -v jq >/dev/null 2>&1 || exit 0
 INPUT="$(cat 2>/dev/null || true)"
@@ -42,6 +43,10 @@ case "$FILE" in *.md) ;; *) exit 0 ;; esac
 ROOT="${KNOWLEDGE_ROOT:-${CODEX_ROOT:-$HOME/.claude}}"
 case "$FILE" in "$ROOT"/*) ;; *) exit 0 ;; esac
 REL="${FILE#"$ROOT"/}"
+
+# The write IS a record under a store — this check would have linted it. Only
+# now does the switch matter, so only now is a release worth recording.
+if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "FRONTMATTER_CHECK"; then exit 0; fi
 
 LINTER="$SCRIPT_DIR/../scripts/lint-frontmatter.sh"
 [ -x "$LINTER" ] || exit 0
