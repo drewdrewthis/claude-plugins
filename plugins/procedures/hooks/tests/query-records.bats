@@ -683,8 +683,10 @@ REC
   [ "$status" -eq 0 ]
   [[ "$output" == *"titw/somepkg/knowledge/principles/vendored.md"* ]]
   run bash -c "bash '$SCRIPT' --kind principle"
+  [ "$status" -eq 0 ]
   [[ "$output" == *"vendored.md"* ]]
   run bash -c "bash '$SCRIPT' --id prin.vendored-sample"
+  [ "$status" -eq 0 ]
   [[ "$output" == *"vendored.md"* ]]
 }
 
