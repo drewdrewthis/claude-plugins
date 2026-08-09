@@ -11,15 +11,30 @@
 #            itself is the compliance path. Without this the gate denies the
 #            Agent call that would satisfy it. Added 2026-08-02 with the
 #            delegating skills; the pre-delegation gate did not need it.
-#   Read   — of a file under references/procedures/ (the corpus read).
-#   Bash   — read-only shapes on the discovery surface only.
+#   Read   — any file read (Read / Grep / Glob / NotebookRead).
+#   Bash   — any command line that only reads (see lib/readonly-shape.sh).
 #
 # GATE ON ACT, NOT ON LOOK: read-only inspection is allowlisted because a good
 # /how-do-i query cannot be formed before you know what the turn is about. On a
 # diagnostic turn ("the box is down") the useful query depends on what you find.
 # Forcing the skill before any look yields a blind query and a wrong digest.
+#
+# WHY THE DISCOVERY-PATH CO-REQUIREMENT IS GONE: until 2026-08-09 a look also
+# had to NAME `references/procedures/` — a Read anywhere else, or a
+# `tmux capture-pane | grep | tail`, was denied even though the deny message
+# promises read-only commands stay available. That co-requirement was never
+# the safety property it looked like: `rm -rf references/procedures/` names the
+# surface too. The real property is MUTATION, and it is now decided by a
+# command classifier that judges the whole pipeline and fails closed.
 
 set -uo pipefail
+
+# readonly-shape.sh answers "does this Bash line mutate?". Sourced defensively:
+# if it is unreadable, `ros_is_read_only` is undefined and every Bash call is
+# denied — the pre-fix behaviour for all but a handful of shapes, and a deny
+# costs one Skill(how-do-i), so degradation is safe.
+# shellcheck source=readonly-shape.sh
+. "${BASH_SOURCE[0]%/*}/readonly-shape.sh" 2>/dev/null || true
 
 # gal_is_compliance_path <tool_name> <payload> — 0 when the call must be allowed
 # regardless of outstanding invariants.
@@ -30,35 +45,27 @@ gal_is_compliance_path() {
         Skill|Agent) return 0 ;;
     esac
 
-    if [ "$tool" = "Read" ]; then
-        local fp
-        fp="$(printf '%s' "$payload" | jq -r '(.tool_input.file_path // .input.file_path) // empty' 2>/dev/null || true)"
-        case "$fp" in
-            # Traversal is rejected BEFORE the glob: a path like
-            # .../references/procedures/../../CLAUDE.md matches the glob yet
-            # escapes the tree, which would leak arbitrary reads.
-            *..*) return 1 ;;
-            */references/procedures/*|references/procedures/*) return 0 ;;
-        esac
-        return 1
-    fi
+    case "$tool" in
+        Read|NotebookRead|Grep|Glob)
+            local fp
+            fp="$(printf '%s' "$payload" | jq -r '
+                (.tool_input // .input // {})
+                | (.file_path // .notebook_path // .path // "")' 2>/dev/null || true)"
+            # Traversal stays refused. A read is no longer scoped to a tree, so
+            # this no longer guards an escape — it is kept because a `..` path
+            # is nearly always an unintended read of somewhere else, and the
+            # absolute form of the same read is always available.
+            case "$fp" in
+                *..*) return 1 ;;
+            esac
+            return 0 ;;
+    esac
 
     if [ "$tool" = "Bash" ]; then
+        command -v ros_is_read_only >/dev/null 2>&1 || return 1
         local cmd
         cmd="$(printf '%s' "$payload" | jq -r '(.tool_input.command // .input.command) // empty' 2>/dev/null || true)"
-        case "$cmd" in
-            *..*) return 1 ;;
-        esac
-        # SUBSTRING MATCHING ALONE IS UNSAFE: a destructive command that merely
-        # CONTAINS `references/procedures/` (e.g. as an rm argument) would pass.
-        # Anchor on a known read-only invocation shape AND the discovery surface.
-        case "$cmd" in
-            grep\ *|ls\ *|cat\ *|rg\ *|sed\ -n\ *|bash\ scripts/query-records.sh*|scripts/query-records.sh*)
-                case "$cmd" in
-                    *references/procedures/*|*query-records.sh*) return 0 ;;
-                esac
-                ;;
-        esac
+        ros_is_read_only "$cmd" && return 0
         return 1
     fi
 

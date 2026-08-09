@@ -59,7 +59,7 @@ SID="$(ts_session_id "$INPUT")"
 ts_turn_started "$SID" || gate_failopen "how-do-i" "reset-hook-never-ran" "$SID"
 ts_is_marked "$SID" how_do_i && exit 0
 
-jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(how-do-i). Run it before acting, then retry. Reads under references/procedures/ and read-only discovery commands stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
+jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(how-do-i). Run it before acting, then retry. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
