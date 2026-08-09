@@ -174,7 +174,7 @@ fi
 # ---- candidate corpus (all stores, excluding INDEX.md and archived) ----
 ALL_FILES="$(for d in "${ALL_STORES[@]}"; do
     [ -d "$d" ] || continue
-    find "$d" -type f -name '*.md' ! -name 'INDEX.md' ! -path '*_archived*'
+    find -H "$d" -type f -name '*.md' ! -name 'INDEX.md' ! -path '*_archived*'
 done | sort)"
 [ -z "$ALL_FILES" ] && exit 0
 
