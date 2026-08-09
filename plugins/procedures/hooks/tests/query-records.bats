@@ -747,3 +747,24 @@ REC
   [[ "$output" == *"ignoring invalid QUERY_RECORDS_EXTRA_STORES entry: ../escape"* ]]
   [[ "$output" == *"ignoring invalid QUERY_RECORDS_EXTRA_STORES entry: team-*"* ]]
 }
+
+@test "a symlinked store dir (titw projection at ~/.claude/titw) is traversed" {
+  mkdir -p "$FIX/real-titw/corpus/references/principles"
+  cat > "$FIX/real-titw/corpus/references/principles/linked.md" <<'REC'
+---
+id: prin.symlinked-store
+kind: principle
+date: 2026-08-09
+keywords: [symlinkstorekw]
+links: {}
+status: active
+---
+# Symlinked-store record
+REC
+  ln -s "$FIX/real-titw" "$FIX/titw"
+  # titw installs project outside the corpus root and are bridged in by a
+  # symlink; a bare `find` treats the symlink as a file and finds nothing.
+  run bash -c "bash '$SCRIPT' --keyword symlinkstorekw"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"titw/corpus/references/principles/linked.md"* ]]
+}
