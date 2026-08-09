@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.2.3...procedures-v0.3.0) (2026-08-09)
+
+
+### Features
+
+* **procedures:** query the titw vendor store; byte-safe scans ([#33](https://github.com/drewdrewthis/claude-plugins/issues/33)) ([1d23fe2](https://github.com/drewdrewthis/claude-plugins/commit/1d23fe2e873d28a6390a713257c57f448392eac7))
+
 ## [0.2.3](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.2.2...procedures-v0.2.3) (2026-08-07)
 
 
