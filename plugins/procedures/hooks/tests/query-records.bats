@@ -701,3 +701,26 @@ REC
   [[ "$output" == *"references/decisions/bytes.md"* ]]
   [[ "$output" != *"Illegal byte sequence"* ]]
 }
+
+@test "QUERY_RECORDS_EXTRA_STORES adds a store to the scan without a plugin change" {
+  mkdir -p "$FIX/team-kb"
+  cat > "$FIX/team-kb/extra.md" <<'REC'
+---
+id: dec.extra-store-sample
+kind: decision
+date: 2026-08-09
+keywords: [extrastorekw]
+links: {}
+status: active
+---
+# Extra-store record
+REC
+  # Not scanned by default...
+  run bash -c "bash '$SCRIPT' --keyword extrastorekw"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  # ...scanned once the env var names it.
+  run bash -c "QUERY_RECORDS_EXTRA_STORES='team-kb' bash '$SCRIPT' --keyword extrastorekw"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"team-kb/extra.md"* ]]
+}

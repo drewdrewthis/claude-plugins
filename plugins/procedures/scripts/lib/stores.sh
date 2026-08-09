@@ -31,6 +31,16 @@ VENDOR_STORES=(
     titw
 )
 
+# QUERY_RECORDS_EXTRA_STORES — optional, space-separated store paths (relative
+# to the query root) appended to the scan list. Env-based on purpose: settings
+# `env` maps stack by scope (user -> project -> local), so a project can add a
+# store without a plugin release. Like vendor stores, extras are queried, never
+# linted.
+if [ -n "${QUERY_RECORDS_EXTRA_STORES:-}" ]; then
+    # shellcheck disable=SC2206 -- word-splitting is the documented format
+    VENDOR_STORES+=(${QUERY_RECORDS_EXTRA_STORES})
+fi
+
 # Build pipe-alternation of full store paths for grep -E / sed -E patterns.
 STORES_ALT=""
 for _s in "${STORES[@]}"; do

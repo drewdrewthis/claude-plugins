@@ -153,8 +153,8 @@ means nobody has recorded a failure here yet, which is itself information.
 - Never search outside these, under `${CODEX_ROOT:-$HOME/.claude}`:
   `references/failure-modes/`, `references/decisions/`, `references/solutions/`,
   `references/procedures/`, `references/research/`, `references/principles/`,
-  `plans/`, `titw/` (the vendor store: titw-installed packages), and
-  `mistakes.jsonl`. (All but `mistakes.jsonl` are what `query-records.sh`
-  searches.) This scopes what you READ, not where your tools live:
+  `plans/`, `titw/` (the vendor store: titw-installed packages), any stores
+  named in `QUERY_RECORDS_EXTRA_STORES`, and `mistakes.jsonl`. (All but
+  `mistakes.jsonl` are what `query-records.sh` searches.) This scopes what you READ, not where your tools live:
   running `query-records.sh` is always in bounds. The wider repo, the working
   tree, and the web are not the answer surface.
