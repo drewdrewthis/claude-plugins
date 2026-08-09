@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.3.0...procedures-v0.3.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* **procedures:** traverse symlinked store dirs (find -H) ([#36](https://github.com/drewdrewthis/claude-plugins/issues/36)) ([f421166](https://github.com/drewdrewthis/claude-plugins/commit/f421166dd77bc2236de56a11fa8c8467937a810f))
+
 ## [0.3.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.2.3...procedures-v0.3.0) (2026-08-09)
 
 
