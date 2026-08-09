@@ -23,6 +23,14 @@ STORES=(
     references/principles
 )
 
+# Vendor stores (titw-managed, DECISIONS D23 in drewdrewthis/titw): queried by
+# query-records.sh but NOT linted/backfilled — vendored records are validated
+# by `titw check` at publish time, not by the consumer's lint. Kept out of
+# STORES so every existing STORES consumer is untouched by vendored content.
+VENDOR_STORES=(
+    titw
+)
+
 # Build pipe-alternation of full store paths for grep -E / sed -E patterns.
 STORES_ALT=""
 for _s in "${STORES[@]}"; do

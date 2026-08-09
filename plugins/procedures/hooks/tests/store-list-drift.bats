@@ -20,7 +20,7 @@ setup() {
 }
 
 @test "every store in stores.sh is named in the scout's Boundaries" {
-  for s in "${STORES[@]}"; do
+  for s in "${STORES[@]}" "${VENDOR_STORES[@]}"; do
     # references/failure-modes -> failure-modes; plans -> plans
     run grep -qF "${s#references/}" "$AGENT"
     [ "$status" -eq 0 ]
@@ -28,10 +28,15 @@ setup() {
 }
 
 @test "every store in stores.sh is named in the skill's tooling note" {
-  for s in "${STORES[@]}"; do
+  for s in "${STORES[@]}" "${VENDOR_STORES[@]}"; do
     run grep -qF "${s#references/}" "$SKILL"
     [ "$status" -eq 0 ]
   done
+}
+
+@test "query-records searches the vendor store (VENDOR_STORES is live, not decorative)" {
+  run grep -qF 'VENDOR_STORES' "$PLUGIN/scripts/query-records.sh"
+  [ "$status" -eq 0 ]
 }
 
 @test "the docs name no store the SSOT does not have" {

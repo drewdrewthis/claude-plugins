@@ -72,6 +72,10 @@
 
 set -uo pipefail
 
+# Byte-safe text processing: one non-UTF-8 byte anywhere in the corpus makes
+# BSD cut/grep abort under a UTF-8 locale ("Illegal byte sequence" on macOS).
+export LC_ALL=C
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Shared awk libs live next to this script (scripts/lib) — resolved against the
 # REAL script location, independent of the corpus root override below.
@@ -86,8 +90,9 @@ cd "$ROOT" || exit 0
 # SSOT store list — sourced from scripts/lib/stores.sh (defines STORES array).
 # shellcheck source=scripts/lib/stores.sh
 source "$SCRIPT_DIR/lib/stores.sh"
-# query-records uses ALL_STORES as its local name; alias for clarity.
-ALL_STORES=("${STORES[@]}")
+# query-records uses ALL_STORES as its local name; queries also cover the
+# vendor stores (titw-managed packages), which lint/backfill never touch.
+ALL_STORES=("${STORES[@]}" "${VENDOR_STORES[@]}")
 
 # PLUGIN ADAPTATION: owner call — a query returns ALL matches by default;
 # truncation and ranking floors are opt-in knobs, because the scout needs the
