@@ -96,6 +96,15 @@ source "$SCRIPT_DIR/lib/stores.sh"
 # empty EXTRA_STORES safe under `set -u` on bash 3.2 (macOS).
 ALL_STORES=("${STORES[@]}" "${VENDOR_STORES[@]}" ${EXTRA_STORES[@]+"${EXTRA_STORES[@]}"})
 
+# --list-stores: print the scan surface, one store per line, and exit. THE
+# discovery mechanism — agents scope their searches to this output instead of
+# a hand-maintained list in prose (owner call, 2026-08-09; supersedes the
+# inlined-list convention the old store-list-drift guard existed to patrol).
+if [ "${1:-}" = "--list-stores" ]; then
+    printf '%s\n' "${ALL_STORES[@]}"
+    exit 0
+fi
+
 # PLUGIN ADAPTATION: owner call — a query returns ALL matches by default;
 # truncation and ranking floors are opt-in knobs, because the scout needs the
 # full match set. LIMIT=0 means uncapped (total-result cap, applied below);

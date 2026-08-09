@@ -22,11 +22,10 @@ in your output shape — what governs, the commands verbatim, the traps, and a
 standing label on every source.
 
 Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`,
-which searches, under `${CODEX_ROOT:-~/.claude}`,
-`references/{failure-modes,decisions,solutions,procedures,research,principles}/`,
-`plans/`, the `titw/` vendor store (titw-installed packages), and any extra
-stores named in `QUERY_RECORDS_EXTRA_STORES` (space-separated, root-relative —
-settings `env` maps stack by scope, so projects can add stores); recall is `mistakes.jsonl`, which it does not
+which searches the record stores under `${CODEX_ROOT:-~/.claude}` — run it with
+`--list-stores` to see the exact surface (includes the `titw/` vendor store and
+any extras named in `QUERY_RECORDS_EXTRA_STORES`, space-separated root-relative
+paths; settings `env` maps stack by scope, so projects can add stores); recall is `mistakes.jsonl`, which it does not
 cover and the scout greps directly. That is the whole surface — the scout's
 Boundaries forbid going outside it, and its step 5 returns `NOT FOUND` on a
 miss so the caller can improvise and draft the procedure afterward.

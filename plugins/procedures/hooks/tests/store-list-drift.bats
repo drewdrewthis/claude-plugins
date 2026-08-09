@@ -1,14 +1,15 @@
 #!/usr/bin/env bats
-# The scout's search boundary and the skill's tooling note both INLINE the
-# store list. Inlining was chosen deliberately — the previous version pointed
-# at scripts/lib/stores.sh, which the scout cannot read without breaching the
-# very boundary that names it — but it trades auto-freshness for silent drift.
-# This is the guard that buys the freshness back.
+# The store list is discovered at runtime via `query-records.sh --list-stores`,
+# never enumerated in prose (owner call, 2026-08-09 — supersedes the inlined
+# list this file previously guarded). These tests pin the discovery contract:
+# the flag exists, reports the full scan surface, and the docs point at the
+# mechanism instead of freezing a copy.
 #
 # Run: bats hooks/tests/store-list-drift.bats
 
 setup() {
   PLUGIN="$BATS_TEST_DIRNAME/../.."
+  SCRIPT="$PLUGIN/scripts/query-records.sh"
   # shellcheck source=../../scripts/lib/stores.sh
   source "$PLUGIN/scripts/lib/stores.sh"
   AGENT="$PLUGIN/agents/procedure-scout.md"
@@ -19,36 +20,24 @@ setup() {
   [ "${#STORES[@]}" -ge 1 ]
 }
 
-@test "every store in stores.sh is named in the scout's Boundaries" {
-  for s in "${STORES[@]}" "${VENDOR_STORES[@]}"; do
-    # references/failure-modes -> failure-modes; plans -> plans
-    run grep -qF "${s#references/}" "$AGENT"
-    [ "$status" -eq 0 ]
-  done
-}
-
-@test "every store in stores.sh is named in the skill's tooling note" {
-  for s in "${STORES[@]}" "${VENDOR_STORES[@]}"; do
-    run grep -qF "${s#references/}" "$SKILL"
-    [ "$status" -eq 0 ]
-  done
-}
-
-@test "query-records searches the vendor store (VENDOR_STORES is live, not decorative)" {
-  run grep -qF 'VENDOR_STORES' "$PLUGIN/scripts/query-records.sh"
+@test "--list-stores prints every configured store, one per line" {
+  run bash "$SCRIPT" --list-stores
   [ "$status" -eq 0 ]
+  for s in "${STORES[@]}" "${VENDOR_STORES[@]}"; do
+    grep -qxF "$s" <<< "$output"
+  done
 }
 
-@test "the docs name no store the SSOT does not have" {
-  # The reverse direction: a store deleted from stores.sh must not linger in
-  # prose, or the scout searches a surface the tooling no longer covers.
-  # Negative lookbehind for `/`: without it this matches the tail of unrelated
-  # plugin paths like skills/create-new/references/create-procedure.procedure.md
-  # and reports a store that was never claimed.
-  for d in $(grep -ohP '(?<![/\w-])references/[a-z-]+' "$AGENT" "$SKILL" | sort -u); do
-    found=0
-    for s in "${STORES[@]}"; do [ "$s" = "$d" ] && found=1; done
-    # mistakes.jsonl lives outside STORES by design and is not a references/ path.
-    [ "$found" -eq 1 ]
-  done
+@test "--list-stores includes env-configured extra stores" {
+  run bash -c "QUERY_RECORDS_EXTRA_STORES='team-kb' bash '$SCRIPT' --list-stores"
+  [ "$status" -eq 0 ]
+  grep -qxF "team-kb" <<< "$output"
+}
+
+@test "the scout's Boundaries point at the discovery mechanism, not a frozen list" {
+  grep -qF -- '--list-stores' "$AGENT"
+}
+
+@test "the skill's tooling note points at the discovery mechanism, not a frozen list" {
+  grep -qF -- '--list-stores' "$SKILL"
 }
