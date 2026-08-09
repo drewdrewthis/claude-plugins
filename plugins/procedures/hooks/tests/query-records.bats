@@ -663,3 +663,87 @@ EOF
   [[ "$output" == *"references/decisions/sample-decision.md"* ]]
   [[ "$output" == *"references/solutions/sample-solution.md"* ]]
 }
+
+@test "records in the titw vendor store are found by keyword, kind, and id" {
+  mkdir -p "$FIX/titw/somepkg/knowledge/principles"
+  cat > "$FIX/titw/somepkg/knowledge/principles/vendored.md" <<'REC'
+---
+id: prin.vendored-sample
+kind: principle
+date: 2026-08-09
+keywords: [vendoredkw, sample]
+links: {}
+status: active
+---
+# Vendored principle
+
+Body of a titw-installed record.
+REC
+  run bash -c "bash '$SCRIPT' --keyword vendoredkw"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"titw/somepkg/knowledge/principles/vendored.md"* ]]
+  run bash -c "bash '$SCRIPT' --kind principle"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"vendored.md"* ]]
+  run bash -c "bash '$SCRIPT' --id prin.vendored-sample"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"vendored.md"* ]]
+}
+
+@test "a non-UTF-8 byte in one record does not abort the scan (LC_ALL=C)" {
+  # BSD cut/grep under a UTF-8 locale die with "Illegal byte sequence" on a
+  # single invalid byte; the script must stay byte-safe regardless of the
+  # caller's locale.
+  printf -- '---\nid: dec.bytes\nkind: decision\ndate: 2026-08-09\nkeywords: [bytesafekw]\nlinks: {}\nstatus: active\n---\n# Byte \xe9 record\n' \
+    > "$FIX/references/decisions/bytes.md"
+  run bash -c "LC_ALL=en_US.UTF-8 bash '$SCRIPT' --keyword bytesafekw"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/decisions/bytes.md"* ]]
+  [[ "$output" != *"Illegal byte sequence"* ]]
+}
+
+@test "QUERY_RECORDS_EXTRA_STORES adds a store to the scan without a plugin change" {
+  mkdir -p "$FIX/team-kb"
+  cat > "$FIX/team-kb/extra.md" <<'REC'
+---
+id: dec.extra-store-sample
+kind: decision
+date: 2026-08-09
+keywords: [extrastorekw]
+links: {}
+status: active
+---
+# Extra-store record
+REC
+  # Not scanned by default...
+  run bash -c "bash '$SCRIPT' --keyword extrastorekw"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  # ...scanned once the env var names it.
+  run bash -c "QUERY_RECORDS_EXTRA_STORES='team-kb' bash '$SCRIPT' --keyword extrastorekw"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"team-kb/extra.md"* ]]
+}
+
+@test "invalid QUERY_RECORDS_EXTRA_STORES entries are rejected loudly, not scanned" {
+  mkdir -p "$FIX/team-kb"
+  cat > "$FIX/team-kb/extra2.md" <<'REC'
+---
+id: dec.extra-validation
+kind: decision
+date: 2026-08-09
+keywords: [validationkw]
+links: {}
+status: active
+---
+# Validation fixture
+REC
+  # Absolute path, traversal, and glob entries are all dropped with a stderr
+  # notice; the one valid entry still works and nothing errors.
+  run bash -c "QUERY_RECORDS_EXTRA_STORES='/etc ../escape team-* team-kb' bash '$SCRIPT' --keyword validationkw 2>&1"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"team-kb/extra2.md"* ]]
+  [[ "$output" == *"ignoring invalid QUERY_RECORDS_EXTRA_STORES entry: /etc"* ]]
+  [[ "$output" == *"ignoring invalid QUERY_RECORDS_EXTRA_STORES entry: ../escape"* ]]
+  [[ "$output" == *"ignoring invalid QUERY_RECORDS_EXTRA_STORES entry: team-*"* ]]
+}

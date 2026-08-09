@@ -150,10 +150,9 @@ means nobody has recorded a failure here yet, which is itself information.
 - Do not return the corpus. A proposal is a distillation with paths, not a
   paste of every doc you opened — the whole point is that the caller's context
   stays small.
-- Never search outside these, under `${CODEX_ROOT:-$HOME/.claude}`:
-  `references/failure-modes/`, `references/decisions/`, `references/solutions/`,
-  `references/procedures/`, `references/research/`, `references/principles/`,
-  `plans/`, and `mistakes.jsonl`. (The first seven are what `query-records.sh`
-  searches.) This scopes what you READ, not where your tools live:
+- Never search outside the record stores plus `mistakes.jsonl`, under
+  `${CODEX_ROOT:-$HOME/.claude}`. The store list is discovered, not memorized:
+  `query-records.sh --list-stores` prints it (one store per line — the same
+  surface every query scans, including vendor and env-configured stores). This scopes what you READ, not where your tools live:
   running `query-records.sh` is always in bounds. The wider repo, the working
   tree, and the web are not the answer surface.
