@@ -91,8 +91,10 @@ cd "$ROOT" || exit 0
 # shellcheck source=scripts/lib/stores.sh
 source "$SCRIPT_DIR/lib/stores.sh"
 # query-records uses ALL_STORES as its local name; queries also cover the
-# vendor stores (titw-managed packages), which lint/backfill never touch.
-ALL_STORES=("${STORES[@]}" "${VENDOR_STORES[@]}")
+# vendor stores (titw-managed packages) and any env-configured extra stores —
+# neither of which lint/backfill ever touch. The ${arr[@]+...} idiom keeps an
+# empty EXTRA_STORES safe under `set -u` on bash 3.2 (macOS).
+ALL_STORES=("${STORES[@]}" "${VENDOR_STORES[@]}" ${EXTRA_STORES[@]+"${EXTRA_STORES[@]}"})
 
 # PLUGIN ADAPTATION: owner call — a query returns ALL matches by default;
 # truncation and ranking floors are opt-in knobs, because the scout needs the

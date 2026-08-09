@@ -27,18 +27,32 @@ STORES=(
 # query-records.sh but NOT linted/backfilled — vendored records are validated
 # by `titw check` at publish time, not by the consumer's lint. Kept out of
 # STORES so every existing STORES consumer is untouched by vendored content.
+# shellcheck disable=SC2034  # consumed by sourcing scripts (query-records.sh)
 VENDOR_STORES=(
     titw
 )
 
-# QUERY_RECORDS_EXTRA_STORES — optional, space-separated store paths (relative
-# to the query root) appended to the scan list. Env-based on purpose: settings
-# `env` maps stack by scope (user -> project -> local), so a project can add a
-# store without a plugin release. Like vendor stores, extras are queried, never
-# linted.
+# QUERY_RECORDS_EXTRA_STORES — optional, space-separated, root-relative store
+# paths that query-records.sh appends to its scan list. A SEPARATE array from
+# VENDOR_STORES: extras are runtime config, so they are neither linted nor part
+# of the drift-tested doc contract. Env-based on purpose: settings `env` maps
+# stack by scope (user -> project -> local), so a project can add a store
+# without a plugin release. Entries are literal relative paths — absolute
+# paths, `..`, and glob characters are rejected (loudly, on stderr).
+# shellcheck disable=SC2034  # consumed by sourcing scripts (query-records.sh)
+EXTRA_STORES=()
 if [ -n "${QUERY_RECORDS_EXTRA_STORES:-}" ]; then
-    # shellcheck disable=SC2206 -- word-splitting is the documented format
-    VENDOR_STORES+=(${QUERY_RECORDS_EXTRA_STORES})
+    set -f
+    for _e in ${QUERY_RECORDS_EXTRA_STORES}; do
+        case "$_e" in
+            /* | *..* | *[\*\?\[]* )
+                echo "stores.sh: ignoring invalid QUERY_RECORDS_EXTRA_STORES entry: $_e" >&2 ;;
+            * )
+                EXTRA_STORES+=("$_e") ;;
+        esac
+    done
+    set +f
+    unset _e
 fi
 
 # Build pipe-alternation of full store paths for grep -E / sed -E patterns.
