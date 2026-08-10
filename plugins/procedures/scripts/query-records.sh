@@ -26,6 +26,10 @@
 #   --kind <kind>      records whose frontmatter `kind:` equals <kind>.
 #   --id <id>          the record whose frontmatter `id:` equals <id> exactly.
 #   --links-to <id>    records whose `links:` value references <id>.
+#   --project <repo>   records whose frontmatter `project:` equals <repo>
+#                      exactly, or whose repo basename equals it — so
+#                      `--project langwatch` matches `project: langwatch/langwatch`.
+#                      Records without a `project:` key never match.
 #   --limit <N>        cap the total result count (env QUERY_RECORDS_LIMIT).
 #                      0/absent = all matches (the default).
 #   --full             after the match list, print the FULL CONTENT of every
@@ -157,6 +161,7 @@ Q_KEYWORD=""
 Q_KIND=""
 Q_ID=""
 Q_LINKS_TO=""
+Q_PROJECT=""
 Q_FULL=0
 Q_RECALL=""
 Q_CAT=0
@@ -191,6 +196,7 @@ while [ "$#" -gt 0 ]; do
         --id)        seen_once "$1"; Q_ID="${2:-}"; shift 2 ;;
         --links-to)  seen_once "$1"; Q_LINKS_TO="${2:-}"; shift 2 ;;
         --recall)    seen_once "$1"; Q_RECALL="${2:-}"; shift 2 ;;
+        --project)   seen_once "$1"; Q_PROJECT="${2:-}"; shift 2 ;;
         --limit)     seen_once "$1"; LIMIT="${2:-0}"; shift 2 ;;
         --full)      Q_FULL=1; shift ;;
         # --cat is TERMINAL: it consumes the rest of argv as record paths, so a
@@ -217,7 +223,7 @@ case "$LIMIT" in ''|*[!0-9]*) echo "query-records: --limit needs a non-negative 
 # requirement below, which it would otherwise trip.
 if [ "$Q_CAT" -eq 1 ]; then
     if [ -n "$Q_KEYWORD" ] || [ -n "$Q_KIND" ] || [ -n "$Q_ID" ] || [ -n "$Q_LINKS_TO" ] \
-       || [ -n "$Q_RECALL" ] || [ "$Q_FULL" -eq 1 ]; then
+       || [ -n "$Q_RECALL" ] || [ -n "$Q_PROJECT" ] || [ "$Q_FULL" -eq 1 ]; then
         echo "query-records: --cat is its own mode — it dumps the records you name, so it takes no query flags" >&2
         exit 2
     fi
@@ -234,8 +240,8 @@ if [ "$Q_CAT" -eq 1 ]; then
     fi
 fi
 
-if [ "$Q_CAT" -eq 0 ] && [ -z "$Q_KEYWORD" ] && [ -z "$Q_KIND" ] && [ -z "$Q_ID" ] && [ -z "$Q_LINKS_TO" ] && [ -z "$Q_RECALL" ]; then
-    echo "query-records: need at least one of --keyword/--kind/--id/--links-to/--recall" >&2
+if [ "$Q_CAT" -eq 0 ] && [ -z "$Q_KEYWORD" ] && [ -z "$Q_KIND" ] && [ -z "$Q_ID" ] && [ -z "$Q_LINKS_TO" ] && [ -z "$Q_RECALL" ] && [ -z "$Q_PROJECT" ]; then
+    echo "query-records: need at least one of --keyword/--kind/--id/--links-to/--recall/--project" >&2
     exit 2
 fi
 
@@ -245,7 +251,7 @@ fi
 # plugin the source of truth for query-records machinery. The codex's own
 # copy is a frozen older version that never covered mistakes.jsonl.
 if [ -n "$Q_RECALL" ]; then
-    if [ -n "$Q_KEYWORD" ] || [ -n "$Q_KIND" ] || [ -n "$Q_ID" ] || [ -n "$Q_LINKS_TO" ] || [ "$Q_FULL" -eq 1 ]; then
+    if [ -n "$Q_KEYWORD" ] || [ -n "$Q_KIND" ] || [ -n "$Q_ID" ] || [ -n "$Q_LINKS_TO" ] || [ -n "$Q_PROJECT" ] || [ "$Q_FULL" -eq 1 ]; then
         echo "query-records: --recall is its own mode — combine only with --limit" >&2
         exit 2
     fi
@@ -456,7 +462,7 @@ fi
 # PLUGIN ADAPTATION: fail loud, not silently-empty — plugin runs on arbitrary
 # hosts whose awk may lack nextfile.
 if ! SCANNED="$(printf '%s\n' "$ALL_FILES" | tr '\n' '\0' \
-    | xargs -0 awk -v qkind="$Q_KIND" -v qid="$Q_ID" -v qlinks="$Q_LINKS_TO" \
+    | xargs -0 awk -v qkind="$Q_KIND" -v qid="$Q_ID" -v qlinks="$Q_LINKS_TO" -v qproject="$Q_PROJECT" \
         -f "$LIB_DIR/record-scan.awk")"; then
     echo "query-records: record scan failed (awk unusable or lib missing) — NOT 'no matches'" >&2
     exit 3

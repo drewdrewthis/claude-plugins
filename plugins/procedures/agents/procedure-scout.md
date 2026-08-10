@@ -128,6 +128,11 @@ confident voice and carries a `proc.` id.
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --links-to <id-you-already-found>
    ```
 
+   When the goal names a repository, add `--project <repo>` (owner/name or bare
+   repo name) to scope the survey to records carrying that frontmatter
+   `project:` key. Records without one are EXCLUDED, so a scoped query is never
+   a substitute for the unscoped one — run both.
+
    Gloss calls only (no `--full`). Expand synonyms — the caller's words rarely
    match the corpus's — and search the *capability* as well as the identifier:
    "the cache", not just the function name. `--links-to` on a record you already

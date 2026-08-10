@@ -41,6 +41,7 @@ date: 2026-06-12
 keywords: [autonomy, recipe, fixpattern]
 links: { decisions: [dec.sample-quokka] }
 status: resolved
+project: langwatch/langwatch
 ---
 # Sample solution record
 
@@ -126,6 +127,53 @@ teardown() {
   [[ "$output" == *"references/solutions/sample-solution.md"* ]]
   # the decision itself does not link to its own id
   [[ "$output" != *"sample-decision.md"* ]]
+}
+
+# ---- --project scopes to a repository ----
+
+@test "--project owner/name finds the scoped record and excludes unscoped ones" {
+  run bash -c "bash '$SCRIPT' --project langwatch/langwatch"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/solutions/sample-solution.md"* ]]
+  [[ "$output" != *"sample-decision.md"* ]]
+}
+
+@test "--project bare repo name matches a record whose project is owner/name" {
+  run bash -c "bash '$SCRIPT' --project langwatch"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/solutions/sample-solution.md"* ]]
+}
+
+@test "--project AND-combines with --keyword" {
+  run bash -c "bash '$SCRIPT' --keyword autonomy --project langwatch/langwatch"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"references/solutions/sample-solution.md"* ]]
+  # decision matches the keyword but carries no project -> excluded
+  [[ "$output" != *"sample-decision.md"* ]]
+}
+
+@test "--project with no matching record is silent, exit 0" {
+  run bash -c "bash '$SCRIPT' --project no-such/repo"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "record-scan.awk matches a quoted project scalar" {
+  cat > "$FIX/references/decisions/quoted-project.md" <<'EOF'
+---
+id: dec.quoted-project
+kind: decision
+date: 2026-08-10
+keywords: [quotedproj]
+links: {}
+status: active
+project: "langwatch/scenario"
+---
+# Quoted project record
+EOF
+  run bash -c "bash '$SCRIPT' --project langwatch/scenario"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"quoted-project.md"* ]]
 }
 
 # ---- no-match is silent (empty stdout, exit 0) ----
