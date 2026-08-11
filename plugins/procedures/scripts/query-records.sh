@@ -39,6 +39,18 @@
 #                      Piping --full to a truncating consumer (head/less-q) may
 #                      print a benign `xargs: awk: terminated by signal 13` on
 #                      stderr (SIGPIPE); stdout is unaffected.
+#   --recall <toks>    field-anchored recall over mistakes.jsonl (its own mode;
+#                      combine only with --limit). Tokens are matched against
+#                      the VALUES of the semantic fields (pattern, description,
+#                      correction, face, category, skill, summary, what, fix) —
+#                      never keys, paths, URLs, or session ids, so a broad term
+#                      set cannot return path-noise the way a raw `grep -i` of
+#                      the file does. Output on a hit: a `recall: N matched`
+#                      count line, then the most recent 20 matches (override
+#                      with --limit; 0 = all). No match: empty stdout, exit 0,
+#                      same as every other mode.
+#                      Matcher: scripts/lib/recall-match.awk. File:
+#                      $ROOT/mistakes.jsonl (env QUERY_RECORDS_RECALL_FILE).
 #   --rel-ratio <X>    matcher's relative floor, within a kind bucket a
 #                      candidate scoring < X * (bucket top score) is dropped
 #                      (env QUERY_RECORDS_REL_RATIO). 0 disables this
@@ -128,6 +140,7 @@ Q_KIND=""
 Q_ID=""
 Q_LINKS_TO=""
 Q_FULL=0
+Q_RECALL=""
 
 # PLUGIN ADAPTATION: upstream silently keeps the last occurrence of a repeated
 # flag. For a discovery tool a confident wrong answer is worse than an error, so
@@ -157,6 +170,7 @@ while [ "$#" -gt 0 ]; do
         --kind)      seen_once "$1"; Q_KIND="${2:-}"; shift 2 ;;
         --id)        seen_once "$1"; Q_ID="${2:-}"; shift 2 ;;
         --links-to)  seen_once "$1"; Q_LINKS_TO="${2:-}"; shift 2 ;;
+        --recall)    seen_once "$1"; Q_RECALL="${2:-}"; shift 2 ;;
         --limit)     seen_once "$1"; LIMIT="${2:-0}"; shift 2 ;;
         --full)      Q_FULL=1; shift ;;
         --rel-ratio) seen_once "$1"; REL_RATIO="${2:-}"; shift 2 ;;
@@ -166,9 +180,64 @@ while [ "$#" -gt 0 ]; do
 done
 case "$LIMIT" in ''|*[!0-9]*) echo "query-records: --limit needs a non-negative integer (0 = uncapped)" >&2; exit 2 ;; esac
 
-if [ -z "$Q_KEYWORD" ] && [ -z "$Q_KIND" ] && [ -z "$Q_ID" ] && [ -z "$Q_LINKS_TO" ]; then
-    echo "query-records: need at least one of --keyword/--kind/--id/--links-to" >&2
+if [ -z "$Q_KEYWORD" ] && [ -z "$Q_KIND" ] && [ -z "$Q_ID" ] && [ -z "$Q_LINKS_TO" ] && [ -z "$Q_RECALL" ]; then
+    echo "query-records: need at least one of --keyword/--kind/--id/--links-to/--recall" >&2
     exit 2
+fi
+
+# ---- recall mode: field-anchored sweep over mistakes.jsonl ----
+# PLUGIN ADAPTATION: recall has no upstream counterpart to vendor from —
+# orchard-codex#268 phase 1 removed these scripts from the codex, making this
+# plugin the source of truth for query-records machinery. The codex's own
+# copy is a frozen older version that never covered mistakes.jsonl.
+if [ -n "$Q_RECALL" ]; then
+    if [ -n "$Q_KEYWORD" ] || [ -n "$Q_KIND" ] || [ -n "$Q_ID" ] || [ -n "$Q_LINKS_TO" ] || [ "$Q_FULL" -eq 1 ]; then
+        echo "query-records: --recall is its own mode — combine only with --limit" >&2
+        exit 2
+    fi
+    RECALL_FILE="${QUERY_RECORDS_RECALL_FILE:-$ROOT/mistakes.jsonl}"
+    if [ ! -f "$RECALL_FILE" ]; then
+        # Same contract as exit 3 elsewhere: "no store" must not read as "no
+        # matches".
+        echo "query-records: recall store not found: $RECALL_FILE — NOT 'no matches'" >&2
+        exit 3
+    fi
+    # Recall tokenization differs from --keyword: whitespace separates TERMS,
+    # and punctuation inside a term is kept as a phrase joint ("pickup-loop"
+    # matches the phrase "pickup loop"/"pickup-loop", never bare "loop").
+    # Splitting phrases into independent tokens made a broad term set match
+    # most of the file — common words like "type" hit everywhere.
+    TOKEN_FILE="$(mktemp)"
+    trap 'rm -f "$TOKEN_FILE"' EXIT
+    printf '%s' "$Q_RECALL" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -s '[:space:]' '\n' \
+        | awk -v min="$MIN_TOKEN_LEN" '{ s = $0; gsub(/[^a-z0-9]/, "", s); if (length(s) >= min) print }' \
+        | sort -u > "$TOKEN_FILE"
+    if [ ! -s "$TOKEN_FILE" ]; then
+        echo "query-records: --recall \"$Q_RECALL\" has no token of $MIN_TOKEN_LEN+ characters — nothing to search." >&2
+        echo "query-records: this is NOT 'no matches'. Tokens shorter than $MIN_TOKEN_LEN characters are dropped; use a longer term." >&2
+        exit 2
+    fi
+    if ! HITS="$(awk -v tokfile="$TOKEN_FILE" -f "$LIB_DIR/recall-match.awk" "$RECALL_FILE")"; then
+        echo "query-records: recall scan failed (awk unusable or lib missing) — NOT 'no matches'" >&2
+        exit 3
+    fi
+    [ -z "$HITS" ] && exit 0
+    TOTAL="$(printf '%s\n' "$HITS" | grep -c .)"
+    # Default cap 20 (most recent — file order is chronological); an explicit
+    # --limit overrides, 0 = uncapped. The count line always prints, so a cap
+    # can never be silent.
+    RECALL_CAP=20
+    case "$SEEN_FLAGS" in *" --limit "*) RECALL_CAP="$LIMIT" ;; esac
+    if [ "$RECALL_CAP" -gt 0 ] && [ "$TOTAL" -gt "$RECALL_CAP" ]; then
+        printf 'recall: %d matched — showing the %d most recent (raise --limit for more)\n' "$TOTAL" "$RECALL_CAP"
+        printf '%s\n' "$HITS" | tail -n "$RECALL_CAP"
+    else
+        printf 'recall: %d matched\n' "$TOTAL"
+        printf '%s\n' "$HITS"
+    fi
+    exit 0
 fi
 
 # ---- candidate corpus (all stores, excluding INDEX.md and archived) ----

@@ -91,22 +91,25 @@ confident voice and carries a `proc.` id.
    truncation notice, and dumping before selecting wastes context on records a
    gloss would have excluded.
 
-4. **Pull the traps.** For the same terms, sweep `references/failure-modes/`,
-   `references/solutions/`, and recall — **count first, then read**:
+4. **Pull the traps.** For the same terms, sweep the failure-kind stores from
+   step 2's `--list-stores` boundary, then recall:
+
    ```bash
-   M="${CODEX_ROOT:-$HOME/.claude}/mistakes.jsonl"
-   grep -icE '<term set>' "$M"              # how many matched
-   grep -iE  '<term set>' "$M" | tail -20   # the 20 most recent
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --recall '<term set>'
    ```
-   A procedure tells the caller what to do; these tell them what has already
-   gone wrong doing it. The second is usually the more valuable half of your
-   answer. No new terms and no new stores after this step — reading the records
-   this sweep named is part of it, via step 3's `awk` batch-read.
-   ⚠ if the count exceeds the 20 you read, say so in STANDING NOTES — a cap is
-   allowed, a SILENT one is not; the caller cannot weigh what you did not show
-   them. ⚠ never drop the count: `grep -i` is unanchored and matches inside
-   paths and URLs, so a broad term set can match every line of a 400KB+ file —
-   reading it whole is the latency this agent exists to avoid
+
+   Output is a `recall: N matched` count line, then the 20 most recent hits
+   (raise `--limit` only when the count says more exist and the overflow is
+   plausibly on-goal). Whitespace separates terms; keep phrases hyphenated
+   (`pickup-loop`), never split them. No new terms and no new stores after
+   this step — reading the records this sweep named is part of it, via step
+   3's `awk` batch-read.
+   ⚠ never fall back to a raw `grep` over `mistakes.jsonl` — unanchored
+   `grep -i` matches inside paths and URLs; `--recall` matches only semantic
+   field values, whole-word.
+   ⚠ if the count exceeds the hits you read, say so in STANDING NOTES — a cap
+   is allowed, a SILENT one is not; the caller cannot weigh what you did not
+   show them
 
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
    search. If steps 2-4 found nothing, emit only the `NOT FOUND` section of the
