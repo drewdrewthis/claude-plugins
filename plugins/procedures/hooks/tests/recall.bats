@@ -2,6 +2,9 @@
 # Tests for query-records.sh --recall — field-anchored recall over
 # mistakes.jsonl (scripts/lib/recall-match.awk).
 #
+# PLUGIN ADAPTATION: no upstream source — the plugin is the source of truth
+# for query-records machinery post orchard-codex#268 phase 1.
+#
 # Run: bats hooks/tests/recall.bats
 
 setup() {
@@ -28,6 +31,19 @@ teardown() { rm -rf "$FIX"; }
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "recall: 2 matched" ]
   [[ "$output" == *"skipped-check"* ]]
+}
+
+@test "recall: every semantic field is matchable" {
+  # One record carrying a unique term in EACH field recall-match.awk anchors
+  # to — a field silently dropped from FIELDS would fail its probe here.
+  cat > "$FIX/mistakes.jsonl" <<'EOF'
+{"ts":"2026-03-01T00:00:00Z","session":"f1","pattern":"zubpattern probe","description":"zubdescription probe","correction":"zubcorrection probe","face":"zubface probe","category":"zubcategory","skill":"zubskill probe","summary":"zubsummary probe","what":"zubwhat probe","fix":"zubfix probe"}
+EOF
+  for t in zubpattern zubdescription zubcorrection zubface zubcategory zubskill zubsummary zubwhat zubfix; do
+    run bash "$SCRIPT" --recall "$t"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "recall: 1 matched" ]
+  done
 }
 
 @test "recall: parses spaced-json records (\"key\": \"value\")" {
