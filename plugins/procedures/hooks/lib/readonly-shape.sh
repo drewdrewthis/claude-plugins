@@ -50,6 +50,17 @@ ros__nth_nonflag() {
 # ros__git_is_read_only <args-after-git…>
 ros__git_is_read_only() {
     local sub a
+    # Options that make an otherwise-read-only subcommand execute an external
+    # program: `grep -O<pager>`/`--open-files-in-pager`, `diff --ext-diff`,
+    # and `--config-env` (injects config such as core.pager from env). Rejected
+    # before the subcommand allowlist. Attached `-c<k>=<v>` is invalid git
+    # syntax, and separate `-c <k>=<v>` already fails closed: its value word
+    # becomes the "subcommand" and misses the allowlist.
+    for a in "$@"; do
+        case "$a" in
+            -O*|--open-files-in-pager*|--ext-diff|--config-env*) return 1 ;;
+        esac
+    done
     sub="$(ros__nth_nonflag 1 "$@")"
     case "$sub" in
         status|log|show|diff|blame|describe|shortlog|rev-parse|rev-list|\
@@ -107,12 +118,13 @@ ros__stage_is_read_only() {
     local a
     case "$bin" in
         # No write mode, whatever the arguments. `cd` changes only this shell's
-        # own working directory, which no file outlives.
-        cat|head|tail|nl|wc|cut|sort|uniq|tr|rev|column|comm|diff|cmp|\
-        basename|dirname|realpath|readlink|echo|printf|date|pwd|cd|whoami|\
+        # own working directory, which no file outlives. (`ip` is deliberately
+        # absent: `ip link set`/`addr add`/`route del` mutate network state.)
+        cat|head|tail|nl|wc|cut|tr|rev|column|comm|diff|cmp|\
+        basename|dirname|realpath|readlink|echo|printf|pwd|cd|whoami|\
         hostname|uname|id|stat|file|du|df|free|uptime|ps|pgrep|pstree|\
-        jq|yq|grep|egrep|fgrep|rg|ls|tree|seq|md5sum|sha256sum|which|\
-        hexdump|xxd|strings|lsof|ss|ip|getent|type|true|test)
+        jq|grep|egrep|fgrep|rg|ls|tree|seq|md5sum|sha256sum|which|\
+        hexdump|strings|lsof|ss|getent|type|true|test)
             return 0 ;;
 
         # Read-only unless asked to edit in place.
@@ -120,6 +132,29 @@ ros__stage_is_read_only() {
             for a in "$@"; do
                 case "$a" in -i*|--in-place*) return 1 ;; esac
             done
+            return 0 ;;
+
+        # Read-only unless an option or operand names an OUTPUT file / sets
+        # system state.
+        sort)
+            for a in "$@"; do
+                case "$a" in -o*|--output*) return 1 ;; esac
+            done
+            return 0 ;;
+        yq)
+            for a in "$@"; do
+                case "$a" in -i|--in-place*) return 1 ;; esac
+            done
+            return 0 ;;
+        date)
+            for a in "$@"; do
+                case "$a" in -s*|--set*) return 1 ;; esac
+            done
+            return 0 ;;
+        uniq|xxd)
+            # A second file operand is an output file (`uniq in out`,
+            # `xxd -r in out`).
+            ros__nth_nonflag 2 "$@" >/dev/null 2>&1 && return 1
             return 0 ;;
 
         # A reader until an action primary turns it into a writer.

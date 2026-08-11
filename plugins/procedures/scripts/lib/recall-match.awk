@@ -1,5 +1,8 @@
 # recall-match.awk — field-anchored substring match over mistakes.jsonl.
 #
+# PLUGIN ADAPTATION: no upstream source — the plugin is the source of truth
+# for query-records machinery post orchard-codex#268 phase 1.
+#
 # Input: JSON-lines records on stdin/files. Var: tokfile (one lowercase token
 # per line, pre-tokenized by the caller the same way --keyword tokenizes).
 #

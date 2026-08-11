@@ -186,6 +186,10 @@ if [ -z "$Q_KEYWORD" ] && [ -z "$Q_KIND" ] && [ -z "$Q_ID" ] && [ -z "$Q_LINKS_T
 fi
 
 # ---- recall mode: field-anchored sweep over mistakes.jsonl ----
+# PLUGIN ADAPTATION: recall has no upstream counterpart to vendor from —
+# orchard-codex#268 phase 1 removed these scripts from the codex, making this
+# plugin the source of truth for query-records machinery. The codex's own
+# copy is a frozen older version that never covered mistakes.jsonl.
 if [ -n "$Q_RECALL" ]; then
     if [ -n "$Q_KEYWORD" ] || [ -n "$Q_KIND" ] || [ -n "$Q_ID" ] || [ -n "$Q_LINKS_TO" ] || [ "$Q_FULL" -eq 1 ]; then
         echo "query-records: --recall is its own mode — combine only with --limit" >&2

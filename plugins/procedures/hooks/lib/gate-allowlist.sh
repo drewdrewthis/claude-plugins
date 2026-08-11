@@ -52,10 +52,16 @@ gal_is_compliance_path() {
 
     case "$tool" in
         Read|NotebookRead|Grep|Glob)
+            # Traversal fields differ per tool: Glob targets via `pattern` and
+            # Grep can scope via `glob`. Grep's `pattern` is a REGEX where `..`
+            # is legitimate (any-two-chars), so it is deliberately not checked.
             local fp
-            fp="$(printf '%s' "$payload" | jq -r '
+            fp="$(printf '%s' "$payload" | jq -r --arg tool "$tool" '
                 (.tool_input // .input // {})
-                | (.file_path // .notebook_path // .path // "")' 2>/dev/null || true)"
+                | if $tool == "Grep" then [(.path // ""), (.glob // "")]
+                  elif $tool == "Glob" then [(.path // ""), (.pattern // "")]
+                  else [(.file_path // .notebook_path // .path // "")] end
+                | join(" ")' 2>/dev/null || true)"
             # Traversal stays refused. A read is no longer scoped to a tree, so
             # this no longer guards an escape — it is kept because a `..` path
             # is nearly always an unintended read of somewhere else, and the

@@ -171,6 +171,22 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
+@test "allowlist: traversal in Glob pattern / Grep glob-path is refused" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path Glob '{"tool_input":{"pattern":"../../**/*.env"}}'
+  [ "$status" -eq 1 ]
+  run gal_is_compliance_path Grep '{"tool_input":{"pattern":"foo","glob":"../*.env"}}'
+  [ "$status" -eq 1 ]
+  run gal_is_compliance_path Grep '{"tool_input":{"pattern":"foo","path":"../secrets"}}'
+  [ "$status" -eq 1 ]
+}
+
+@test "allowlist: '..' inside a Grep REGEX is not traversal" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path Grep '{"tool_input":{"pattern":"a..b.*end","path":"/var/log"}}'
+  [ "$status" -eq 0 ]
+}
+
 @test "allowlist: tmux capture-pane piped through grep and tail is a look" {
   source "$LIB/gate-allowlist.sh"
   run gal_is_compliance_path Bash '{"tool_input":{"command":"tmux capture-pane -t amzcart2 -p -S -60 | grep -v boring | tail -40"}}'
@@ -315,4 +331,48 @@ teardown() {
   [ "$status" -ne 0 ]
   run gal_is_compliance_path Bash '{"tool_input":{"command":""}}'
   [ "$status" -ne 0 ]
+}
+
+@test "allowlist: git options that hand execution to an external program are refused" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"git grep -Otouch foo"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"git grep --open-files-in-pager=touch foo"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"git diff --ext-diff"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"git --config-env=core.pager=EVIL log"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"git grep foo"}}'
+  [ "$status" -eq 0 ]
+}
+
+@test "allowlist: write-capable modes of listed readers are refused" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"sort -o out in"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"uniq in out"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"xxd -r in out"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"yq -i .a=1 f.yml"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"date -s 20260101"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"ip link set eth0 down"}}'
+  [ "$status" -ne 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"ip addr"}}'
+  [ "$status" -ne 0 ]
+}
+
+@test "allowlist: the read-only modes of those readers stay allowed" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"sort in"}}'
+  [ "$status" -eq 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"uniq -c in"}}'
+  [ "$status" -eq 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"cat f.yml | yq .a"}}'
+  [ "$status" -eq 0 ]
+  run gal_is_compliance_path Bash '{"tool_input":{"command":"date -u"}}'
+  [ "$status" -eq 0 ]
 }
