@@ -33,8 +33,13 @@ set -uo pipefail
 # if it is unreadable, `ros_is_read_only` is undefined and every Bash call is
 # denied — the pre-fix behaviour for all but a handful of shapes, and a deny
 # costs one Skill(how-do-i), so degradation is safe.
+# ${BASH_SOURCE[0]%/*} is the file's own name when sourced by a bare name
+# (no slash) — guard with the same fallback how-do-i-gate.sh uses, so a
+# future caller doesn't silently lose Bash inspection.
+GAL_LIB_DIR="${BASH_SOURCE[0]%/*}"
+[ "$GAL_LIB_DIR" = "${BASH_SOURCE[0]}" ] && GAL_LIB_DIR="."
 # shellcheck source=readonly-shape.sh
-. "${BASH_SOURCE[0]%/*}/readonly-shape.sh" 2>/dev/null || true
+. "$GAL_LIB_DIR/readonly-shape.sh" 2>/dev/null || true
 
 # gal_is_compliance_path <tool_name> <payload> — 0 when the call must be allowed
 # regardless of outstanding invariants.
