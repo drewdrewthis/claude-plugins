@@ -37,10 +37,15 @@ setup() {
 @test "the docs name no store the SSOT does not have" {
   # The reverse direction: a store deleted from stores.sh must not linger in
   # prose, or the scout searches a surface the tooling no longer covers.
-  # Negative lookbehind for `/`: without it this matches the tail of unrelated
-  # plugin paths like skills/create-new/references/create-procedure.procedure.md
-  # and reports a store that was never claimed.
-  for d in $(grep -ohP '(?<![/\w-])references/[a-z-]+' "$AGENT" "$SKILL" | sort -u); do
+  # A bare `references/[a-z-]+` also matches the TAIL of unrelated plugin paths
+  # like skills/create-new/references/create-procedure.procedure.md, reporting a
+  # store that was never claimed. The guard is the character in front of it.
+  # Deliberately NOT a `-P` negative lookbehind: PCRE is a GNU extension and BSD
+  # grep (macOS, FreeBSD) rejects -P, which would empty the loop and pass this
+  # test vacuously on those toolchains. Match the leading character with POSIX
+  # ERE, then strip it back off.
+  for d in $(grep -ohE '(^|[^/[:alnum:]_-])references/[a-z-]+' "$AGENT" "$SKILL" \
+               | sed 's/.*\(references\/[a-z-]*\)/\1/' | sort -u); do
     found=0
     for s in "${STORES[@]}"; do [ "$s" = "$d" ] && found=1; done
     # mistakes.jsonl lives outside STORES by design and is not a references/ path.
