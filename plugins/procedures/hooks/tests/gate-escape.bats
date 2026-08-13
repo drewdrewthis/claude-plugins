@@ -264,7 +264,12 @@ assistant_tool() {
   # test passes while shipping a gate whose only off-switch is invisible in the
   # config dialog.
   MANIFEST="$HOOKS/../.claude-plugin/plugin.json"
-  KEYS="$(grep -ohP 'ge_enabled "\K[A-Z_]+' "$HOOKS"/*.sh | sort -u)"
+  # Deliberately NOT `grep -P`: PCRE is a GNU extension. BSD grep (macOS,
+  # FreeBSD) rejects -P outright, KEYS comes back empty, and the guard below
+  # then fails the test for a toolchain reason while reporting a contract
+  # breach. Match-then-strip is POSIX and reads the same on both.
+  KEYS="$(grep -oh 'ge_enabled "[A-Z_]*"' "$HOOKS"/*.sh \
+            | sed 's/.*"\([A-Z_]*\)"/\1/' | sort -u)"
   [ -n "$KEYS" ]
   for KEY in $KEYS; do
     OPT="enable_$(printf '%s' "$KEY" | tr '[:upper:]' '[:lower:]')"
