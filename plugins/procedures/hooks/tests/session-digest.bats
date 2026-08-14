@@ -388,6 +388,29 @@ obj_result() {
   grep -q '"gate":"digest-record"' "$GATE_FAILOPEN_LOG"
 }
 
+@test "a valid JSON SCALAR is RECORDED — parsing is not the same as being an envelope" {
+  # `jq -e .` only asks "did this parse". A bare string parses, so it cleared
+  # the round-2 check, then indexing it for .tool_name failed, TOOL_NAME came
+  # back empty, and the hook declined as if some other tool had fired — the
+  # identical silent-skip the round-2 check existed to close, one layer in.
+  run bash -c "printf '%s' '\"not an envelope\"' | bash '$HOOKS/digest-record.sh'"
+  [ "$status" -eq 0 ]
+  [ "$(count_digests)" -eq 0 ]
+  grep -q '"why":"non-object-payload"' "$GATE_FAILOPEN_LOG" \
+    || { echo "a scalar payload was silently declined: $(cat "$GATE_FAILOPEN_LOG" 2>/dev/null)"; false; }
+  grep -q '"gate":"digest-record"' "$GATE_FAILOPEN_LOG"
+}
+
+@test "a valid JSON ARRAY is RECORDED, not read as a quiet non-Skill event" {
+  # Same hole, the other common shape a serialization change produces: a
+  # top-level array of events instead of one envelope.
+  run bash -c "printf '%s' '[]' | bash '$HOOKS/digest-record.sh'"
+  [ "$status" -eq 0 ]
+  [ "$(count_digests)" -eq 0 ]
+  grep -q '"why":"non-object-payload"' "$GATE_FAILOPEN_LOG" \
+    || { echo "an array payload was silently declined: $(cat "$GATE_FAILOPEN_LOG" 2>/dev/null)"; false; }
+}
+
 @test "a valid NON-Skill event is still a silent, unrecorded decline" {
   # The other half of the contract: validation must not turn every unrelated
   # tool event into a fail-open line, or the log becomes noise.

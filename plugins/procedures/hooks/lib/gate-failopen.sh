@@ -15,6 +15,11 @@
 # first occurrence, not discovered by dogfooding weeks later.
 # malformed-payload — stdin would not parse at all, so no filter downstream can
 # be trusted to mean what it says.
+# non-object-payload — stdin parsed, but the top-level value is not an envelope
+# (a bare string, an array, a number). Kept distinct from malformed-payload:
+# that one says the transport is broken, this one says something is plumbing
+# the wrong event in. Both silently skip if unchecked, since indexing a
+# non-object yields empty and reads as "a different tool fired".
 #
 # NOT ONLY GATES. digest-record.sh records here too, under its own <gate> name.
 # It is a writer, not a gate, and its failures are not gate misses — group by
@@ -78,6 +83,7 @@ gate_failopen() {
     case "$why" in
         no-jq|reset-hook-never-ran|activity-undetermined|lib-unreadable:*) ;;
         store-unwritable|payload-shape-unrecognized|malformed-payload) ;;
+        non-object-payload) ;;
         *) why="unrecognized:${why}" ;;
     esac
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \

@@ -56,6 +56,16 @@ command -v jq >/dev/null 2>&1 || gate_failopen digest-record no-jq
 printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1 \
     || gate_failopen digest-record malformed-payload
 
+# Parsing is not the same as being an envelope. `jq -e .` accepts any JSON
+# value, so a bare string, an array, or a number clears it — and then indexing
+# a non-object for .tool_name fails, TOOL_NAME comes back empty, and the filter
+# below declines exactly as if another tool had fired. Same silent skip as
+# above, one layer in. Recorded separately: unparseable stdin means the
+# transport is broken, while a well-formed non-envelope means something is
+# plumbing the wrong event into this hook. Different faults, different fixes.
+printf '%s' "$INPUT" | jq -e 'type == "object"' >/dev/null 2>&1 \
+    || gate_failopen digest-record non-object-payload
+
 TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '(.tool_name // .tool) // empty' 2>/dev/null || true)"
 # A valid payload for a different tool is a legitimate decline, not a fail-open.
 [ "$TOOL_NAME" = "Skill" ] || exit 0
