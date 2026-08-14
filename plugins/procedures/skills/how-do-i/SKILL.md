@@ -21,14 +21,32 @@ Search the record stores, read every candidate in full, and return the proposal
 in your output shape — what governs, the commands verbatim, the traps, and a
 standing label on every source.
 
-Tooling: the query interface is `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`,
-which searches the record stores under `${CODEX_ROOT:-~/.claude}` — run it with
-`--list-stores` to see the exact surface (includes the `titw/` vendor store and
-any extras named in `QUERY_RECORDS_EXTRA_STORES`, space-separated root-relative
-paths; settings `env` maps stack by scope, so projects can add stores); recall is `mistakes.jsonl`, which it does not
-cover and the scout greps directly. That is the whole surface — the scout's
-Boundaries forbid going outside it, and its step 5 returns `NOT FOUND` on a
-miss so the caller can improvise and draft the procedure afterward.
+Tooling: the query interface is
+`bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"` — survey, recall,
+and batch-read all go through it, and `--list-stores` prints the exact scan
+surface (the `titw/` vendor store included, plus any extras named in
+`QUERY_RECORDS_EXTRA_STORES`, space-separated root-relative paths; settings
+`env` maps stack by scope, so projects can add stores). Your Boundaries carry
+the rule about what that excludes.
+
+Start warm. Before step 1, read what you already returned this session:
+
+```bash
+bash "${CLAUDE_SKILL_DIR}/../../scripts/session-digest-read.sh" --read "${CLAUDE_SESSION_ID}"
+```
+
+Empty output means this is the session's first pass — say nothing about it and
+proceed cold.
+
+Anything it prints is your own earlier digest: real findings, and a starting
+point, never a search you can skip. It answered a DIFFERENT goal, so it tells
+you where to look first, not what governs THIS one. Run your full query pass
+regardless — a governing record the earlier digest never needed is exactly what
+this goal may turn on. Then label each source in your proposal:
+
+- **already established** — the digest above carried it; cite it without
+  re-deriving.
+- **newly found** — this search surfaced it.
 
 If the goal is ambiguous, say which reading you took rather than picking one
 silently.
