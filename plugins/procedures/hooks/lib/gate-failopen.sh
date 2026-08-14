@@ -15,6 +15,10 @@
 # first occurrence, not discovered by dogfooding weeks later.
 # malformed-payload — stdin would not parse at all, so no filter downstream can
 # be trusted to mean what it says.
+# skill-unresolvable — the gate was about to DENY while naming a skill the
+# install cannot resolve (hooks shipped, skills absent). Denying there is a hard
+# wedge: deny, retry, deny, with no exit. Releasing is the only safe branch, and
+# it must be loud — a silently ungated session looks exactly like a compliant one.
 # non-object-payload — stdin parsed, but the top-level value is not an envelope
 # (a bare string, an array, a number). Kept distinct from malformed-payload:
 # that one says the transport is broken, this one says something is plumbing
@@ -83,7 +87,7 @@ gate_failopen() {
     case "$why" in
         no-jq|reset-hook-never-ran|activity-undetermined|lib-unreadable:*) ;;
         store-unwritable|payload-shape-unrecognized|malformed-payload) ;;
-        non-object-payload) ;;
+        non-object-payload|skill-unresolvable) ;;
         *) why="unrecognized:${why}" ;;
     esac
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \

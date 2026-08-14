@@ -123,6 +123,20 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   layer, but the docs do not say it reaches a fork, so the prose prohibition is
   the control.
 
+- **Plugin-scoped skill names in gate messages:** shipped in a plugin the
+  invocable names are namespaced, so the gates' deny/block text names
+  `Skill(procedures:how-do-i)` / `Skill(procedures:am-i-done)` rather than the
+  bare name an in-codex install would use. `hooks/turn-state-record.sh` accepts
+  both forms, so no invocation can satisfy a gate whose message names the other.
+  The gates additionally refuse to DENY when the skill they name is not on disk
+  beside them (`../skills/<name>/SKILL.md`): a plugin can be installed
+  hooks-first, and a gate that denies while naming a skill the session cannot
+  resolve wedges it with no exit — deny, retry, deny. That check is a one-sided
+  PROXY, not a detection: a hook is handed no capability manifest, so absence
+  proves the skill cannot be invoked while presence proves nothing about
+  registration. It releases through the existing recorder with
+  `why:"skill-unresolvable"`, never silently.
+
 Host-neutral wording in place of codex-internal file/hook references is a
 further, prose-only adaptation class and is not individually marked.
 
