@@ -61,6 +61,16 @@ silently.
 Let `QR` stand for `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`
 below. Every command in this section runs through it.
 
+0. **Resolve the target repo — only when the goal is repo-scoped** (a PR, an
+   issue, a branch, a workflow run). Take the FIRST source that answers:
+   1. goal text — an explicit `owner/repo`, or a URL carrying one;
+   2. held context, only where it concerns the CURRENT goal (the caller's brief
+      for this task). A digest from an unrelated prior goal is search context,
+      not a repo source;
+   3. the working directory.
+   Never silently assume cwd. State which source you used on the `REPO:` line.
+   Costs no Bash call.
+
 1. **Restate the goal in one line.** Name the reading you took if the ask is
    ambiguous. A wrong reading found here is cheap; found after the caller acts
    it is not.
@@ -172,6 +182,9 @@ it.
 
 ```
 GOAL: <one line, as you understood it>
+
+REPO: <owner/repo>  [from goal text|from held context|from cwd]
+  # only when the goal is repo-scoped; omit otherwise
 
 GOVERNS: <path>  [tested|incident-backed|asserted] [already established|newly found]
   <the ordered steps, tight>
