@@ -95,6 +95,13 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   a fresh file, no read-modify-write. Digests live one level BELOW
   `$TURN_STATE_DIR` precisely so the per-turn reset cannot reach them; the
   gate still fires every turn regardless of what the fork starts with.
+  Tunable with `SESSION_DIGEST_DIR` (default `$TURN_STATE_DIR/digests`),
+  `SESSION_DIGEST_KEEP` (prior digests replayed per warm start, default 3, `0`
+  = uncapped) and `SESSION_DIGEST_TTL_DAYS` (default 2, the only thing that
+  ever removes a digest). A non-numeric value on either count falls back to its
+  default rather than erroring. A blind failure to store a digest is recorded
+  to `GATE_FAILOPEN_LOG` under gate `digest-record` — group by gate before
+  computing any fail-open rate, since this one is a writer, not a gate.
 
 Host-neutral wording in place of codex-internal file/hook references is a
 further, prose-only adaptation class and is not individually marked.

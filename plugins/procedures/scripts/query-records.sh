@@ -345,7 +345,57 @@ if [ "$Q_CAT" -eq 1 ]; then
     CAT_RESOLVED=""
     CAT_BAD=""
     CAT_IDLIKE=0
+    # Membership is a pure-bash pattern match against a newline-delimited copy
+    # of the corpus, built ONCE. It is deliberately not `... | grep -qxF`.
+    #
+    # This script runs under `set -uo pipefail` (line 103). `grep -q` exits the
+    # instant it matches, which closes the pipe while the writer is still
+    # writing, so the writer dies of SIGPIPE and pipefail hands the PIPELINE
+    # status 141 — on SUCCESS. Every real match read as "not a record", and
+    # --cat refused the survey's own paths.
+    #
+    # It passed 25 tests because the failure is input-size dependent: a fixture
+    # corpus (~100 bytes) fits one atomic write, so the writer finishes before
+    # grep exits and no SIGPIPE happens. The live corpus is ~1,800 paths (~80KB)
+    # and never fits. Fixtures could not have caught this; the round-trip test
+    # below runs against a corpus larger than the pipe buffer for that reason.
+    #
+    # "$norm" is QUOTED inside the case pattern, making it literal — an unquoted
+    # expansion would let a ref like 'references/*' glob-match the corpus.
+    CAT_HAYSTACK=$'\n'"$ALL_FILES"$'\n'
+    # The documented loop is "pipe the survey's paths straight back in":
+    #   p=$(query-records.sh --keyword X | awk -F' — ' '{print $1}')
+    #   query-records.sh --cat $p
+    # bash word-splits that unquoted expansion on IFS (which includes newline),
+    # so --cat receives one argv word per path. zsh does NOT split unquoted
+    # expansions, so the SAME command hands --cat a single word containing
+    # newlines. Refusing it made the shipped loop shell-dependent — it worked
+    # under bash and failed under zsh, which is the shell this runs in.
+    #
+    # So a newline-bearing word is expanded into the newline-separated list the
+    # caller plainly meant. This does NOT loosen the smuggling guard: every
+    # element produced here goes through the same membership check below, so
+    # nothing unvalidated can reach print_full's `tr '\n' '\0'`. A smuggled
+    # non-record still lands in CAT_BAD and still aborts the whole batch.
+    CAT_EXPANDED=()
     for ref in ${CAT_REFS[@]+"${CAT_REFS[@]}"}; do
+        case "$ref" in
+            *$'\n'*)
+                while IFS= read -r part; do
+                    # Empty elements here are separator artifacts (a trailing
+                    # newline), not a caller naming an empty path. An explicitly
+                    # empty argument still reaches the else-branch and is named.
+                    [ -n "$part" ] || continue
+                    CAT_EXPANDED+=("$part")
+                done <<< "$ref"
+                ;;
+            *) CAT_EXPANDED+=("$ref") ;;
+        esac
+    done
+    # A word that was nothing but separators leaves no paths behind; that is a
+    # bad reference, not an empty batch that should silently succeed.
+    [ "${#CAT_EXPANDED[@]}" -eq 0 ] && CAT_EXPANDED=("")
+    for ref in ${CAT_EXPANDED[@]+"${CAT_EXPANDED[@]}"}; do
         norm="${ref#./}"
         case "$norm" in
             /*) norm="${norm#"$ROOT"/}" ;;
@@ -358,7 +408,13 @@ if [ "$Q_CAT" -eq 1 ]; then
         case "$norm" in
             *$'\n'*|"") norm="" ;;
         esac
-        if [ -n "$norm" ] && printf '%s\n' "$ALL_FILES" | grep -qxF -- "$norm"; then
+        CAT_HIT=0
+        if [ -n "$norm" ]; then
+            case "$CAT_HAYSTACK" in
+                *$'\n'"$norm"$'\n'*) CAT_HIT=1 ;;
+            esac
+        fi
+        if [ "$CAT_HIT" -eq 1 ]; then
             CAT_RESOLVED="$CAT_RESOLVED$norm
 "
         else

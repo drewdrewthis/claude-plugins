@@ -15,14 +15,39 @@
 # an unrelated `evil:how-do-i` must not be able to plant a digest that the next
 # fork will read as established fact.
 #
-# FAIL-OPEN: no jq, unparseable payload, no extractable body, unwritable store
-# => exit 0 silently. A missing digest costs a cold start, which is exactly
-# today's behaviour; a crash here would cost the turn.
+# FAIL-OPEN, BUT OBSERVABLY (ADR-001). No jq, an unreadable lib, or an
+# unwritable store => exit 0, and append one line to GATE_FAILOPEN_LOG first.
+# These are BLIND paths: the hook could not do its job and cannot tell whether
+# it should have. Left silent, a permanently missing jq or an unwritable store
+# removes warm starts for every session with no signal anywhere.
+#
+# An unparseable payload, a non-Skill tool, another skill's name, or a result
+# with no digest in it are NOT recorded — the hook evaluated correctly and
+# declined. Recording those would make the log useless as a rate numerator,
+# which is the same BLIND/LEGITIMATE line gate-failopen.sh draws.
+#
+# PLUGIN ADAPTATION: no upstream counterpart — this hook exists only because
+# /how-do-i is a forked skill here (see lib/session-digest.sh). Class:
+# "Fork-path session state" in the root README.
 
 set -uo pipefail
 
+# Resolved with ${BASH_SOURCE[0]%/*} rather than `dirname`, and sourced BEFORE
+# the jq check, on gate-failopen.sh's own constraint: a missing jq is one of the
+# conditions this must record, and that path can run with PATH emptied, so
+# anything shelling out to locate the recorder is unreachable exactly when it is
+# needed. (turn-state-record.sh uses `dirname` because it sources nothing before
+# its jq check.)
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
+# The recorder cannot record its own absence — with no gate_failopen to call,
+# exit 0 rather than brick the turn.
+# shellcheck source=lib/gate-failopen.sh
+. "$SCRIPT_DIR/lib/gate-failopen.sh" 2>/dev/null || exit 0
+
 INPUT="$(cat 2>/dev/null || true)"
-command -v jq >/dev/null 2>&1 || exit 0
+# gate_failopen never returns; it records and exits 0.
+command -v jq >/dev/null 2>&1 || gate_failopen digest-record no-jq
 
 TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '(.tool_name // .tool) // empty' 2>/dev/null || true)"
 [ "$TOOL_NAME" = "Skill" ] || exit 0
@@ -33,11 +58,18 @@ case "$SKILL" in
     *) exit 0 ;;
 esac
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || exit 0
-# shellcheck source=lib/session-digest.sh
-. "$SCRIPT_DIR/lib/session-digest.sh" 2>/dev/null || exit 0
-
+# Read the session id BEFORE sourcing the digest lib, so an unreadable lib can
+# still be recorded against the session it happened in. It needs only jq, which
+# is already known present.
 SID_RAW="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
+
+# shellcheck source=lib/session-digest.sh
+. "$SCRIPT_DIR/lib/session-digest.sh" 2>/dev/null \
+    || gate_failopen digest-record lib-unreadable:session-digest "$SID_RAW"
+
+# NOT a fail-open: sd_key refuses an un-interpolated ${CLAUDE_SESSION_ID} on
+# purpose, so that every such caller degrades to a cold start instead of sharing
+# one bogus bucket. That is the hook working, not the hook blinded.
 KEY="$(sd_key "$SID_RAW")" || exit 0
 
 # The fork's return value, measured over 260 how-do-i Skill results in this
@@ -66,6 +98,8 @@ BODY="$(printf '%s' "$INPUT" | jq -r '
 
 [ -n "$BODY" ] || exit 0
 
-printf '%s' "$BODY" | sd_write "$KEY"
+# sd_write returns nonzero only on its BLIND paths (store not creatable, digest
+# not writable) — never for "nothing worth storing", which returns 0.
+printf '%s' "$BODY" | sd_write "$KEY" || gate_failopen digest-record store-unwritable "$KEY"
 
 exit 0

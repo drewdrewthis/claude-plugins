@@ -48,6 +48,10 @@ ts_reset() {
     # ⚠ -maxdepth 1 is load-bearing beyond performance: the session digests in
     # digests/ (lib/session-digest.sh) are per-SESSION and must survive the turn
     # boundary. Deepening this find would silently delete them every turn.
+    # PLUGIN ADAPTATION: that constraint is plugin-local — the digests it
+    # protects have no upstream counterpart. The find itself is UNCHANGED from
+    # orchard-codex@develop-sweatshop; only this comment diverges. Class:
+    # "Fork-path session state" in the root README.
     find "$TURN_STATE_DIR" -maxdepth 1 -name "$sid.*" ! -name "$sid.turn" \
          -delete 2>/dev/null || true
     : > "$TURN_STATE_DIR/$sid.turn" 2>/dev/null || true

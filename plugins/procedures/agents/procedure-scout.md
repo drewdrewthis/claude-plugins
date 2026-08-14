@@ -4,7 +4,13 @@ description: "Given a stated goal, return everything the caller needs to do it c
 # PLUGIN ADAPTATION: also pinned in skills/how-do-i/SKILL.md — the fork path
 # ignores this key, so change both together (gate-skill-model.bats enforces).
 model: sonnet
-tools: Bash, Read, Grep, Glob
+# Bash ONLY, and that is the point of #34: query-records.sh is the sole
+# retrieval surface. Read/Grep/Glob were granted here while the Boundaries below
+# forbade using them to reach a record — leaving the second retrieval surface
+# open at the only layer that actually enforces anything. A prohibition the
+# tool grant contradicts is a suggestion. Bash is still required: the scout
+# invokes query-records.sh and the digest replay through it.
+tools: Bash
 ---
 
 # Role
@@ -80,10 +86,12 @@ confident voice and carries a `proc.` id.
    as the identifier: "the cache", not just the function name.
 
    Narrow iteratively with the structural flags rather than re-guessing terms:
+
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --kind procedure --keyword "<term set>"
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --links-to <id-you-already-found>
    ```
+
    `--links-to` on a record you already trust is the highest-yield second
    query: the corpus's own cross-references beat another synonym guess.
    ⚠ a term set that returns nothing is a RESULT — go to step 3's miss rule,
@@ -92,9 +100,14 @@ confident voice and carries a `proc.` id.
 3. **Select, then batch-read — through the same script.** From all survey
    lists, pick every plausibly relevant path — err inclusive, a gloss can
    undersell a record — and read them in one call:
+
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --cat <path> <path> ...
    ```
+
+   Paste the paths the survey printed, verbatim. `--cat` takes them exactly as
+   printed, and also accepts a whole newline-separated list as one argument, so
+   piping a survey's first column straight in works in any shell.
    `--cat` dedupes, takes paths from as many surveys as you like, and is
    uncapped. Read to the end of each — an Investigation or Evolution section
    below the steps can supersede them; the output is the full text, not a

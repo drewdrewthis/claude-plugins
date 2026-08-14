@@ -41,8 +41,19 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
 }
 
 @test "the scout body does not send the scout to find(1) for retrieval" {
-  run grep -nE '^[[:space:]]*find |`find ' "$AGENT"
-  [ "$status" -ne 0 ] || { echo "find(1) retrieval still in the scout: $output"; false; }
+  # Fence-scoped for the same reason the grep check above is: a file-wide
+  # pattern also matches PROSE that names the command. `^[[:space:]]*find `
+  # matched any line opening with the English word "find", so a future
+  # Boundaries line like "find the governing record first" would fail the suite
+  # with no defect present. What is forbidden is find(1) as a command the scout
+  # RUNS, which is what a fenced bash block means.
+  local offenders
+  offenders="$(awk '
+    /^[[:space:]]*```bash/ { inblock=1; next }
+    /^[[:space:]]*```/     { inblock=0; next }
+    inblock && /(^|[^[:alnum:]_.\/-])find[[:space:]]/ { print FNR ": " $0 }
+  ' "$AGENT")"
+  [ -z "$offenders" ] || { echo "find(1) retrieval still in the scout:"; echo "$offenders"; false; }
 }
 
 @test "the scout body carries no raw awk batch-read recipe" {
@@ -72,7 +83,10 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
   # anchored hard to column 0 — anchoring it there is how this assertion passes
   # while reading nothing.
   local offenders blocks
-  blocks="$(grep -cE '^[[:space:]]*```bash' "$AGENT")"
+  # `|| true`: bats runs test bodies under errexit and grep exits 1 on no
+  # match, so without this the assignment aborts the test BEFORE the vacuity
+  # guard below can print — the diagnostic could never fire.
+  blocks="$(grep -cE '^[[:space:]]*```bash' "$AGENT" || true)"
   [ "$blocks" -ge 1 ] || { echo "no bash blocks found — assertion would pass vacuously"; false; }
   offenders="$(awk '
     /^[[:space:]]*```bash/ { inblock=1; next }
@@ -80,6 +94,21 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
     inblock && $0 ~ /[^[:space:]]/ && $0 !~ /query-records\.sh/ && $0 !~ /^[[:space:]]*#/ { print FILENAME ":" FNR ": " $0 }
   ' "$AGENT")"
   [ -z "$offenders" ] || { echo "non-query-records command in the scout prompt:"; echo "$offenders"; false; }
+}
+
+@test "the scout's tool grant does not reopen the retrieval surface it forbids" {
+  # The frontmatter is where retrieval is actually enforced; the Boundaries are
+  # only prose. Granting Read/Grep/Glob while forbidding their use for retrieval
+  # left the second surface open at the layer that decides. Bash stays — the
+  # scout runs query-records.sh and the digest replay through it.
+  local tools
+  tools="$(fm_key "$AGENT" tools)"
+  [ -n "$tools" ] || { echo "no tools: key in the scout frontmatter"; false; }
+  [[ "$tools" == *Bash* ]] || { echo "scout cannot run query-records.sh without Bash: $tools"; false; }
+  for forbidden in Read Grep Glob; do
+    [[ "$tools" != *"$forbidden"* ]] \
+      || { echo "tools: grants $forbidden, which the Boundaries forbid for retrieval: $tools"; false; }
+  done
 }
 
 @test "the scout's boundaries still scope reading to the discovered store list" {
@@ -124,7 +153,8 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
   # Scoped to the notice STRING, not the whole file — print_full's own
   # implementation legitimately uses awk.
   local notice
-  notice="$(grep -n '(--full: dumped' "$SCRIPT")"
+  # `|| true` for the same errexit reason as the bash-block count above.
+  notice="$(grep -n '(--full: dumped' "$SCRIPT" || true)"
   [ -n "$notice" ] || { echo "truncation notice not found — assertion would pass vacuously"; false; }
   [[ "$notice" == *"--cat"* ]] || { echo "notice does not point at --cat: $notice"; false; }
   [[ "$notice" != *"awk"* ]] || { echo "notice still advertises a raw awk batch-read: $notice"; false; }

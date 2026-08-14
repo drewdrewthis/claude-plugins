@@ -165,6 +165,51 @@ keyed by a messy id" \
   [[ "$output" == *"keyed by a messy id"* ]]
 }
 
+@test "the PRODUCTION key shape round-trips: hook payload id in, fork prompt id out" {
+  # The whole feature turns on one identity: the WRITE key (hook payload
+  # .session_id) and the READ key (${CLAUDE_SESSION_ID} interpolated into the
+  # fork prompt) must name the same bucket, or digests are written and never
+  # read and the feature is inert rather than broken.
+  #
+  # Measured on this machine before relying on it:
+  #   - hook payload .session_id == the canonical session UUID (it matches the
+  #     transcript filename: 2/2 sampled from a real gate-failopen.jsonl);
+  #   - a forked subagent transcript carries its PARENT's sessionId, resolving
+  #     to a real parent transcript in 25/25 sampled agent-*.jsonl sidechains.
+  # So both sides name the parent session UUID. This test pins that shape.
+  local uuid='cd95eb6f-408f-4c02-80af-46f48bb7eef4'
+  jq -nc --arg s "$uuid" --arg t "Skill \"procedures:how-do-i\" completed (forked execution).
+
+Result:
+established by the first pass" \
+    '{session_id:$s, tool_name:"Skill", tool_input:{skill:"procedures:how-do-i"}, tool_response:$t}' \
+    | bash "$HOOKS/digest-record.sh"
+
+  run bash "$READER" --read "$uuid"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"established by the first pass"* ]] \
+    || { echo "write key and read key did not meet for a real session UUID"; false; }
+}
+
+@test "a DIFFERENT session's id reads nothing — no shared bucket, no cross-session bleed" {
+  # The tolerant-read temptation (replay whatever digests are newest in the
+  # dir when the key misses) is refused deliberately: it would hand one
+  # session's findings to another as established fact. A miss must stay a cold
+  # start.
+  local mine='cd95eb6f-408f-4c02-80af-46f48bb7eef4'
+  local theirs='11111111-2222-3333-4444-555555555555'
+  jq -nc --arg s "$mine" --arg t "Skill \"how-do-i\" completed (forked execution).
+
+Result:
+secret to session one" \
+    '{session_id:$s, tool_name:"Skill", tool_input:{skill:"how-do-i"}, tool_response:$t}' \
+    | bash "$HOOKS/digest-record.sh"
+
+  run bash "$READER" --read "$theirs"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "another session's digest leaked into this one: $output"; false; }
+}
+
 # ---------- which skills produce a digest ----------
 
 @test "the namespaced procedures:how-do-i invocation also produces a digest" {
@@ -242,12 +287,55 @@ keyed by a messy id" \
   [ -z "$output" ]
 }
 
-@test "an unwritable digest dir does not fail the hook" {
-  mkdir -p "$(digest_dir)"
-  chmod 500 "$(digest_dir)"
+@test "an unwritable digest dir does not fail the hook, and is RECORDED" {
+  # Lock the PARENT, not the digest dir. sd_write runs `chmod 700` on the digest
+  # dir itself, and the test user owns it, so chmod 500 there is undone by the
+  # code under test and the digest lands normally — this test asserted only
+  # `status -eq 0` and so passed without ever reaching the unwritable path.
+  # The recorder must land OUTSIDE the directory under test — the default log
+  # path sits inside $TURN_STATE_DIR, so locking that dir would also gag the
+  # recorder and this test would "prove" the silence it exists to forbid.
+  export GATE_FAILOPEN_LOG="$HOME/failopen-outside.jsonl"
+  chmod 500 "$TURN_STATE_DIR"
   run record_digest how-do-i "cannot land"
-  chmod 700 "$(digest_dir)"
+  chmod 700 "$TURN_STATE_DIR"
+
+  [ "$status" -eq 0 ]                    # fail-open: never costs the turn
+  [ -z "$output" ]                       # and never speaks to the user
+  [ "$(count_digests)" -eq 0 ] || { echo "digest landed despite an unwritable store"; false; }
+  # ADR-001: fail open AND record. A permanently unwritable store must not
+  # remove warm starts for every session in silence.
+  [ -s "$GATE_FAILOPEN_LOG" ] || { echo "blind fail-open recorded nothing"; false; }
+  grep -q '"gate":"digest-record"' "$GATE_FAILOPEN_LOG" \
+    || { echo "not recorded under its own gate name: $(cat "$GATE_FAILOPEN_LOG")"; false; }
+  grep -q '"why":"store-unwritable"' "$GATE_FAILOPEN_LOG" \
+    || { echo "wrong or quarantined reason: $(cat "$GATE_FAILOPEN_LOG")"; false; }
+}
+
+@test "a missing jq is recorded, not silently swallowed" {
+  local EMPTY
+  EMPTY="$(mktemp -d)"
+  run env PATH="$EMPTY" TURN_STATE_DIR="$TURN_STATE_DIR" \
+    GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    /bin/bash -c "echo '{}' | /bin/bash '$HOOKS/digest-record.sh'"
+  rm -rf "$EMPTY"
   [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  grep -q '"gate":"digest-record"' "$GATE_FAILOPEN_LOG" \
+    || { echo "no-jq not recorded: $(cat "$GATE_FAILOPEN_LOG" 2>/dev/null)"; false; }
+  grep -q '"why":"no-jq"' "$GATE_FAILOPEN_LOG" \
+    || { echo "no-jq not recorded: $(cat "$GATE_FAILOPEN_LOG")"; false; }
+}
+
+@test "declining a payload is NOT recorded as a fail-open" {
+  # The BLIND/LEGITIMATE line: these are the hook evaluating correctly and
+  # declining. Recording them would make the log useless as a rate numerator.
+  run record_digest some-other-skill "not ours"
+  [ "$status" -eq 0 ]
+  run bash -c "echo '{\"tool_name\":\"Bash\"}' | bash '$HOOKS/digest-record.sh'"
+  [ "$status" -eq 0 ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ] \
+    || { echo "a legitimate decline was logged as a blind fail-open: $(cat "$GATE_FAILOPEN_LOG")"; false; }
 }
 
 # ---------- the read path (AC-3) ----------

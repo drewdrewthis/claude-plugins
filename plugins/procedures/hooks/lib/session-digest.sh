@@ -27,7 +27,16 @@
 # find's reach without touching the reset path at all.
 #
 # FAIL-OPEN: a digest is an optimisation. Every failure here degrades to "no
-# warm start", never to an error in the caller's face.
+# warm start", never to an error in the caller's face. sd_write still RETURNS
+# nonzero on the blind paths so its caller can record the fail-open; degrading
+# silently and degrading unobservably are different things (ADR-001).
+#
+# PLUGIN ADAPTATION: this whole file has no upstream counterpart. /how-do-i runs
+# as a forked skill in the plugin, and a fork gets no turn-state continuity, so
+# carrying a digest across invocations is a plugin-only problem — the codex
+# never needed it. Vendoring from orchard-codex@develop-sweatshop must not treat
+# this file's absence upstream as drift to be reconciled away. Class:
+# "Fork-path session state" in the root README.
 
 set -uo pipefail
 
@@ -77,7 +86,7 @@ sd_write() {
     # Nothing to warm-start from; storing it would only cost the next fork a
     # delimiter to read past.
     [ -n "${body//[[:space:]]/}" ] || return 0
-    mkdir -p "$SESSION_DIGEST_DIR" 2>/dev/null || return 0
+    mkdir -p "$SESSION_DIGEST_DIR" 2>/dev/null || return 1
     # 0700, not the umask default: mktemp gives each digest 0600, but a 0755
     # directory still lets any other local account enumerate session keys and
     # write times by listing it. Separate chmod rather than `mkdir -p -m`,
@@ -87,8 +96,13 @@ sd_write() {
     chmod 700 "$SESSION_DIGEST_DIR" 2>/dev/null || true
     sd_reap
     local f
-    f="$(mktemp "$SESSION_DIGEST_DIR/$key.digest.$(date +%s).XXXXXX" 2>/dev/null)" || return 0
-    printf '%s\n' "$body" > "$f" 2>/dev/null || return 0
+    f="$(mktemp "$SESSION_DIGEST_DIR/$key.digest.$(date +%s).XXXXXX" 2>/dev/null)" || return 1
+    # mktemp CREATED the file before printf ran. A failed body write (full disk,
+    # EIO) would otherwise leave a zero-byte digest behind — and an empty digest
+    # is worse than none: sd_read prints its "==> prior digest N <==" header
+    # with nothing under it, and it still counts against SESSION_DIGEST_KEEP, so
+    # it evicts a real digest from the replay. Remove the carcass.
+    printf '%s\n' "$body" > "$f" 2>/dev/null || { rm -f "$f" 2>/dev/null; return 1; }
 }
 
 # sd_read <key> — replay this session's prior digests, oldest first, capped.

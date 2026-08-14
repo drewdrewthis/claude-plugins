@@ -38,11 +38,10 @@ bash "${CLAUDE_SKILL_DIR}/../../scripts/session-digest-read.sh" --read "${CLAUDE
 Empty output means this is the session's first pass — say nothing about it and
 proceed cold.
 
-Anything it prints is your own earlier digest: real findings, and a starting
-point, never a search you can skip. It answered a DIFFERENT goal, so it tells
-you where to look first, not what governs THIS one. Run your full query pass
-regardless — a governing record the earlier digest never needed is exactly what
-this goal may turn on. Then label each source in your proposal:
+Anything it prints is your own earlier digest. It answered a DIFFERENT goal, so
+it tells you where to look first, never a search you can skip. Run your full
+query pass regardless — what governs THIS goal is exactly what the earlier one
+never needed. Then label each source in your proposal:
 
 - **already established** — the digest above carried it; cite it without
   re-deriving.

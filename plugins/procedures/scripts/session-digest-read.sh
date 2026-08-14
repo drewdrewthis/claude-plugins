@@ -20,6 +20,10 @@
 # Exit codes:
 #   0  ran (empty stdout means nothing to replay)
 #   2  usage error
+#
+# PLUGIN ADAPTATION: no upstream counterpart — the replay surface exists only
+# because /how-do-i is a forked skill here (see hooks/lib/session-digest.sh).
+# Class: "Fork-path session state" in the root README.
 
 set -uo pipefail
 
