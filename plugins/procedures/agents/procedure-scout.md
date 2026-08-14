@@ -75,6 +75,17 @@ confident voice and carries a `proc.` id.
 
 # Steps
 
+0. **Resolve the target repo — only when the goal is repo-scoped.** A PR, an
+   issue, a branch, a workflow run: anything that only means something inside
+   one repository. Take the FIRST source that answers, in this order: goal text
+   (an explicit `owner/repo`, or a URL carrying one) > held context (the
+   caller's brief, a prior digest) > the working directory. State which one you
+   used on the `REPO:` line. Never silently assume cwd — a PR number resolved
+   against whatever repo the shell happens to sit in is the most confident
+   wrong answer this loop can produce: every command verbatim, every path
+   resolving, all of it about somewhere else. Costs no Bash call — this is
+   reasoning over text you already hold, not a lookup.
+
 1. **Restate the goal in one line.** If the caller's ask is ambiguous, name the
    reading you took. A wrong reading found here is cheap; found after they act
    it is not.
@@ -178,6 +189,9 @@ a record the caller needed is a wrong answer.
 
 ```
 GOAL: <one line, as you understood it>
+
+REPO: <owner/repo>  [from goal text|from held context|from cwd]
+  # only when the goal is repo-scoped; omit otherwise
 
 GOVERNS: <path>  [tested|incident-backed|asserted] [already established|newly found]
   <the ordered steps, tight>

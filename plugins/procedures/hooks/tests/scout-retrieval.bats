@@ -355,3 +355,66 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
   grep -qiE 'documented (harness )?(design|behaviour|behavior)' "$README"
   grep -qF 'sub-agents' "$README"
 }
+
+# ---------- #48: resolve the target repo, never assume cwd ----------
+#
+# The scout ran inside whatever directory the shell happened to sit in and
+# answered PR/issue questions against THAT repo — silently. A repo-scoped goal
+# resolved against the wrong repo is the most confident wrong answer this loop
+# produces: every command is verbatim, every path resolves, and all of it is
+# about somewhere else. Ordering (goal text > held context > cwd) is the fix;
+# stating the choice is what makes a wrong pick visible to the caller.
+
+@test "both prompts resolve the target repo before retrieving, not from cwd by default" {
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'resolve .*repo|target repo' "$f" \
+      || { echo "$(basename "$f"): no repo-resolution step at all"; false; }
+    # The precedence, in order, and cwd explicitly LAST.
+    grep -qiE 'goal text' "$f" || { echo "$(basename "$f"): goal text not named as a source"; false; }
+    grep -qiE 'held context|context you were|already handed' "$f" \
+      || { echo "$(basename "$f"): held context not named as a source"; false; }
+    grep -qiE 'working directory|cwd' "$f" || { echo "$(basename "$f"): cwd not named as a source"; false; }
+    # Precedence is an ORDER, not a bag of words. Asserted on the FLATTENED
+    # text: a line-by-line check reads whichever mention happens to come first
+    # on its own line, so wrapping "the working / directory" across a break was
+    # enough to hide a fully inverted list from an earlier draft of this test.
+    # Prefix-before-match length is the index of each phrase.
+    local flat g h c
+    flat="$(tr '\n' ' ' < "$f" | tr -s ' ')"
+    g="${flat%%goal text*}"; h="${flat%%held context*}"; c="${flat%%working directory*}"
+    [ "${#g}" -lt "${#h}" ] \
+      || { echo "$(basename "$f"): held context is offered before goal text"; false; }
+    [ "${#h}" -lt "${#c}" ] \
+      || { echo "$(basename "$f"): the working directory is offered before held context"; false; }
+    # Never silently.
+    grep -qiE 'never .*(assume|default).*(cwd|working directory)|cwd .*never' "$f" \
+      || { echo "$(basename "$f"): nothing forbids silently defaulting to cwd"; false; }
+  done
+}
+
+@test "both prompts require STATING which repo source was used" {
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'state which|which one you used|say which' "$f" \
+      || { echo "$(basename "$f"): resolution is never reported to the caller"; false; }
+    # And the report shape carries it, or the instruction has nowhere to land.
+    grep -qE '^REPO:' "$f" \
+      || { echo "$(basename "$f"): Output block has no REPO: line to carry the choice"; false; }
+  done
+}
+
+@test "the repo step does not spend a Bash call, so the 3-4 call budget still holds" {
+  # #45 bought the call budget; #48 must not quietly spend it. The step is
+  # reasoning over text already in hand, not a lookup.
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'no bash call|costs no|without a bash call|zero bash' "$f" \
+      || { echo "$(basename "$f"): repo step never says it is free"; false; }
+    # The budget block itself must survive unchanged.
+    grep -qE 'Budget: a typical goal finishes in 3-4 Bash calls' "$f" \
+      || { echo "$(basename "$f"): the 3-4 Bash call budget block was lost"; false; }
+    grep -qiE 'guidance, not a cap' "$f" \
+      || { echo "$(basename "$f"): the not-a-cap caveat was lost"; false; }
+  done
+}
