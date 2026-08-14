@@ -7,11 +7,33 @@ model: sonnet
 # Bash ONLY, and that is the point of #34: query-records.sh is the sole
 # retrieval surface. Read/Grep/Glob were granted here while the Boundaries below
 # forbade using them to reach a record — leaving the second retrieval surface
-# open at the only layer that actually enforces anything. A prohibition the
-# tool grant contradicts is a suggestion. Bash is still required: the scout
-# invokes query-records.sh and the digest replay through it.
+# open. A prohibition the tool grant contradicts is a suggestion. Bash is still
+# required: the scout invokes query-records.sh and the digest replay through it.
+#
+# ⚠ THIS KEY DOES NOT BIND THE /how-do-i FORK. A live run with `tools: Bash`
+# still used the Read tool. See the PLUGIN ADAPTATION note below.
 tools: Bash
 ---
+
+<!--
+PLUGIN ADAPTATION: "Fork-path agent prompt" (see README) — the same harness
+class as the model pin above.
+
+NOTHING IN THIS FILE REACHES THE /how-do-i FORK. A marker experiment injected a
+distinctive first-action instruction here; the fork executed it zero times, and
+used tools this frontmatter does not grant. The docs match: for a skill with
+`context: fork`, the Task is the SKILL.md content and `agent:` selects identity
+only — the agent file's body and tools are not loaded.
+
+So this file governs exactly one caller: a DIRECT Agent-tool spawn of
+procedure-scout. The /how-do-i path is governed by skills/how-do-i/SKILL.md,
+which carries the same retrieval loop, output shape, and Boundaries.
+
+Change both together. hooks/tests/scout-retrieval.bats pins the load-bearing
+clauses in each file independently, so a change made in only one place fails
+there rather than silently splitting the contract in two.
+-->
+
 
 # Role
 

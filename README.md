@@ -103,6 +103,26 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   to `GATE_FAILOPEN_LOG` under gate `digest-record` — group by gate before
   computing any fail-open rate, since this one is a writer, not a gate.
 
+- **Fork-path agent prompt:** a `context: fork` skill takes its `agent:` as
+  identity only — the agent file's prompt body and its `tools:` allowlist are
+  NOT loaded into the fork. The
+  [skills](https://code.claude.com/docs/en/skills) fork table gives a forked
+  skill's Task as "SKILL.md content" against a system prompt "from agent type",
+  and measurement agrees: a distinctive first-action marker injected into
+  `agents/procedure-scout.md` ran **zero** times in a live fork, which then used
+  the Read tool that `tools: Bash` does not grant. So the retrieval contract —
+  the survey → `--cat` batch-read loop, the `UNREACHABLE` bug report, the output
+  shape, and the sole-retrieval-surface Boundaries — lives in
+  `skills/how-do-i/SKILL.md`, the file that actually binds.
+  `agents/procedure-scout.md` keeps the same contract because it still governs a
+  direct `Agent(subagent_type:)` spawn, and `hooks/tests/scout-retrieval.bats`
+  pins the load-bearing clauses in each file independently so the two cannot
+  silently split. Same class as the model pin above: the fork path reads the
+  SKILL, never the agent. There is no confirmed skill-level tool restriction for
+  forks — `disallowed-tools` is declared on the skill as a best-effort second
+  layer, but the docs do not say it reaches a fork, so the prose prohibition is
+  the control.
+
 Host-neutral wording in place of codex-internal file/hook references is a
 further, prose-only adaptation class and is not individually marked.
 

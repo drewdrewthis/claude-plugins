@@ -73,30 +73,79 @@ SID_RAW="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || tr
 KEY="$(sd_key "$SID_RAW")" || exit 0
 
 # The fork's return value, measured over 260 how-do-i Skill results in this
-# machine's transcripts: ALWAYS a string, and 247 of them wrapped as
+# machine's transcripts. THAT MEASUREMENT WAS OF THE WRONG THING and the claim
+# it produced ("always a string, wrapped in `Skill ... completed (forked
+# execution). Result:`") is FALSIFIED. Transcript entries are a RENDERING of a
+# tool result; hook stdin carries the raw serialization, and they differ. The
+# extractor built on the rendering matched nothing on the real payload, so the
+# hook silently wrote no digest at all — the feature was inert in production
+# while its unit tests were green, because the tests encoded the same wrong
+# shape.
 #
-#   Skill "procedures:how-do-i" completed (forked execution).
+# The REAL payload, captured live off this hook's stdin with tee:
 #
-#   Result:
-#   <the scout's digest>
+#   "tool_response": {
+#     "success": true, "status": "forked",
+#     "commandName": "procedures:how-do-i",
+#     "agentId": "a088acab367b38ac7",
+#     "result": "<the scout's digest, PLAIN — no wrapper>"
+#   }
 #
-# The wrapper is REQUIRED, not merely stripped, because it is what separates a
-# digest from the other 13: 7 were "The user doesn't want to proceed with this
-# tool use." (the caller rejected the skill) and 6 were "Launching skill:
-# how-do-i". Storing either would replay a refusal to the next scout as an
-# established finding. No wrapper => no digest => cold start.
+# So .tool_response is an OBJECT and the digest is .result, unwrapped. The
+# string+wrapper form is kept below as a fallback because it is what the
+# transcript rendering shows and may be what some other dispatch path emits;
+# it costs one branch and removing it would be another shape assumption.
 #
-# A `background: true` fork returns the wrapper around "Scout is running in the
-# background", which WOULD be stored — skills/how-do-i/SKILL.md pins
-# `background: false`, so that shape cannot arrive here.
+# LOSING THE WRAPPER LOSES A FILTER. On the string path the wrapper's presence
+# was itself the proof that a real fork completed. The object path has no such
+# marker, so the rejections it used to give for free are now EXPLICIT: a
+# background run, a user refusal, and a "Launching skill" notice must each be
+# refused by name, or the next scout replays a refusal as established fact.
+#
+# hooks/tests/session-digest.bats feeds the captured payload verbatim as a
+# fixture, so this shape is pinned by real evidence rather than by inference.
 BODY="$(printf '%s' "$INPUT" | jq -r '
-    (.tool_response // .response // empty)
-    | if type == "string" then . else empty end
-    | select(test("^Skill \"[^\"]*\" completed \\(forked execution\\)\\.\\s*\\n\\s*Result:"))
-    | sub("^Skill \"[^\"]*\" completed \\(forked execution\\)\\.\\s*\\n\\s*Result:\\s*\\n?"; "")
+    (.tool_response // .response // empty) as $r
+    | (
+        if ($r | type) == "object" then
+            # The live shape. Require the fork to have actually succeeded.
+            $r | select((.status? == "forked") and (.success? == true)) | (.result? // empty)
+        elif ($r | type) == "string" then
+            # Legacy/rendered shape: the wrapper is required, as before.
+            $r
+            | select(test("^Skill \"[^\"]*\" completed \\(forked execution\\)\\.\\s*\\n\\s*Result:"))
+            | sub("^Skill \"[^\"]*\" completed \\(forked execution\\)\\.\\s*\\n\\s*Result:\\s*\\n?"; "")
+        else empty end
+      )
+    | select(type == "string")
+    # Explicit rejections (see above). Apostrophes are avoided in these patterns
+    # so the jq program stays inside one single-quoted shell string.
+    | select(test("^\\s*Scout is running in the background") | not)
+    | select(test("want to proceed with this tool use") | not)
+    | select(test("^\\s*Launching skill:") | not)
 ' 2>/dev/null || true)"
 
-[ -n "$BODY" ] || exit 0
+if [ -z "$BODY" ]; then
+    # A digest-free result is only LEGITIMATE if we recognise why it is empty.
+    # Anything else means this hook was handed its own skill's completion and
+    # could not find the digest in it — which is exactly the blind condition
+    # that let the object-shape bug run silently in production. Record it, so
+    # the next serialization change is loud on its first occurrence instead of
+    # after a dogfood run.
+    BENIGN="$(printf '%s' "$INPUT" | jq -r '
+        (.tool_response // .response // empty) as $r
+        | ( if ($r | type) == "object" then ($r.result? // "")
+            elif ($r | type) == "string" then $r
+            else "" end ) as $t
+        | if ($t | test("want to proceed with this tool use")) then "refused"
+          elif ($t | test("^\\s*Scout is running in the background")) then "background"
+          elif ($t | test("^\\s*Launching skill:")) then "launching"
+          elif (($r | type) == "object" and ($r.success? == false)) then "failed"
+          else "" end
+    ' 2>/dev/null || true)"
+    [ -n "$BENIGN" ] && exit 0
+    gate_failopen digest-record payload-shape-unrecognized "$SID_RAW"
+fi
 
 # sd_write returns nonzero only on its BLIND paths (store not creatable, digest
 # not writable) — never for "nothing worth storing", which returns 0.

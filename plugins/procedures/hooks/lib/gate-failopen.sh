@@ -10,6 +10,9 @@
 # BLIND (record): reset-hook-never-ran, no-jq, lib-unreadable:*,
 # activity-undetermined — the gate could not evaluate.
 # store-unwritable — the caller could not persist what it was asked to persist.
+# payload-shape-unrecognized — the caller was handed its own event and could not
+# find the field it needed in it. A serialization change must be loud on its
+# first occurrence, not discovered by dogfooding weeks later.
 #
 # NOT ONLY GATES. digest-record.sh records here too, under its own <gate> name.
 # It is a writer, not a gate, and its failures are not gate misses — group by
@@ -72,7 +75,7 @@ gate_failopen() {
     # in the log itself rather than only in a header comment.
     case "$why" in
         no-jq|reset-hook-never-ran|activity-undetermined|lib-unreadable:*) ;;
-        store-unwritable) ;;
+        store-unwritable|payload-shape-unrecognized) ;;
         *) why="unrecognized:${why}" ;;
     esac
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \

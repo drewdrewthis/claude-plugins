@@ -160,14 +160,91 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
   [[ "$notice" != *"awk"* ]] || { echo "notice still advertises a raw awk batch-read: $notice"; false; }
 }
 
-@test "the skill routes batch-reads through query-records.sh, without restating the flag list" {
-  # Say-each-thing-once: the AGENT owns the flag list and the prohibition (its
-  # Boundaries); the skill points at the one tool. Two copies of the flag list
-  # drifted apart the moment they existed.
-  grep -qiE 'batch-read.*(go|goes) through|through it' "$SKILL"
-  grep -qF 'query-records.sh' "$SKILL"
-  run grep -c -- '--cat' "$SKILL"
-  [ "$output" = "0" ] || { echo "skill restates the agent's flag list"; false; }
+# ---------- the fork prompt is SKILL.md, so the contract must live there ----------
+#
+# These tests used to assert the OPPOSITE: that SKILL.md must NOT mention
+# `--cat`, on a say-each-thing-once rationale that gave the flag list to the
+# agent file alone. That rationale assumed the agent file reaches the fork. It
+# does not — a marker injected into agents/procedure-scout.md ran zero times in
+# a live fork, and the docs confirm the Task for `context: fork` is the SKILL.md
+# content. So the old test did not merely miss the bug, it REQUIRED it. Every
+# assertion below is therefore against $SKILL, the file that actually binds.
+
+@test "the fork prompt mandates the --cat batch read" {
+  grep -qF -- '--cat' "$SKILL" \
+    || { echo "SKILL.md never names --cat; the fork is never told to batch-read"; false; }
+
+  # Anchored, not a bare presence grep: --cat must appear as a command the fork
+  # RUNS, inside a fenced bash block invoking query-records.sh.
+  run awk '
+    /^[[:space:]]*```bash/ { inblock = 1; next }
+    /^[[:space:]]*```/     { inblock = 0; next }
+    inblock && /query-records\.sh/ && /--cat/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$SKILL"
+  [ "$status" -eq 0 ] \
+    || { echo "--cat is mentioned in prose but never shown as a runnable command"; false; }
+}
+
+@test "the fork prompt names query-records.sh as the SOLE retrieval surface" {
+  local line
+  line="$(grep -inE 'ONLY retrieval tool|sole retrieval surface' "$SKILL" | head -1)"
+  [ -n "$line" ] \
+    || { echo "SKILL.md states no sole-surface boundary — the fork may use any tool"; false; }
+
+  # The boundary is only worth anything if it names what it excludes. Read a
+  # window from the clause itself rather than grepping the whole file, so an
+  # unrelated mention elsewhere cannot satisfy this.
+  local anchor window
+  anchor="$(printf '%s' "$line" | cut -d: -f1)"
+  window="$(sed -n "${anchor},$((anchor + 8))p" "$SKILL")"
+  [[ "$window" == *"Read"* ]] \
+    || { echo "the sole-surface boundary does not forbid the Read tool: $window"; false; }
+  local tool
+  for tool in grep find cat; do
+    [[ "$window" == *"$tool"* ]] \
+      || { echo "the sole-surface boundary does not forbid '$tool': $window"; false; }
+  done
+}
+
+@test "the fork prompt carries the UNREACHABLE bug-report contract" {
+  # Step 3b only exists to stop a silent workaround; if the output shape has no
+  # slot for it, the scout has nowhere to put the finding.
+  grep -qF 'UNREACHABLE' "$SKILL" \
+    || { echo "SKILL.md has no UNREACHABLE section; a query miss has nowhere to go"; false; }
+  grep -qiE 'never silently work around a query miss' "$SKILL" \
+    || { echo "SKILL.md does not forbid silently routing around a query miss"; false; }
+}
+
+@test "the fork prompt carries the output-shape contract" {
+  local key
+  for key in 'GOAL:' 'GOVERNS:' 'COMMANDS (verbatim)' 'TRAPS:' 'STANDING NOTES:' 'NOT FOUND:'; do
+    grep -qF -- "$key" "$SKILL" \
+      || { echo "output shape is missing '$key' — the fork has no contract to return"; false; }
+  done
+}
+
+@test "the two prompts do not disagree: the agent file keeps the same contract" {
+  # agents/procedure-scout.md no longer binds the fork, but it still governs a
+  # direct Agent-tool spawn. Both must carry the load-bearing clauses, or one
+  # caller silently gets a weaker scout. Parity is checked on the specific
+  # clauses, not on wording, so the files may still read differently.
+  local key
+  for key in '--cat' 'UNREACHABLE' 'query-records.sh'; do
+    grep -qF -- "$key" "$SKILL" || { echo "SKILL.md lost '$key'"; false; }
+    grep -qF -- "$key" "$AGENT" || { echo "procedure-scout.md lost '$key'"; false; }
+  done
+  grep -qiE 'ONLY retrieval tool|sole retrieval surface' "$AGENT" \
+    || { echo "procedure-scout.md lost its sole-surface boundary"; false; }
+}
+
+@test "the agent file says plainly that it does not bind the fork" {
+  # The trap this round cost us: a contributor edits the agent file, sees green
+  # tests, and ships a change that never reaches production.
+  grep -qiE 'does not (bind|reach)|never reaches' "$AGENT" \
+    || { echo "procedure-scout.md does not warn that the fork ignores it"; false; }
+  grep -qF 'SKILL.md' "$AGENT" \
+    || { echo "procedure-scout.md does not point at the file that does bind"; false; }
 }
 
 # ---------- #22 AC-4: every declaring agent, not just the scout ----------

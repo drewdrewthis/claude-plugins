@@ -265,9 +265,119 @@ secret to session one" \
   [ "$(count_digests)" -eq 0 ]
 }
 
-@test "an unwrapped string is NOT stored (the wrapper is required, not optional)" {
+@test "an unwrapped STRING is NOT stored (on the string path the wrapper is still required)" {
+  # Scoped to the string path. This test predates the dogfood round and its old
+  # name read as a general contract; it is not one. The live payload is an
+  # OBJECT and carries no wrapper — see the block below. A bare string with no
+  # wrapper remains unidentifiable, so it is still refused, and now also lands
+  # in the fail-open log as an unrecognised shape rather than vanishing.
   raw_result how-do-i "GOAL: looks like a digest but arrived unwrapped"
   [ "$(count_digests)" -eq 0 ]
+}
+
+# ---------- the REAL payload shape (dogfood round) ----------
+#
+# Everything above this block was written against the shape a TRANSCRIPT renders
+# for a Skill result. Hook stdin carries a different serialization, so the
+# extractor matched nothing in production and no digest was ever written while
+# these tests were green. The fixture below is a payload captured live off this
+# hook's stdin with tee, committed verbatim, and is now the authority on shape.
+
+@test "the REAL captured PostToolUse payload writes a digest" {
+  local fx="$BATS_TEST_DIRNAME/fixtures/posttooluse-skill-forked.live.json"
+  [ -f "$fx" ] || { echo "live payload fixture missing: $fx"; false; }
+
+  # Guard the fixture itself: if it is ever replaced by a hand-written stand-in
+  # of the OLD shape, this test would quietly go back to proving nothing.
+  jq -e '.tool_response | type == "object"' "$fx" >/dev/null \
+    || { echo "fixture is not the live object shape — it proves nothing"; false; }
+  jq -e '.tool_response.result | type == "string"' "$fx" >/dev/null \
+    || { echo "fixture has no string .tool_response.result"; false; }
+  jq -e '.tool_response.result | test("completed \\(forked execution\\)") | not' "$fx" >/dev/null \
+    || { echo "fixture result is wrapped; the live payload is not"; false; }
+
+  local sid expected
+  sid="$(jq -r '.session_id' "$fx")"
+  expected="$(jq -r '.tool_response.result' "$fx")"
+
+  run bash -c "bash '$HOOKS/digest-record.sh' < '$fx'"
+  [ "$status" -eq 0 ]
+
+  # Keyed by the payload's OWN session id, and readable back through the reader.
+  local n
+  n="$(find "$(digest_dir)" -name "$sid.digest.*" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -eq 1 ] || { echo "expected 1 digest under $sid, found $n"; false; }
+
+  run bash "$READER" --read "$sid"
+  [ "$status" -eq 0 ]
+  # The body is the result verbatim — not a wrapper fragment, not a truncation.
+  [[ "$output" == *"$(printf '%s' "$expected" | head -c 120)"* ]] \
+    || { echo "stored body does not match .tool_response.result"; false; }
+  [[ "$output" != *"completed (forked execution)"* ]] \
+    || { echo "a wrapper leaked into the stored digest"; false; }
+}
+
+@test "the live payload is stored WITHOUT tripping the fail-open recorder" {
+  # Both halves on purpose. Asserting only "nothing was logged" passes against
+  # the pre-fix extractor too — which stored nothing and logged nothing — so it
+  # would be a vacuous guard. Pairing it with "a digest exists" makes the test
+  # red before the fix while still catching the opposite failure: a recorder
+  # that fires on the healthy path would poison the fail-open rate.
+  local fx="$BATS_TEST_DIRNAME/fixtures/posttooluse-skill-forked.live.json"
+  run bash -c "bash '$HOOKS/digest-record.sh' < '$fx'"
+  [ "$status" -eq 0 ]
+  # count_digests() is scoped to $SID; the fixture carries its OWN session id,
+  # so count under that instead.
+  local sid n
+  sid="$(jq -r '.session_id' "$fx")"
+  n="$(find "$(digest_dir)" -name "$sid.digest.*" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -eq 1 ] \
+    || { echo "the healthy path stored no digest (found $n under $sid)"; false; }
+  [ ! -s "$GATE_FAILOPEN_LOG" ] \
+    || { echo "the healthy path logged a fail-open: $(cat "$GATE_FAILOPEN_LOG")"; false; }
+}
+
+# obj_result <skill> <success> <status> <result> — the LIVE object shape.
+obj_result() {
+  jq -nc --arg s "$SID" --arg k "$1" --argjson ok "$2" --arg st "$3" --arg r "$4" \
+    '{session_id:$s, tool_name:"Skill", tool_input:{skill:$k},
+      tool_response:{success:$ok, status:$st, commandName:$k, agentId:"a1", result:$r}}' \
+    | bash "$HOOKS/digest-record.sh"
+}
+
+@test "a forked result that did NOT succeed is not stored" {
+  obj_result how-do-i false forked "half a digest"
+  [ "$(count_digests)" -eq 0 ]
+}
+
+@test "a background run is not stored, and is not a fail-open" {
+  # The wrapper used to make this impossible to confuse with a digest. On the
+  # object path it must be refused by name.
+  obj_result how-do-i true forked "Scout is running in the background"
+  [ "$(count_digests)" -eq 0 ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ] \
+    || { echo "a recognised benign shape was logged as blind: $(cat "$GATE_FAILOPEN_LOG")"; false; }
+}
+
+@test "a user refusal inside the object shape is not stored, and is not a fail-open" {
+  obj_result how-do-i true forked "The user doesn't want to proceed with this tool use."
+  [ "$(count_digests)" -eq 0 ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ] \
+    || { echo "a recognised refusal was logged as blind: $(cat "$GATE_FAILOPEN_LOG")"; false; }
+}
+
+@test "an UNRECOGNISED tool_response shape is RECORDED, not silently dropped" {
+  # The whole point of this round: the previous shape change was silent. Our own
+  # skill completing in a shape we cannot read is a blind condition and must be
+  # loud on its first occurrence.
+  jq -nc --arg s "$SID" \
+    '{session_id:$s, tool_name:"Skill", tool_input:{skill:"how-do-i"},
+      tool_response:{some_future_key:"digest moved somewhere new"}}' \
+    | bash "$HOOKS/digest-record.sh"
+  [ "$(count_digests)" -eq 0 ]
+  grep -q '"why":"payload-shape-unrecognized"' "$GATE_FAILOPEN_LOG" \
+    || { echo "a shape we cannot read was not recorded: $(cat "$GATE_FAILOPEN_LOG" 2>/dev/null)"; false; }
+  grep -q '"gate":"digest-record"' "$GATE_FAILOPEN_LOG"
 }
 
 # ---------- fail-open (a digest is an optimisation, never a blocker) ----------
