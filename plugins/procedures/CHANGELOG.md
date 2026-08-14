@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.4.0...procedures-v0.4.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **procedures:** gate messages resolve ([#28](https://github.com/drewdrewthis/claude-plugins/issues/28)), latent SIGPIPE ([#46](https://github.com/drewdrewthis/claude-plugins/issues/46)), scout repo resolution ([#48](https://github.com/drewdrewthis/claude-plugins/issues/48)) ([#50](https://github.com/drewdrewthis/claude-plugins/issues/50)) ([165ea0d](https://github.com/drewdrewthis/claude-plugins/commit/165ea0d54f08ecdcd75b8ba7eaa9bd65b77478ad))
+
 ## [0.4.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.3.1...procedures-v0.4.0) (2026-08-14)
 
 
