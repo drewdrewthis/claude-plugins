@@ -280,21 +280,29 @@ secret to session one" \
 # Everything above this block was written against the shape a TRANSCRIPT renders
 # for a Skill result. Hook stdin carries a different serialization, so the
 # extractor matched nothing in production and no digest was ever written while
-# these tests were green. The fixture below is a payload captured live off this
-# hook's stdin with tee, committed verbatim, and is now the authority on shape.
+# these tests were green.
+#
+# The fixture below is the ENVELOPE of a payload captured live off this hook's
+# stdin with tee: every key, nesting and type is as captured, and that shape is
+# what these tests are the authority on. The VALUES are synthetic — the captured
+# `.result` was a generated procedure answer, i.e. host knowledge, and this repo
+# ships machinery only. The shape guards below are what keep the substitution
+# honest; they fail if the fixture drifts back toward the old shape.
 
-@test "the REAL captured PostToolUse payload writes a digest" {
-  local fx="$BATS_TEST_DIRNAME/fixtures/posttooluse-skill-forked.live.json"
-  [ -f "$fx" ] || { echo "live payload fixture missing: $fx"; false; }
+@test "the REAL PostToolUse payload SHAPE writes a digest" {
+  local fx="$BATS_TEST_DIRNAME/fixtures/posttooluse-skill-forked.json"
+  [ -f "$fx" ] || { echo "payload fixture missing: $fx"; false; }
 
   # Guard the fixture itself: if it is ever replaced by a hand-written stand-in
   # of the OLD shape, this test would quietly go back to proving nothing.
   jq -e '.tool_response | type == "object"' "$fx" >/dev/null \
-    || { echo "fixture is not the live object shape — it proves nothing"; false; }
+    || { echo "fixture is not the captured object shape — it proves nothing"; false; }
+  jq -e '.tool_response | keys == ["agentId","commandName","result","status","success"]' "$fx" >/dev/null \
+    || { echo "fixture lost keys from the captured envelope: $(jq -c '.tool_response|keys' "$fx")"; false; }
   jq -e '.tool_response.result | type == "string"' "$fx" >/dev/null \
     || { echo "fixture has no string .tool_response.result"; false; }
   jq -e '.tool_response.result | test("completed \\(forked execution\\)") | not' "$fx" >/dev/null \
-    || { echo "fixture result is wrapped; the live payload is not"; false; }
+    || { echo "fixture result is wrapped; the captured payload is not"; false; }
 
   local sid expected
   sid="$(jq -r '.session_id' "$fx")"
@@ -323,7 +331,7 @@ secret to session one" \
   # would be a vacuous guard. Pairing it with "a digest exists" makes the test
   # red before the fix while still catching the opposite failure: a recorder
   # that fires on the healthy path would poison the fail-open rate.
-  local fx="$BATS_TEST_DIRNAME/fixtures/posttooluse-skill-forked.live.json"
+  local fx="$BATS_TEST_DIRNAME/fixtures/posttooluse-skill-forked.json"
   run bash -c "bash '$HOOKS/digest-record.sh' < '$fx'"
   [ "$status" -eq 0 ]
   # count_digests() is scoped to $SID; the fixture carries its OWN session id,
@@ -364,6 +372,30 @@ obj_result() {
   [ "$(count_digests)" -eq 0 ]
   [ ! -s "$GATE_FAILOPEN_LOG" ] \
     || { echo "a recognised refusal was logged as blind: $(cat "$GATE_FAILOPEN_LOG")"; false; }
+}
+
+@test "a MALFORMED payload is RECORDED, not mistaken for another tool's event" {
+  # Unparseable stdin makes every jq extraction return empty, including
+  # .tool_name — so the tool-name filter reads it as "not a Skill event" and
+  # exits 0. That is indistinguishable from the legitimate case, which is how a
+  # serialization change disables digest storage with no trace. The validity of
+  # the payload has to be settled BEFORE anything is filtered on its contents.
+  run bash -c "printf '%s' 'not json {{{ ' | bash '$HOOKS/digest-record.sh'"
+  [ "$status" -eq 0 ]
+  [ "$(count_digests)" -eq 0 ]
+  grep -q '"why":"malformed-payload"' "$GATE_FAILOPEN_LOG" \
+    || { echo "unparseable stdin was silently dropped: $(cat "$GATE_FAILOPEN_LOG" 2>/dev/null)"; false; }
+  grep -q '"gate":"digest-record"' "$GATE_FAILOPEN_LOG"
+}
+
+@test "a valid NON-Skill event is still a silent, unrecorded decline" {
+  # The other half of the contract: validation must not turn every unrelated
+  # tool event into a fail-open line, or the log becomes noise.
+  run bash -c "printf '%s' '{\"tool_name\":\"Bash\"}' | bash '$HOOKS/digest-record.sh'"
+  [ "$status" -eq 0 ]
+  [ "$(count_digests)" -eq 0 ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ] \
+    || { echo "a valid non-Skill event was logged: $(cat "$GATE_FAILOPEN_LOG")"; false; }
 }
 
 @test "an UNRECOGNISED tool_response shape is RECORDED, not silently dropped" {

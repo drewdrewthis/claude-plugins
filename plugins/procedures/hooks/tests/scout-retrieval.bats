@@ -186,6 +186,71 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
     || { echo "--cat is mentioned in prose but never shown as a runnable command"; false; }
 }
 
+@test "neither prompt claims grep as the scout's own method" {
+  # Both files legitimately NAME grep in prohibitions ("never fall back to a raw
+  # grep over mistakes.jsonl"), so the word itself is not the tell. Possessive
+  # framing is: a line calling grep the scout's work contradicts the
+  # sole-retrieval-surface contract in Boundaries, and an identity doc that
+  # disagrees with its own contract instructs whoever reads it first.
+  local f hit
+  for f in "$SKILL" "$AGENT"; do
+    hit="$(grep -niE 'your (greps|grepping|grep )' "$f" || true)"
+    [ -z "$hit" ] \
+      || { echo "$(basename "$f") advertises grep as the scout's own method: $hit"; false; }
+  done
+}
+
+@test "both prompts issue --recall FIRST, before iterative keyword probing" {
+  # --recall is the one-shot multi-signal query; --keyword is the iterative
+  # probe it exists to replace. Ordering is the whole point: a loop that probes
+  # first and recalls last pays for the iteration it was supposed to skip. A
+  # live fork ran the loop in file order and spent 9 Bash calls / 99s doing it.
+  local f r k
+  for f in "$SKILL" "$AGENT"; do
+    r="$(awk '/^[[:space:]]*```bash/{b=1;next} /^[[:space:]]*```/{b=0;next}
+              b && /--recall/ { print NR; exit }' "$f")"
+    k="$(awk '/^[[:space:]]*```bash/{b=1;next} /^[[:space:]]*```/{b=0;next}
+              b && /--keyword/ { print NR; exit }' "$f")"
+    [ -n "$r" ] || { echo "$(basename "$f"): --recall is never issued as a command"; false; }
+    [ -n "$k" ] || { echo "$(basename "$f"): --keyword is never issued as a command"; false; }
+    [ "$r" -lt "$k" ] \
+      || { echo "$(basename "$f"): --recall at line $r comes AFTER --keyword at line $k; the fork reads in order"; false; }
+  done
+}
+
+@test "both prompts make batching the rule, without licensing a skipped probe" {
+  # Perf work on a retrieval prompt has one failure mode: it quietly becomes
+  # scope reduction. The budget must read as guidance and must say, in the
+  # file, that it never justifies dropping a probe.
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'one bash call|single bash call' "$f" \
+      || { echo "$(basename "$f"): batching multiple queries into one Bash call is never mandated"; false; }
+    grep -qE '[0-9]' <<<"$(grep -iE 'bash call' "$f")" \
+      || { echo "$(basename "$f"): no call budget is stated"; false; }
+    grep -qiE 'never skip|not a cap|thoroughness' "$f" \
+      || { echo "$(basename "$f"): the budget is stated without protecting thoroughness"; false; }
+  done
+}
+
+@test "both prompts RUN --list-stores, rather than citing output they never produced" {
+  # The store list is referenced downstream ("step 2's --list-stores boundary")
+  # to scope the failure-store sweep. Naming a flag in prose does not put its
+  # output in front of the model: unless the command is shown as one it RUNS,
+  # the later step is reasoning from a list it was never given.
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    run awk '
+      /^[[:space:]]*```bash/ { inblock = 1; next }
+      /^[[:space:]]*```/     { inblock = 0; next }
+      inblock && /query-records\.sh/ && /--list-stores/ { found = 1 }
+      END { exit(found ? 0 : 1) }
+    ' "$f"
+    [ "$status" -eq 0 ] \
+      || { echo "$(basename "$f"): --list-stores is cited but never run as a command"; false; }
+  done
+}
+
 @test "the fork prompt names query-records.sh as the SOLE retrieval surface" {
   local line
   line="$(grep -inE 'ONLY retrieval tool|sole retrieval surface' "$SKILL" | head -1)"

@@ -9,15 +9,11 @@ agent: procedure-scout
 model: sonnet
 background: false
 argument-hint: "<what you're trying to do>"
-# PLUGIN ADAPTATION: "Fork-path agent prompt" (see README). A live marker
-# experiment put a distinctive first instruction in agents/procedure-scout.md
-# and the fork executed ZERO occurrences of it, while this file's body arrived
-# verbatim as the fork's prompt. The docs agree: for `context: fork`, the Task
-# is the SKILL.md content — `agent:` selects identity, not the prompt. So the
-# retrieval contract has to live HERE to bind anything. Unverified for forks
-# (the docs do not say whether skill tool keys reach a fork), so this is a
-# best-effort second layer, not the control: the prose prohibition below is
-# what actually carries the rule.
+# PLUGIN ADAPTATION: "Fork-path agent prompt" (see README). A forked skill loads
+# THIS file as the prompt and takes `agent:` as identity only, so the retrieval
+# contract below lives here to bind at all. Whether this key reaches a fork is
+# undocumented — it is a best-effort second layer; the prohibition in Boundaries
+# is the control.
 disallowed-tools: Read, Grep, Glob
 ---
 
@@ -69,32 +65,53 @@ below. Every command in this section runs through it.
    ambiguous. A wrong reading found here is cheap; found after the caller acts
    it is not.
 
-2. **Survey every store, not just procedures.** The traps live in the other
-   kinds:
+2. **Open with `--recall`, in one Bash call with `--list-stores`.** `--recall`
+   is a single multi-signal query over the failure stores — it is what replaces
+   iterative probing, so it goes FIRST, not last. Send both at once:
+
+   ```bash
+   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --recall '<full term set from the goal>'
+   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --list-stores
+   ```
+
+   Give recall the *whole* term set from the goal in one pass — it is built for
+   many signals at once, and splitting it into probes is the cost this ordering
+   removes. Whitespace separates terms; keep phrases hyphenated (`pickup-loop`),
+   never split them. Output is a `recall: N matched` count line, then the 20
+   most recent hits (raise `--limit` only when the count says more exist and the
+   overflow is plausibly on-goal). `--list-stores` prints the exact scan
+   surface, one store per line — that is the store list step 3 must cover.
+   ⚠ never fall back to a raw `grep` over `mistakes.jsonl` — unanchored
+   `grep -i` matches inside paths and URLs; `--recall` matches only semantic
+   field values, whole-word
+   ⚠ if the count exceeds the hits you read, say so in STANDING NOTES — a cap
+   is allowed, a SILENT one is not
+
+3. **Probe the gaps recall left — every remaining store, in one Bash call.**
+   Recall covers the failure stores; the procedure and decision stores it does
+   not reach are a gap by construction, and so is any facet of the goal that
+   came back with zero hits. Compare what recall returned against the
+   `--list-stores` surface and close the difference:
 
    ```bash
    bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --keyword "<term set>"
-   ```
-
-   One gloss call (no `--full`) per synonym set — expand synonyms, since the
-   caller's words rarely match the corpus's. Search the *capability* as well as
-   the identifier: "the cache", not just the function name. Narrow iteratively
-   with the structural flags rather than re-guessing terms:
-
-   ```bash
    bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --kind procedure --keyword "<term set>"
    bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --links-to <id-you-already-found>
    ```
 
-   `--links-to` on a record you already trust is the highest-yield second
-   query: the corpus's own cross-references beat another synonym guess.
-   `--list-stores` prints the exact scan surface.
-   ⚠ a term set that returns nothing is a RESULT — go to step 3b's miss rule,
+   Gloss calls only (no `--full`). Expand synonyms — the caller's words rarely
+   match the corpus's — and search the *capability* as well as the identifier:
+   "the cache", not just the function name. `--links-to` on a record you already
+   trust is the highest-yield follow-up: the corpus's own cross-references beat
+   another synonym guess.
+   ⚠ every store still gets surveyed — this step is reordered, not narrowed. A
+   store you never queried is not a store recall covered
+   ⚠ a term set that returns nothing is a RESULT — go to step 4b's miss rule,
    never to a tool outside this script
 
-3. **Select, then batch-read — through the same script.** From all survey
-   lists, pick every plausibly relevant path — err inclusive, a gloss can
-   undersell a record — and read them in ONE call:
+4. **Select, then batch-read — through the same script.** From recall's hits
+   and every survey list, pick every plausibly relevant path — err inclusive, a
+   gloss can undersell a record — and read them in ONE call:
 
    ```bash
    bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --cat <path> <path> ...
@@ -115,7 +132,7 @@ below. Every command in this section runs through it.
    ⚠ `--cat` refusing a path is the boundary working, not a reason to reach for
    `cat`
 
-3b. **A record you can reach but cannot query is a BUG — report it.** If you
+4b. **A record you can reach but cannot query is a BUG — report it.** If you
    learn a relevant record exists (a link from another record, a path in the
    caller's goal) that none of your queries returned, its `keywords` or the
    matcher is wrong. Read it with `--cat`, use it, and name it under
@@ -124,26 +141,18 @@ below. Every command in this section runs through it.
    misroutes every later caller, and a grep that "worked this time" is what
    keeps it invisible
 
-4. **Pull the traps.** For the same terms, recall:
-
-   ```bash
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --recall '<term set>'
-   ```
-
-   Output is a `recall: N matched` count line, then the 20 most recent hits
-   (raise `--limit` only when the count says more exist and the overflow is
-   plausibly on-goal). Whitespace separates terms; keep phrases hyphenated
-   (`pickup-loop`), never split them. No new terms and no new stores after this
-   step — reading the records it names is part of it, via step 3's `--cat`.
-   ⚠ never fall back to a raw `grep` over `mistakes.jsonl` — unanchored
-   `grep -i` matches inside paths and URLs; `--recall` matches only semantic
-   field values, whole-word
-   ⚠ if the count exceeds the hits you read, say so in STANDING NOTES — a cap
-   is allowed, a SILENT one is not
-
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
    search. If steps 2-4 found nothing, emit only the `NOT FOUND` section and
    stop. A miss is a finished answer, not a reason to widen the search.
+
+**Budget: a typical goal finishes in 3-4 Bash calls** — recall + `--list-stores`
+together, the gap probes together, the `--cat` batch, and a second `--cat` if
+step 4b turns one up. Put every query you already know you need into the same
+Bash call rather than paying a round trip each; a step above that lists several
+commands means one call, not several.
+⚠ this is guidance, not a cap. Thoroughness wins ties: never skip a gap probe,
+a store, or a follow-up read to come in under it. Going over is a cost; missing
+a record the caller needed is a wrong answer.
 
 # Standing
 
@@ -194,7 +203,7 @@ means nobody has recorded a failure here yet, which is itself information.
   `--keyword`/`--kind`/`--id`/`--links-to`/`--recall`, reading with
   `--cat`/`--full`. No `grep`, `find`, `ls`, `awk`, `cat`, `head`, or `Read` of
   a record. They read the same bytes, so this is not about capability: a search
-  the script cannot express is a corpus bug (step 3b), and a private tool is how
+  the script cannot express is a corpus bug (step 4b), and a private tool is how
   it stays unfixed.
 - Never search outside the record stores plus `mistakes.jsonl`, under
   `${CODEX_ROOT:-$HOME/.claude}`. The store list is discovered, not memorized —

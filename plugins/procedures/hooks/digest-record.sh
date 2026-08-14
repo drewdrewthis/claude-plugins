@@ -49,7 +49,15 @@ INPUT="$(cat 2>/dev/null || true)"
 # gate_failopen never returns; it records and exits 0.
 command -v jq >/dev/null 2>&1 || gate_failopen digest-record no-jq
 
+# Settle whether the payload is READABLE before filtering on anything inside it.
+# Every extraction below degrades to empty on a parse failure, so an unparseable
+# payload would otherwise be indistinguishable from "some other tool fired" and
+# exit 0 silently — the exact shape of the bug that kept this hook inert.
+printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1 \
+    || gate_failopen digest-record malformed-payload
+
 TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '(.tool_name // .tool) // empty' 2>/dev/null || true)"
+# A valid payload for a different tool is a legitimate decline, not a fail-open.
 [ "$TOOL_NAME" = "Skill" ] || exit 0
 
 SKILL="$(printf '%s' "$INPUT" | jq -r '(.tool_input.skill // .input.skill) // empty' 2>/dev/null || true)"
