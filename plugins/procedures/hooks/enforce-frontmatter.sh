@@ -34,7 +34,17 @@ OUT="$(LINT_FRONTMATTER_ROOT="$ROOT" bash "$LINTER" "$REL" 2>&1)"
 STATUS=$?
 # Targeted mode errors on non-record targets ("not a lintable record") — that
 # is out-of-scope for enforcement, not a violation.
-if [ "$STATUS" -ne 0 ] && ! printf '%s' "$OUT" | grep -q 'not a lintable record'; then
+#
+# Matched with `case`, not `printf | grep -q`: grep exits on its first match,
+# the still-writing printf takes SIGPIPE, and pipefail reports 141 for a
+# SUCCESSFUL match once the linter's output outgrows the pipe buffer. The
+# marker is printed on line 1, so a verbose run matched early and blocked an
+# out-of-scope write (#46, hooks/tests/frontmatter-sigpipe.bats).
+case "$OUT" in
+    *"not a lintable record"*) OUT_OF_SCOPE=1 ;;
+    *) OUT_OF_SCOPE=0 ;;
+esac
+if [ "$STATUS" -ne 0 ] && [ "$OUT_OF_SCOPE" -eq 0 ]; then
     {
         echo "FRONTMATTER: $REL violates the record frontmatter schema. Fix it now:"
         printf '%s\n' "$OUT"
