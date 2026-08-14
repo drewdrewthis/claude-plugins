@@ -9,6 +9,22 @@
 #
 # BLIND (record): reset-hook-never-ran, no-jq, lib-unreadable:*,
 # activity-undetermined — the gate could not evaluate.
+# store-unwritable — the caller could not persist what it was asked to persist.
+# payload-shape-unrecognized — the caller was handed its own event and could not
+# find the field it needed in it. A serialization change must be loud on its
+# first occurrence, not discovered by dogfooding weeks later.
+# malformed-payload — stdin would not parse at all, so no filter downstream can
+# be trusted to mean what it says.
+# non-object-payload — stdin parsed, but the top-level value is not an envelope
+# (a bare string, an array, a number). Kept distinct from malformed-payload:
+# that one says the transport is broken, this one says something is plumbing
+# the wrong event in. Both silently skip if unchecked, since indexing a
+# non-object yields empty and reads as "a different tool fired".
+#
+# NOT ONLY GATES. digest-record.sh records here too, under its own <gate> name.
+# It is a writer, not a gate, and its failures are not gate misses — group by
+# <gate> before computing any fail-open rate, which the per-caller naming rule
+# below already requires.
 # LEGITIMATE (never record): out-of-audience, the compliance-path allowlist, a
 # clean no-tool turn, sdk-cli, a non-Stop event — the gate DID evaluate and
 # correctly released. Blurring this line makes the log useless as a fail-open
@@ -66,6 +82,8 @@ gate_failopen() {
     # in the log itself rather than only in a header comment.
     case "$why" in
         no-jq|reset-hook-never-ran|activity-undetermined|lib-unreadable:*) ;;
+        store-unwritable|payload-shape-unrecognized|malformed-payload) ;;
+        non-object-payload) ;;
         *) why="unrecognized:${why}" ;;
     esac
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \
