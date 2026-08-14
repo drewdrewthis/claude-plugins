@@ -387,20 +387,42 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
       || { echo "$(basename "$f"): held context is offered before goal text"; false; }
     [ "${#h}" -lt "${#c}" ] \
       || { echo "$(basename "$f"): the working directory is offered before held context"; false; }
+    # Step 0 must come BEFORE retrieval, not merely exist somewhere in the file
+    # — the repo has to be settled before any query is issued. Prefix-index for
+    # the same reason as above; the first `--recall` mention IS the retrieval
+    # step in both files, so there is no earlier mention to match by accident.
+    local s r
+    s="${flat%%Resolve the target repo*}"; r="${flat%%--recall*}"
+    [ "${#s}" -lt "${#r}" ] \
+      || { echo "$(basename "$f"): repo resolution comes AFTER the --recall retrieval step"; false; }
     # Never silently.
     grep -qiE 'never .*(assume|default).*(cwd|working directory)|cwd .*never' "$f" \
       || { echo "$(basename "$f"): nothing forbids silently defaulting to cwd"; false; }
+    # Held context is scoped to the CURRENT goal. Unscoped, it lets a digest
+    # from an unrelated prior goal supply the repo — a stale answer that still
+    # looks fully sourced.
+    grep -qE 'CURRENT goal' "$f" \
+      || { echo "$(basename "$f"): held context is not scoped to the current goal"; false; }
+    grep -qiE 'not a repo source' "$f" \
+      || { echo "$(basename "$f"): an unrelated prior goal's digest is not excluded as a repo source"; false; }
   done
 }
 
-@test "both prompts require STATING which repo source was used" {
+@test "both prompts require STATING the repo source, on a template that names the sources" {
   local f
   for f in "$SKILL" "$AGENT"; do
     grep -qiE 'state which|which one you used|say which' "$f" \
       || { echo "$(basename "$f"): resolution is never reported to the caller"; false; }
-    # And the report shape carries it, or the instruction has nowhere to land.
-    grep -qE '^REPO:' "$f" \
-      || { echo "$(basename "$f"): Output block has no REPO: line to carry the choice"; false; }
+    # The template must carry the source annotation, or "state which source"
+    # has nowhere to land. A bare `REPO:` prefix match would stay green with
+    # the annotation stripped — losing exactly what the step asks be reported.
+    grep -qF 'REPO: <owner/repo>  [from goal text|from held context|from cwd]' "$f" \
+      || { echo "$(basename "$f"): REPO: template missing, or no longer names its source"; false; }
+    local src
+    for src in 'from goal text' 'from held context' 'from cwd'; do
+      grep -qF "$src" "$f" \
+        || { echo "$(basename "$f"): REPO: template no longer offers '$src'"; false; }
+    done
   done
 }
 

@@ -61,16 +61,15 @@ silently.
 Let `QR` stand for `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`
 below. Every command in this section runs through it.
 
-0. **Resolve the target repo — only when the goal is repo-scoped.** A PR, an
-   issue, a branch, a workflow run: anything that only means something inside
-   one repository. Take the FIRST source that answers, in this order: goal text
-   (an explicit `owner/repo`, or a URL carrying one) > held context (the
-   caller's brief, a prior digest) > the working directory. State which one you
-   used on the `REPO:` line. Never silently assume cwd — a PR number resolved
-   against whatever repo the shell happens to sit in is the most confident
-   wrong answer this loop can produce: every command verbatim, every path
-   resolving, all of it about somewhere else. Costs no Bash call — this is
-   reasoning over text you already hold, not a lookup.
+0. **Resolve the target repo — only when the goal is repo-scoped** (a PR, an
+   issue, a branch, a workflow run). Take the FIRST source that answers:
+   1. goal text — an explicit `owner/repo`, or a URL carrying one;
+   2. held context, only where it concerns the CURRENT goal (the caller's brief
+      for this task). A digest from an unrelated prior goal is search context,
+      not a repo source;
+   3. the working directory.
+   Never silently assume cwd. State which source you used on the `REPO:` line.
+   Costs no Bash call.
 
 1. **Restate the goal in one line.** Name the reading you took if the ask is
    ambiguous. A wrong reading found here is cheap; found after the caller acts
