@@ -1,0 +1,6 @@
+{
+  "name": "just-recipes",
+  "version": "0.1.0",
+  "description": "Teaches Claude to prefer named `just` recipes over ad hoc shell, using just's native discovery/introspection features.",
+  "author": { "name": "Drü" }
+}
