@@ -1,0 +1,25 @@
+{
+  "cwd": "/tmp",
+  "duration_ms": 1234,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "00000000-0000-4000-8000-000000000002",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "tool_input": {
+    "args": "example goal",
+    "skill": "procedures:how-do-i"
+  },
+  "tool_name": "Skill",
+  "tool_response": {
+    "agentId": "a0000000000000000",
+    "commandName": "procedures:how-do-i",
+    "result": "GOAL: example goal\n\nGOVERNS: references/procedures/example/PROCEDURE.md  [tested] [newly found]\n  - do the first thing\n  - then the second\n\nCOMMANDS (verbatim):\n  $ example-tool --flag value\n\nTRAPS:\n  - none recorded yet\n",
+    "status": "forked",
+    "success": true
+  },
+  "tool_use_id": "toolu_00000000000000000000000",
+  "transcript_path": "/tmp/transcripts/00000000-0000-4000-8000-000000000001.jsonl"
+}

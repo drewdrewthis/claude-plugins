@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.4.0...procedures-v0.4.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **procedures:** gate messages resolve ([#28](https://github.com/drewdrewthis/claude-plugins/issues/28)), latent SIGPIPE ([#46](https://github.com/drewdrewthis/claude-plugins/issues/46)), scout repo resolution ([#48](https://github.com/drewdrewthis/claude-plugins/issues/48)) ([#50](https://github.com/drewdrewthis/claude-plugins/issues/50)) ([165ea0d](https://github.com/drewdrewthis/claude-plugins/commit/165ea0d54f08ecdcd75b8ba7eaa9bd65b77478ad))
+
+## [0.4.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.3.1...procedures-v0.4.0) (2026-08-14)
+
+
+### Features
+
+* **procedures:** gate how-do-i on mutation + field-anchored mistakes.jsonl recall ([#39](https://github.com/drewdrewthis/claude-plugins/issues/39)) ([2e3b232](https://github.com/drewdrewthis/claude-plugins/commit/2e3b2321a909d6de9183b45b839b54c97817f47d))
+* **procedures:** scout retrieval loop — batch fetch, warm digests, tier pin (closes [#34](https://github.com/drewdrewthis/claude-plugins/issues/34), [#24](https://github.com/drewdrewthis/claude-plugins/issues/24), [#22](https://github.com/drewdrewthis/claude-plugins/issues/22)) ([#45](https://github.com/drewdrewthis/claude-plugins/issues/45)) ([79c9af3](https://github.com/drewdrewthis/claude-plugins/commit/79c9af37e05e486e88f6584af18ad1da067d42e3))
+
 ## [0.3.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.3.0...procedures-v0.3.1) (2026-08-09)
 
 

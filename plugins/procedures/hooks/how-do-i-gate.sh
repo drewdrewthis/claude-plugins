@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # how-do-i-gate.sh — PreToolUse hook (all tools; no matcher).
 #
-# SINGLE RESPONSIBILITY: enforce ONE invariant — Skill(how-do-i) runs before a
+# SINGLE RESPONSIBILITY: enforce ONE invariant — Skill(procedures:how-do-i) runs before a
 # main agent acts.
 #
 # AUDIENCE: every MAIN agent (owner-set 2026-08-02, resolving orchard-codex#99).
@@ -59,6 +59,28 @@ SID="$(ts_session_id "$INPUT")"
 ts_turn_started "$SID" || gate_failopen "how-do-i" "reset-hook-never-ran" "$SID"
 ts_is_marked "$SID" how_do_i && exit 0
 
+# PLUGIN ADAPTATION: plugin-scoped skill name in the message below, plus this
+# resolvability check — see README "Plugin-scoped skill names in gate messages".
+# Upstream the gate lives inside the codex and names the bare skill; shipped in
+# a plugin the invocable name is namespaced and the install can arrive
+# hooks-first.
+#
+# About to force an invocation — so the name below has to be one the session can
+# actually resolve. Denying while naming a skill that cannot be invoked is a
+# HARD WEDGE: deny, retry, deny, with no exit (2026-08-07). The skills ship as a
+# sibling of these hooks, so their absence here means a partial install.
+#
+# JUDGEMENT — this is a PROXY, not a detection. A hook is handed no capability
+# manifest: nothing in the payload or the environment enumerates the session's
+# registered skills, so "can the model invoke this right now" is not answerable
+# from in here. The file check is deliberately ONE-SIDED — present does not
+# prove the session registered the skill, but absent proves it cannot be
+# invoked. It therefore fires only when we are certain, and introduces no new
+# way to wedge. What it misses: skills on disk but disabled in session config.
+# Costs one builtin test, no fork.
+[ -r "$SCRIPT_DIR/../skills/how-do-i/SKILL.md" ] \
+    || gate_failopen "how-do-i" "skill-unresolvable" "$SID"
+
 # The reason string is the ONLY channel this gate has to the blocked agent —
 # it is read at the moment of denial, by an agent that may have run how-do-i
 # minutes ago in an earlier turn and reads the block as redundant. So it states
@@ -66,7 +88,7 @@ ts_is_marked "$SID" how_do_i && exit 0
 # (observed: a main agent proposed exactly that, on the premise that a
 # same-session run should carry over). Per-turn re-gating is deliberate and
 # load-bearing — see lib/turn-state.sh and turn-state-reset.sh.
-jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(how-do-i). Run it before acting, then retry. Gating is PER TURN by design — one user prompt is one turn, and a lookup from an earlier turn says nothing about what this turn is about to do, so a run earlier in the session does not carry over. If you already researched this, pass those findings in the skill args and ask only what is new; the skill is cheap when there is little left to research. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
+jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(procedures:how-do-i). Run it before acting, then retry. Gating is PER TURN by design — one user prompt is one turn, and a lookup from an earlier turn says nothing about what this turn is about to do, so a run earlier in the session does not carry over. If you already researched this, pass those findings in the skill args and ask only what is new; the skill is cheap when there is little left to research. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
