@@ -182,12 +182,22 @@ for f in "${TARGETS[@]:-}"; do
         continue
     fi
     block="$(frontmatter_block "$f")"
+    # Zero-fork, pipe-free membership haystack — same pattern as
+    # scripts/query-records.sh (002f95a). `printf '%s\n' "$block" | grep -q`
+    # looks equivalent and is not: grep exits on its first match, the still-
+    # writing printf takes SIGPIPE, and `set -o pipefail` reports 141 for a
+    # SUCCESSFUL match once the block outgrows the pipe buffer. Every present
+    # key then reads as missing (#46, hooks/tests/frontmatter-sigpipe.bats).
+    # The leading newline lets a key on the block's FIRST line match too.
+    fm_haystack=$'\n'"$block"$'\n'
 
     # all six required keys present
     for key in "${REQUIRED_KEYS[@]}"; do
-        if ! printf '%s\n' "$block" | grep -qE "^${key}:"; then
-            err "$f: frontmatter missing required key '${key}:'"
-        fi
+        # "${key}:" is quoted inside the pattern, so it is matched literally.
+        case "$fm_haystack" in
+            *$'\n'"${key}:"*) ;;
+            *) err "$f: frontmatter missing required key '${key}:'" ;;
+        esac
     done
 
     # (d) NONEMPTY keywords — reject `keywords:` with empty `[]` or nothing.
@@ -201,9 +211,11 @@ for f in "${TARGETS[@]:-}"; do
     # aspirational prose; emit a WARNING (never FAIL) so the gap is visible.
     case "$f" in
         references/principles/*.md)
-            if ! printf '%s\n' "$block" | grep -qE "^enforced_by:"; then
-                warn "$f: principle has no 'enforced_by:' — aspirational (not enforced)"
-            fi
+            # Same SIGPIPE hazard as the required-key loop above (#46).
+            case "$fm_haystack" in
+                *$'\n'"enforced_by:"*) ;;
+                *) warn "$f: principle has no 'enforced_by:' — aspirational (not enforced)" ;;
+            esac
             ;;
     esac
 

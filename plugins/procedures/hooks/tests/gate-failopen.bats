@@ -163,9 +163,16 @@ unreadable_lib() {
   # reader looking for the thing that is already there. See #233. What we
   # CAN and do pin: the multiplication is real, so a future rate calculation
   # is not surprised by it.
-  local P1="{\"session_id\":\"$SID\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/tmp/a\"}}"
+  #
+  # All three payloads must be ACTS. The allowlist short-circuits ahead of the
+  # turn-state lookup — deliberately, so a compliance call never depends on
+  # state — so an allowlisted LOOK exits before this recorder is reached and
+  # contributes no row. Until 2026-08-09 `Read /tmp/a` and `pwd` were denied
+  # and did contribute; now they are looks, and using them here would measure
+  # the allowlist rather than the per-call multiplication this pins.
+  local P1="{\"session_id\":\"$SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/a\"}}"
   local P2="{\"session_id\":\"$SID\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/tmp/b\"}}"
-  local P3="{\"session_id\":\"$SID\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pwd\"}}"
+  local P3="{\"session_id\":\"$SID\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf /tmp/c\"}}"
   run drive "how-do-i-gate.sh" technician "$P1"
   run drive "how-do-i-gate.sh" technician "$P2"
   run drive "how-do-i-gate.sh" technician "$P3"

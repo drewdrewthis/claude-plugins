@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # how-do-i-gate.sh — PreToolUse hook (all tools; no matcher).
 #
-# SINGLE RESPONSIBILITY: enforce ONE invariant — Skill(how-do-i) runs before a
+# SINGLE RESPONSIBILITY: enforce ONE invariant — Skill(procedures:how-do-i) runs before a
 # main agent acts.
 #
 # AUDIENCE: every MAIN agent (owner-set 2026-08-02, resolving orchard-codex#99).
@@ -59,7 +59,29 @@ SID="$(ts_session_id "$INPUT")"
 ts_turn_started "$SID" || gate_failopen "how-do-i" "reset-hook-never-ran" "$SID"
 ts_is_marked "$SID" how_do_i && exit 0
 
-jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(how-do-i). Run it before acting, then retry. Reads under references/procedures/ and read-only discovery commands stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
+# PLUGIN ADAPTATION: plugin-scoped skill name in the message below, plus this
+# resolvability check — see README "Plugin-scoped skill names in gate messages".
+# Upstream the gate lives inside the codex and names the bare skill; shipped in
+# a plugin the invocable name is namespaced and the install can arrive
+# hooks-first.
+#
+# About to force an invocation — so the name below has to be one the session can
+# actually resolve. Denying while naming a skill that cannot be invoked is a
+# HARD WEDGE: deny, retry, deny, with no exit (2026-08-07). The skills ship as a
+# sibling of these hooks, so their absence here means a partial install.
+#
+# JUDGEMENT — this is a PROXY, not a detection. A hook is handed no capability
+# manifest: nothing in the payload or the environment enumerates the session's
+# registered skills, so "can the model invoke this right now" is not answerable
+# from in here. The file check is deliberately ONE-SIDED — present does not
+# prove the session registered the skill, but absent proves it cannot be
+# invoked. It therefore fires only when we are certain, and introduces no new
+# way to wedge. What it misses: skills on disk but disabled in session config.
+# Costs one builtin test, no fork.
+[ -r "$SCRIPT_DIR/../skills/how-do-i/SKILL.md" ] \
+    || gate_failopen "how-do-i" "skill-unresolvable" "$SID"
+
+jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(procedures:how-do-i). Run it before acting, then retry. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",

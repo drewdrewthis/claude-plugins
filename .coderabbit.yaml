@@ -22,10 +22,14 @@ reviews:
         CONTRIBUTING.md "Vendoring rule"). Flag any divergence from upstream
         that is not marked at the point of divergence: in *.sh/*.awk/*.bats
         files the marker is a literal `# PLUGIN ADAPTATION: <why>` comment;
-        in *.md and *.json files (no comment syntax for this) the divergence
-        must instead match one of README.md's documented adaptation classes
+        *.md YAML frontmatter takes `#` comments too, so a frontmatter
+        divergence carries the same literal marker. In *.md prose bodies and
+        *.json files (no comment syntax there) the divergence must instead
+        match one of README.md's documented adaptation classes
         (${CLAUDE_PLUGIN_ROOT}/${CLAUDE_SKILL_DIR} paths, data-root
-        defaults) — flag any .md/.json divergence outside those classes.
+        defaults, the fork-skill `model:` pin) — flag any such divergence
+        outside those classes, and flag a new divergence class that is not
+        added to README.md in the same PR.
         Also flag reformats, renames, and "while I'm here" edits, and any
         new or changed hook/script behavior (including a marked adaptation)
         with no bats test added in the SAME PR under hooks/tests/ or

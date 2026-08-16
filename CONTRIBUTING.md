@@ -30,9 +30,10 @@ templates) is vendored from `orchard-codex@develop-sweatshop`.
 
 - Anything that isn't upstream must be marked `# PLUGIN ADAPTATION: <why>` at
   the point of divergence — the plugin-hosting context (data-root defaults,
-  `${CLAUDE_SKILL_DIR}` script paths) is the only legitimate reason to
-  diverge. See `README.md`'s two documented adaptation classes for the
-  pattern.
+  `${CLAUDE_SKILL_DIR}` script paths) and harness dispatch-path differences
+  (the fork-skill `model:` pin) are the only legitimate reasons to diverge.
+  See `README.md`'s documented adaptation classes for the pattern; adding a
+  divergence means adding its class there in the same PR.
 - Everything else stays byte-close to upstream. A re-sync from
   `develop-sweatshop` should be a small, reviewable diff — don't introduce
   unmarked drift, even a reformat or a "while I'm here" rename.
@@ -79,3 +80,41 @@ follows the taxonomy in
 
 - Feature branch off `main`.
 - PR review required — no direct pushes to `main`, no force-pushes.
+
+## Versioning — automated, never by hand
+
+Installed plugins are cached per version at
+`plugins/cache/<owner>/<plugin>/<version>/`. A change that ships without a
+version bump **never reaches an already-installed box** — it merges, and every
+existing install keeps running the old copy.
+
+`release-please` owns every `plugins/*/.claude-plugin/plugin.json` version.
+Do not edit those `version` fields by hand — a manual bump collides with the
+release PR.
+
+What you do instead: **write a conventional-commit PR title.**
+
+The repo squashes with `squash_merge_commit_title=PR_TITLE`, so the **PR title
+becomes the commit subject on `main`** — and that subject is the only text
+release-please parses. Branch commit messages are collapsed into the body and
+never read. A branch of immaculate `feat:` commits under a PR titled
+`update stuff` releases nothing.
+
+`.github/workflows/pr-title.yml` enforces this on every PR.
+
+| PR title prefix | Bump |
+| --- | --- |
+| `fix:` / `perf:` | patch |
+| `feat:` | minor |
+| any type with `!` (e.g. `feat(procedures)!:`) | major |
+| `chore:` / `docs:` / `test:` / `ci:` / `build:` | none — **ships nothing to installed boxes** |
+
+⚠ A `BREAKING CHANGE:` footer in a *branch commit* does not survive the squash.
+Put `!` in the PR title — it is the only reliable major-bump signal here.
+
+Scope by plugin (`fix(procedures): …`) so the release lands on the right one;
+each plugin versions and tags independently as `<plugin>-v<version>`.
+
+⚠ A behaviour change committed as `chore:` or `docs:` produces no release and
+therefore no bump — so it stays invisible to every installed box. If a change
+should reach users, it is a `fix:` or a `feat:`.

@@ -349,3 +349,106 @@ assistant_tool() {
 
   rm -rf "$LEAK_HOME"
 }
+
+# ---------- #28: the message must name a form that RESOLVES ----------
+#
+# Shipped in a plugin, the invocable names are plugin-scoped
+# (Skill(procedures:how-do-i)). A gate that DENIES while naming a bare
+# `Skill(how-do-i)` sends the agent after a skill it cannot call: deny, retry,
+# deny — a hard wedge with no exit. turn-state-record.sh already accepts both
+# forms, so recognition was never the gap; only the messages were.
+
+# A plugin tree with the hooks but NO skills/ — the 2026-08-07 wedge shape.
+headless_plugin() {
+  local tree
+  tree="$(mktemp -d "${BATS_TMPDIR:-/tmp}/headless.XXXXXX")"
+  mkdir -p "$tree/hooks"
+  cp -R "$HOOKS/lib" "$tree/hooks/lib"
+  cp "$HOOKS"/*.sh "$tree/hooks/"
+  printf '%s' "$tree"
+}
+
+@test "how-do-i-gate: the deny names the plugin-scoped skill, not a bare name" {
+  start_turn
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [[ "$output" == *"Skill(procedures:how-do-i)"* ]] \
+    || { echo "deny does not name the resolvable form: $output"; false; }
+  [[ "$output" != *"Skill(how-do-i)"* ]] \
+    || { echo "deny still names the bare, unresolvable form: $output"; false; }
+}
+
+@test "am-i-done-gate: the block names the plugin-scoped skill, not a bare name" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [[ "$output" == *"Skill(procedures:am-i-done)"* ]] \
+    || { echo "block does not name the resolvable form: $output"; false; }
+  [[ "$output" != *"Skill(am-i-done)"* ]] \
+    || { echo "block still names the bare, unresolvable form: $output"; false; }
+}
+
+@test "how-do-i-gate: BOTH the bare and the plugin-scoped invocation satisfy it" {
+  # The message may name only one form, but it must never name a form that
+  # fails to satisfy. Both are accepted, so naming the scoped one is safe.
+  local form
+  for form in how-do-i procedures:how-do-i; do
+    start_turn
+    ran_skill "$form"
+    run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+    [ -z "$output" ] || { echo "Skill($form) did NOT satisfy the gate: $output"; false; }
+  done
+}
+
+@test "am-i-done-gate: BOTH the bare and the plugin-scoped invocation satisfy it" {
+  local form
+  for form in am-i-done procedures:am-i-done; do
+    start_turn
+    user_prompt
+    assistant_tool Edit
+    ran_skill "$form"
+    run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+    [ -z "$output" ] || { echo "Skill($form) did NOT satisfy the gate: $output"; false; }
+  done
+}
+
+@test "how-do-i-gate: an UNRESOLVABLE skill fails open and is RECORDED" {
+  # Hooks present, skills absent. Denying here names a skill that cannot be
+  # invoked, so the gate must release instead — and say so, or the wedge is
+  # silent again.
+  local tree; tree="$(headless_plugin)"
+  start_turn
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$tree/hooks/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"deny"* ]] \
+    || { echo "gate denied while naming an unresolvable skill (hard wedge): $output"; false; }
+  grep -q '"why":"skill-unresolvable"' "$GATE_FAILOPEN_LOG" \
+    || { echo "wedge released but left no record: $(cat "$GATE_FAILOPEN_LOG" 2>/dev/null)"; false; }
+  grep -q '"gate":"how-do-i"' "$GATE_FAILOPEN_LOG"
+  rm -rf "$tree"
+}
+
+@test "am-i-done-gate: an UNRESOLVABLE skill fails open and is RECORDED" {
+  local tree; tree="$(headless_plugin)"
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$tree/hooks/am-i-done-gate.sh'"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"block"* ]] \
+    || { echo "gate blocked while naming an unresolvable skill (hard wedge): $output"; false; }
+  grep -q '"why":"skill-unresolvable"' "$GATE_FAILOPEN_LOG" \
+    || { echo "wedge released but left no record: $(cat "$GATE_FAILOPEN_LOG" 2>/dev/null)"; false; }
+  grep -q '"gate":"am-i-done"' "$GATE_FAILOPEN_LOG"
+  rm -rf "$tree"
+}
+
+@test "the resolvability check does not make a healthy gate inert" {
+  # The other half: with skills present the gate must still bite. A check that
+  # released unconditionally would pass every test above and disable the gate.
+  start_turn
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [[ "$output" == *"deny"* ]]
+  [ ! -s "$GATE_FAILOPEN_LOG" ] \
+    || { echo "a healthy install recorded a fail-open: $(cat "$GATE_FAILOPEN_LOG")"; false; }
+}

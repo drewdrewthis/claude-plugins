@@ -26,13 +26,14 @@ orchard-codex `develop-sweatshop`):
 
 | piece | what |
 |---|---|
-| `/how-do-i` | the gateway to everything the codex knows — forks the `procedure-scout` agent, which searches the record stores via `scripts/query-records.sh` and returns the governing procedure, verbatim commands, traps, and a standing label per source |
+| `/how-do-i` | the gateway to everything the codex knows — forks the `procedure-scout` agent, which searches the record stores via `scripts/query-records.sh` and returns the governing procedure, verbatim commands, traps, and a standing label per source. `query-records.sh` is its SOLE retrieval surface (survey with `--keyword`/`--kind`/`--links-to`/`--recall`, batch-read with `--cat`); a record it can reach but not query is reported as a matcher/`keywords` bug rather than worked around |
+| `digest-record` (PostToolUse:Skill) | stores the digest each `/how-do-i` fork returns, one file per digest under `$TURN_STATE_DIR/digests`, so the next `/how-do-i` in the session starts warm and can separate "already established" from "newly found". Read-only replay via `scripts/session-digest-read.sh --read`; it changes what the fork STARTS WITH, never whether the gate fires |
 | `/log` | durable records: mistake / decision / solution / failure-mode via `scripts/log-record.sh`; `skills/log/templates/` additionally carries the procedure, principle, and evolution shapes, written by hand |
 | `/am-i-done` | cold-read review of an am-i-done report (incl. the "Procedures followed" evolution table) by the `work-reviewer` agent before calling work done |
 | `/create-new` | create a new procedure/reference/skill for uncovered work — wraps the codex-meta create procedures; draft-then-promote |
 | `/evolve-procedure` | patch an EXISTING procedure from a correction, incident, or friction — deviation, missing step, or stale/broken ref; procedures only, every material patch appends a dated line to that procedure dir's `EVOLUTION.md` |
-| `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(how-do-i)` has run this turn; fail-open, blind fail-opens recorded |
-| `am-i-done-gate` (Stop) | requires one `Skill(am-i-done)` review on any turn that called tools; asks at most once |
+| `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded |
+| `am-i-done-gate` (Stop) | requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once |
 | `turn-state-reset` (UserPromptSubmit) / `turn-state-record` (PostToolUse:Skill) | the turn-boundary state the gates read (`$TURN_STATE_DIR`, default `/tmp/claude-turn-state`) |
 | `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation |
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (`evolution.template.md` in `skills/log/templates/`) — one dated line per material change, newest first; `/log` explains it |
@@ -54,8 +55,84 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   plugin-shipped scripts via `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}`
   (substituted by Claude Code in skill and agent markdown) instead of
   upstream's repo-relative paths, which would resolve against the caller's
-  cwd. Host-neutral wording in place of codex-internal file/hook references is
-  a third, prose-only adaptation class and is not individually marked.
+  cwd.
+- **Fork-skill model pin:** a `context: fork` skill inherits the PARENT
+  SESSION's model, not the `model:` its `agent:` declares — the agent-side
+  value is only honoured on the `Agent(subagent_type:)` path. So
+  `skills/how-do-i/SKILL.md` and `skills/am-i-done/SKILL.md` each re-declare
+  `model:` in their own frontmatter, and `hooks/tests/gate-skill-model.bats`
+  holds the two declarations in agreement. Measured on this fork path: an
+  opus-parent session's fork moved to `claude-haiku-4-5` when the skill
+  declared `model: haiku`, while the parent's own turns stayed on opus —
+  the pin binds the fork without touching the caller. Upstream has no
+  equivalent because the gate does not run as a forked skill there.
+
+  **This is documented harness design, not a bug — do not refile it.** The
+  Claude Code docs state it outright: the fork-vs-named-subagent table in
+  [sub-agents](https://code.claude.com/docs/en/sub-agents) gives a fork's
+  model as "same as main session" against a named subagent's "from the
+  subagent's `model` field", and the
+  [skills](https://code.claude.com/docs/en/skills) frontmatter reference says
+  that with `context: fork`, a SKILL's `model:` "sets the forked subagent's
+  model instead". The skill-level pin is therefore the only control surface on
+  this path, and re-declaring it per fork skill is the intended usage rather
+  than a workaround. `hooks/tests/scout-retrieval.bats` sweeps every agent
+  declaring `model:` across every plugin and requires the fork skill that
+  dispatches it to pin the same tier.
+
+- **No upstream counterpart (query-records is now sourced here):**
+  orchard-codex#268 phase 1 removed these scripts from the codex, so this
+  plugin is the source of truth for `query-records.sh`. Machinery added since
+  — `--recall` over `mistakes.jsonl`, and `--cat` for batch full-record
+  retrieval — has nothing upstream to stay byte-close to. Each is marked at
+  its point of divergence.
+
+- **Fork-path session state:** `hooks/digest-record.sh` +
+  `hooks/lib/session-digest.sh` + `scripts/session-digest-read.sh` carry a
+  /how-do-i digest forward within one session, so a repeat invocation starts
+  warm instead of re-searching the same ground. Same root cause as the model
+  pin — the gate runs as a forked skill here and does not upstream — and the
+  same storage discipline as `turn-state.sh`: one file per digest, every write
+  a fresh file, no read-modify-write. Digests live one level BELOW
+  `$TURN_STATE_DIR` precisely so the per-turn reset cannot reach them; the
+  gate still fires every turn regardless of what the fork starts with.
+  Tunable with `SESSION_DIGEST_DIR` (default `$TURN_STATE_DIR/digests`),
+  `SESSION_DIGEST_KEEP` (prior digests replayed per warm start, default 3, `0`
+  = uncapped) and `SESSION_DIGEST_TTL_DAYS` (default 2, the only thing that
+  ever removes a digest). A non-numeric value on either count falls back to its
+  default rather than erroring. A blind failure to store a digest is recorded
+  to `GATE_FAILOPEN_LOG` under gate `digest-record` — group by gate before
+  computing any fail-open rate, since this one is a writer, not a gate.
+
+- **Fork-path agent prompt:** a `context: fork` skill takes its `agent:` as
+  identity only — the agent file's prompt body and its `tools:` allowlist are
+  NOT loaded into the fork. The
+  [skills](https://code.claude.com/docs/en/skills) fork table gives a forked
+  skill's Task as "SKILL.md content" against a system prompt "from agent type",
+  and measurement agrees: a distinctive first-action marker injected into
+  `agents/procedure-scout.md` ran **zero** times in a live fork, which then used
+  the Read tool that `tools: Bash` does not grant. So the retrieval contract —
+  the survey → `--cat` batch-read loop, the `UNREACHABLE` bug report, the output
+  shape, and the sole-retrieval-surface Boundaries — lives in
+  `skills/how-do-i/SKILL.md`, the file that actually binds.
+  `agents/procedure-scout.md` keeps the same contract because it still governs a
+  direct `Agent(subagent_type:)` spawn, and `hooks/tests/scout-retrieval.bats`
+  pins the load-bearing clauses in each file independently so the two cannot
+  silently split. Same class as the model pin above: the fork path reads the
+  SKILL, never the agent. There is no confirmed skill-level tool restriction for
+  forks — `disallowed-tools` is declared on the skill as a best-effort second
+  layer, but the docs do not say it reaches a fork, so the prose prohibition is
+  the control.
+
+- **Plugin-scoped skill names in gate messages:** the gates' deny/block text
+  names `Skill(procedures:how-do-i)` / `Skill(procedures:am-i-done)`, the forms
+  that resolve when shipped in a plugin. `hooks/turn-state-record.sh` accepts
+  the bare and the scoped form alike, so either satisfies a gate. When the named
+  skill file is not readable beside the hooks (`../skills/<name>/SKILL.md`) the
+  gate releases instead of denying, recorded as `why:"skill-unresolvable"`.
+
+Host-neutral wording in place of codex-internal file/hook references is a
+further, prose-only adaptation class and is not individually marked.
 
 Verified end-to-end with `claude --plugin-dir`: the gate cycle works as
 shipped — `tool_input.skill` arrives as the bare skill name, the reset hook
@@ -97,9 +174,10 @@ agents gets the self-extension rule ("mint one via `/create-new-sub-agent`"),
 not a drift error about a corruption that does not exist. A matched agent
 missing while *other* agents exist is still exit 3 — real drift.
 
-Vendored from the codex with the same two adaptation classes as `procedures`,
+Vendored from the codex with two of the adaptation classes `procedures` uses,
 each marked `PLUGIN ADAPTATION`: data-root defaults, and host-neutral wording
-in place of codex-internal file/hook references. Tests:
+in place of codex-internal file/hook references. (No fork-skill model pin here
+— this plugin ships no `context: fork` skill.) Tests:
 
 ```
 cd plugins/delegation && bats scripts/tests
