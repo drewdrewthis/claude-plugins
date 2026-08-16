@@ -2,7 +2,7 @@
 # am-i-done-gate.sh — Stop hook.
 #
 # SINGLE RESPONSIBILITY: on a turn that called any tool, require ONE
-# Skill(am-i-done) review before the turn ends. Nothing else.
+# Skill(procedures:am-i-done) review before the turn ends. Nothing else.
 #
 # REPLACES the retired 3-pass streak sweep (done-gate-stop.sh, deleted
 # orchard-codex#197). That hook asked the agent to re-grade its own work N
@@ -79,9 +79,19 @@ case "$?" in
     *) gate_failopen "am-i-done" "activity-undetermined" "$SID" ;;
 esac
 
+# PLUGIN ADAPTATION: plugin-scoped skill name in the message below, plus this
+# resolvability check — see README "Plugin-scoped skill names in gate messages".
+#
+# Same resolvability proxy as how-do-i-gate.sh — see the long note there for
+# why a file check is the best available seam and why it is one-sided. Checked
+# BEFORE the mark: recording "asked" for a review we never actually asked for
+# would suppress the next legitimate ask this turn.
+[ -r "$SCRIPT_DIR/../skills/am-i-done/SKILL.md" ] \
+    || gate_failopen "am-i-done" "skill-unresolvable" "$SID"
+
 ts_mark "$SID" am_i_done_asked
 
-jq -nc --arg r "AM-I-DONE: this turn used tools, and the work has not been reviewed. Run Skill(am-i-done) with a report of what you did and the evidence for it — each claim paired with the command you ran and its actual output. A reviewer will read it once and return follow-ups. Asked once per turn; the next Stop releases either way." '{
+jq -nc --arg r "AM-I-DONE: this turn used tools, and the work has not been reviewed. Run Skill(procedures:am-i-done) with a report of what you did and the evidence for it — each claim paired with the command you ran and its actual output. A reviewer will read it once and return follow-ups. Asked once per turn; the next Stop releases either way." '{
   decision: "block",
   reason: $r
 }'

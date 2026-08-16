@@ -4,6 +4,9 @@ description: "Get a cold read on finished work before calling it done. Write the
 user-invocable: true
 context: fork
 agent: work-reviewer
+# PLUGIN ADAPTATION: fork skills ignore their agent's model: — must match
+# agents/work-reviewer.md. See README "Fork-skill model pin".
+model: sonnet
 background: false
 argument-hint: "<the am-i-done report>"
 ---

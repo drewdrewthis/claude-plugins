@@ -1,0 +1,27 @@
+name: release-please
+
+# Every installed plugin is cached per version at
+# plugins/cache/<owner>/<plugin>/<version>/, so a change that does not bump the
+# plugin's version never reaches an already-installed box. Bumping by hand is
+# what failed (see the 0.2.1 gate-fork pin) — this makes the bump automatic.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# A second push while a release PR is being built would race it.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
