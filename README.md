@@ -124,18 +124,19 @@ carry-over) + a SessionStart hook loading today's (or yesterday's) note and
 
 ### recall (0.1.0)
 
-`/recall <topic>` — searches what **you** said in past Claude Code sessions and
-synthesizes it into the current one (what it is, what was decided, where it
-stands, what's open). Runs in a fork, so reading transcripts never lands in the
-main context. Ships the indexer it depends on: `scripts/session-index.py` (an
+`/recall <topic>` — searches what **you and Claude** said in past Claude Code
+sessions and synthesizes it into the current one (what it is, what was decided,
+where it stands, what's open). Runs in a fork, so reading transcripts never
+lands in the main context. Ships the indexer it depends on: `scripts/session-index.py` (an
 incremental SQLite FTS5 index over the session transcripts) plus a `SessionEnd`
 hook that keeps it warm — the skill also rebuilds on invocation, so the hook is
 a latency optimisation, not a correctness requirement.
 
 Scope worth knowing before installing:
 
-- It indexes **user messages only** — your prompts, not Claude's replies. Things
-  Claude decided that you never restated are not searchable.
+- It indexes the **prose of both sides** — your prompts and Claude's replies —
+  but not tool calls or their output, so anything Claude only ever wrote into a
+  file or a command is not searchable.
 - It indexes **every project on the machine** into one store, so `/recall` can
   surface content from unrelated repos or clients. There is no scoping flag.
 - Top-level sessions only; subagent transcripts are excluded.

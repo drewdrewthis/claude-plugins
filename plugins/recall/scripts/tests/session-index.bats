@@ -57,6 +57,25 @@ PY
   done
 }
 
+# write_exchange <project-dir> <session-id> <user-text> <assistant-text>
+#
+# One user turn and one independent assistant turn. write_session echoes every
+# prompt back as "ack <prompt>", so it cannot express the case that matters
+# here: something Claude said that the human never said. The assistant content
+# is a block list, which is the shape real assistant records carry.
+write_exchange() {
+  local project="$1" sid="$2" user="$3" assistant="$4"
+  mkdir -p "$SESSION_INDEX_PROJECTS/$project"
+  python3 - "$SESSION_INDEX_PROJECTS/$project/$sid.jsonl" "$user" "$assistant" <<'PY'
+import json, sys
+path, user, assistant = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, "w") as fh:
+    fh.write(json.dumps({"type": "user", "message": {"content": user}}) + "\n")
+    fh.write(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": assistant}]}}) + "\n")
+PY
+}
+
 @test "build indexes fixture transcripts and reports the count" {
   write_session "-home-me-proj" "aaa" "/home/me/proj" "we decided to use the porter tokenizer"
   run python3 "$SCRIPT" build
@@ -139,6 +158,97 @@ r = json.load(sys.stdin)
 assert len(r) == 1, r
 assert r[0]["session_id"] == "aaa", r
 assert r[0]["file_path"].endswith("aaa.jsonl"), r'
+}
+
+@test "search finds a session by what Claude replied, not only by what was asked" {
+  # The conclusion is usually in the answer, not the question: a human asks
+  # "what should we do here" and never types the word the decision is named
+  # after. Indexing prompts alone made those sessions unfindable by the only
+  # term anyone would search for.
+  write_exchange "-home-me-proj" "aaa" \
+    "so what do you make of that plan" \
+    "the bottleneck is the quokkatron cache, so we should shard it"
+  write_session "-home-me-proj" "bbb" "" "unrelated chatter about breakfast options"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "quokkatron"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+r = json.load(sys.stdin)
+assert len(r) == 1, r
+assert r[0]["session_id"] == "aaa", r'
+}
+
+@test "a hit carries an assistant_snippet that highlights the matched reply" {
+  # Two columns rather than one merged blob, so a hit can show WHICH side
+  # matched. The user-side `snippet` keeps its existing name and meaning.
+  write_exchange "-home-me-proj" "aaa" \
+    "so what do you make of that plan" \
+    "the bottleneck is the quokkatron cache, so we should shard it"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "quokkatron"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+hit = json.load(sys.stdin)[0]
+assert "assistant_snippet" in hit, hit
+assert ">>>quokkatron<<<" in hit["assistant_snippet"], hit["assistant_snippet"]
+assert "snippet" in hit, hit
+assert "quokkatron" not in hit["snippet"], hit["snippet"]
+assert "make of that plan" in hit["snippet"], hit["snippet"]'
+}
+
+@test "a tool_use or tool_result block is not indexed, but its sibling prose is" {
+  # iter_messages keeps only {"type": "text"} blocks. Tool traffic is machine
+  # chatter — file contents, command output, whole diffs — and indexing it
+  # would bury the prose the search exists to find. The distinctive strings
+  # here live ONLY inside the tool blocks, so a hit proves the leak.
+  mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  python3 - "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" <<'PY'
+import json, sys
+with open(sys.argv[1], "w") as fh:
+    fh.write(json.dumps({"type": "user", "message": {
+        "content": "please go and look at that file"}}) + "\n")
+    fh.write(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "reading it now to see what it says"},
+        {"type": "tool_use", "name": "Read",
+         "input": {"file_path": "/x/thaumatropes.txt"}},
+    ]}}) + "\n")
+    fh.write(json.dumps({"type": "user", "message": {"content": [
+        {"type": "tool_result",
+         "content": "flibbertigibbet flibbertigibbet flibbertigibbet"},
+    ]}}) + "\n")
+PY
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "thaumatropes OR flibbertigibbet"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+r = json.load(sys.stdin)
+assert r == [], "tool traffic was indexed: %r" % (r,)'
+  run python3 "$SCRIPT" search "reading"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+assert len(json.load(sys.stdin)) == 1, "the text block was dropped with the tool blocks"'
+}
+
+@test "first_prompt, last_prompt and message_count stay user-only" {
+  # Prompt-shaped fields the skill reports back to the human. An assistant reply
+  # leaking in would be presented as something the human typed, and the count
+  # would silently double.
+  write_session "-home-me-proj" "aaa" "" \
+    "the first thing the human asked about" \
+    "the second thing the human asked about"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "human"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+hit = json.load(sys.stdin)[0]
+assert hit["first_prompt"] == "the first thing the human asked about", hit["first_prompt"]
+assert hit["last_prompt"] == "the second thing the human asked about", hit["last_prompt"]
+assert hit["message_count"] == 2, hit["message_count"]'
 }
 
 @test "search honours --limit" {
@@ -261,6 +371,51 @@ db.commit()"
   run python3 "$SCRIPT" search "conversation"
   [ "$status" -eq 0 ]
   echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1'
+}
+
+@test "an index stamped at the previous schema version is rebuilt, not skipped" {
+  # The sharper sibling of the test above, and the one a version bump exists
+  # for. Here the OLD index is well-formed and its row still matches the
+  # transcript's (mtime, size), so the incremental path would skip the file —
+  # forever, since the transcript of a finished session never changes again.
+  # Every existing host would keep a user-only index and never know. Only the
+  # SCHEMA_VERSION bump drops the table and forces the re-parse.
+  write_exchange "-home-me-proj" "aaa" \
+    "so what do you make of that plan" \
+    "the bottleneck is the quokkatron cache, so we should shard it"
+  python3 - "$SESSION_INDEX_DB" "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" <<'PY'
+import os, sqlite3, sys
+db_path, transcript = sys.argv[1], sys.argv[2]
+prompt = "so what do you make of that plan"
+st = os.stat(transcript)
+db = sqlite3.connect(db_path)
+db.execute("""CREATE TABLE sessions (
+    file_path TEXT PRIMARY KEY, session_id TEXT, project TEXT, cwd TEXT,
+    mtime REAL, size INTEGER, message_count INTEGER,
+    first_prompt TEXT, last_prompt TEXT)""")
+db.execute("CREATE VIRTUAL TABLE sessions_fts USING fts5("
+           "file_path, session_id, project, user_text, tokenize='porter unicode61')")
+db.execute("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?)",
+           (transcript, "aaa", "-home-me-proj", None,
+            st.st_mtime, st.st_size, 1, prompt, prompt))
+db.execute("INSERT INTO sessions_fts (file_path, session_id, project, user_text)"
+           " VALUES (?,?,?,?)", (transcript, "aaa", "-home-me-proj", prompt))
+db.execute("PRAGMA user_version = 2")
+db.commit()
+PY
+  run python3 "$SCRIPT" build
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d["indexed"] == 1, "an unchanged transcript was skipped instead of rebuilt: %r" % (d,)
+assert d["skipped"] == 0, d
+assert d["total"] == 1, d'
+  run python3 "$SCRIPT" search "quokkatron"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+assert len(json.load(sys.stdin)) == 1, "assistant text stayed unindexed after the bump"'
 }
 
 @test "a malformed record is skipped without costing its transcript" {

@@ -45,7 +45,12 @@ NOISE_PREFIXES = ("Base directory for this skill:", "<local-command")
 MIN_TEXT_LEN = 10
 
 # Bump whenever the table shape changes; a mismatch drops and rebuilds.
-SCHEMA_VERSION = 2
+#
+# ⚠ Bump it for a change in what gets EXTRACTED too, not only for a column. The
+# incremental path keys on (mtime, size), and a finished session's transcript
+# never changes again — so without a bump every already-indexed file is skipped
+# forever and the new content is only ever captured for sessions yet to happen.
+SCHEMA_VERSION = 3
 
 
 def _schema_version(db):
@@ -184,12 +189,16 @@ def get_db():
         )
     """)
     try:
+        # ⚠ Column ORDER is load-bearing: search() addresses user_text and
+        # assistant_text by index (3, 4) in snippet(), so reordering them
+        # silently shows a hit the wrong side of the conversation.
         db.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
                 file_path,
                 session_id,
                 project,
                 user_text,
+                assistant_text,
                 tokenize='porter unicode61'
             )
         """)
@@ -321,7 +330,12 @@ def build_index():
         session_id = os.path.basename(f)[: -len(".jsonl")]
         project = os.path.basename(os.path.dirname(f))
         try:
-            messages = [text for _, text in iter_messages(f, {"user"})]
+            # ONE pass over the file, partitioned by role — reading the file is
+            # the expensive part of a build, so a second pass for the other
+            # role would roughly double it.
+            prompts, replies = [], []
+            for role, text in iter_messages(f, {"user", "assistant"}):
+                (replies if role == "assistant" else prompts).append(text)
             cwd = read_cwd(f)
         except Exception:
             # Deliberately broad: the failures that actually occur are shape
@@ -331,9 +345,11 @@ def build_index():
             failed += 1
             continue
 
-        combined = "\n".join(messages)
-        first_prompt = messages[0][:200] if messages else ""
-        last_prompt = messages[-1][:200] if messages else ""
+        # ⚠ Prompt-shaped fields stay USER-only. They are quoted back to the
+        # human as what they asked; a reply folded in here would be presented
+        # as something they said, and message_count would silently double.
+        first_prompt = prompts[0][:200] if prompts else ""
+        last_prompt = prompts[-1][:200] if prompts else ""
 
         # Keyed on file_path: a session id is unique only within a project dir,
         # so keying on it let one transcript silently overwrite another.
@@ -348,13 +364,14 @@ def build_index():
                 message_count=excluded.message_count,
                 first_prompt=excluded.first_prompt, last_prompt=excluded.last_prompt
         """, (f, session_id, project, cwd, mtime, size,
-              len(messages), first_prompt, last_prompt))
+              len(prompts), first_prompt, last_prompt))
 
         db.execute("DELETE FROM sessions_fts WHERE file_path = ?", (f,))
         db.execute(
-            "INSERT INTO sessions_fts (file_path, session_id, project, user_text)"
-            " VALUES (?, ?, ?, ?)",
-            (f, session_id, project, combined))
+            "INSERT INTO sessions_fts"
+            " (file_path, session_id, project, user_text, assistant_text)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (f, session_id, project, "\n".join(prompts), "\n".join(replies)))
 
         indexed += 1
         # Batched rather than per-file: committing every file made a cold build
@@ -435,7 +452,9 @@ def search(query, limit=10):
             SELECT
                 s.session_id, s.project, s.cwd, s.file_path, s.mtime,
                 s.message_count, s.first_prompt, s.last_prompt,
-                snippet(sessions_fts, 3, '>>>', '<<<', '...', 24) as snippet
+                snippet(sessions_fts, 3, '>>>', '<<<', '...', 24) as snippet,
+                snippet(sessions_fts, 4, '>>>', '<<<', '...', 24)
+                    as assistant_snippet
             FROM sessions_fts f
             JOIN sessions s ON s.file_path = f.file_path
             WHERE sessions_fts MATCH ?
@@ -453,7 +472,11 @@ def search(query, limit=10):
         "message_count": row["message_count"],
         "first_prompt": row["first_prompt"],
         "last_prompt": row["last_prompt"],
+        # Two snippets rather than one merged blob: which SIDE said it changes
+        # how much a hit is worth, and only the matched side is highlighted.
+        # A column with no match returns its opening text, unmarked.
         "snippet": row["snippet"],
+        "assistant_snippet": row["assistant_snippet"],
     } for row in rows]
 
 

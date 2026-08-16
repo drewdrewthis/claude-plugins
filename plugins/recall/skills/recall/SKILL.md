@@ -1,6 +1,6 @@
 ---
 name: recall
-description: "Search what you said in past Claude Code sessions and synthesize it into the current one. Use when: 'what were we discussing about X', 'recall X', 'catch me up on X', 'remind me about X', 'did we already decide X'."
+description: "Search what you and Claude said in past Claude Code sessions and synthesize it into the current one. Use when: 'what were we discussing about X', 'recall X', 'catch me up on X', 'remind me about X', 'did we already decide X'."
 user-invocable: true
 argument-hint: "<topic to recall>"
 context: fork
@@ -15,8 +15,11 @@ You are searching this host's Claude Code transcripts for a topic and returning
 a synthesis. You have no conversation history — `$ARGUMENTS` is the whole brief.
 If it is empty, return that no topic was given and stop.
 
-The index covers **user messages only** — what the human typed, not what Claude
-replied. Decisions Claude stated but the human never restated are not in it.
+The index covers **both sides** — what the human typed and Claude's prose
+replies. Tool calls and their results are not indexed. Each hit carries
+`snippet` (the user side) and `assistant_snippet` (Claude's), with `>>>term<<<`
+marking where the query hit, so markers in `assistant_snippet` alone are
+something Claude said that the human never restated.
 
 ## Steps
 
@@ -80,7 +83,8 @@ replied. Decisions Claude stated but the human never restated are not in it.
 - Report `project` as provenance only when it looks like a real path. It is the
   session's recorded working directory when known, and otherwise the raw encoded
   directory name — which is not a path and cannot be `cd`'d to.
-- A clean search proves the topic is not in **this host's indexed user
-  messages**. It does not prove the conversation never happened: sessions on
-  another machine, subagent transcripts, and anything only Claude said are all
-  outside the index. Say that rather than "it does not exist".
+- A clean search proves the topic is not in **this host's indexed transcripts**.
+  It does not prove the conversation never happened: sessions on another
+  machine, subagent transcripts, and anything that only ever appeared in tool
+  input or output are all outside the index. Say that rather than "it does not
+  exist".
