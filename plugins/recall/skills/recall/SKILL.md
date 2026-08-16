@@ -1,9 +1,15 @@
 ---
 name: recall
-description: "Search what you and Claude said in past Claude Code sessions and synthesize it into the current one. Use when: 'what were we discussing about X', 'recall X', 'catch me up on X', 'remind me about X', 'did we already decide X'."
+description: "Search what you and Claude said in past Claude Code sessions and synthesize it into the current one. Use when: 'what were we discussing about X', 'recall X', 'catch me up on X', 'remind me about X', 'did we already decide X'. Corpus is session TRANSCRIPTS — for procedures, decisions and other written records use /how-do-i."
 user-invocable: true
 argument-hint: "<topic to recall>"
 context: fork
+# PLUGIN ADAPTATION: a `context: fork` skill inherits the PARENT SESSION's
+# model unless it pins one, so the tier this fork runs at would otherwise swing
+# with whatever the caller happens to be on. Same mechanism as the two gate
+# skills — see README "Fork-skill model pin". No `agent:` here, so there is no
+# agent-side declaration to hold this in agreement with.
+model: sonnet
 background: false
 allowed-tools:
   - Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session-index.py:*)
@@ -80,9 +86,10 @@ something Claude said that the human never restated.
 - Read-only with respect to your work: never edit a transcript, and never write
   anywhere but the index. `build` also appends a failure breadcrumb beside the
   index (`sessions.db.log`) when a transcript cannot be read.
-- Report `project` as provenance only when it looks like a real path. It is the
-  session's recorded working directory when known, and otherwise the raw encoded
-  directory name — which is not a path and cannot be `cd`'d to.
+- For a hit's provenance cite `cwd` when it is non-null — the session's recorded
+  working directory. When it is null, cite `project`, and say it as the
+  identifier it is: an encoded directory name, not a path, and not somewhere to
+  `cd`. `project` is always present and is never a path.
 - A clean search proves the topic is not in **this host's indexed transcripts**.
   It does not prove the conversation never happened: sessions on another
   machine, subagent transcripts, and anything that only ever appeared in tool

@@ -61,10 +61,11 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   value is only honoured on the `Agent(subagent_type:)` path. So
   `skills/how-do-i/SKILL.md` and `skills/am-i-done/SKILL.md` each re-declare
   `model:` in their own frontmatter, and `hooks/tests/gate-skill-model.bats`
-  holds the two declarations in agreement. Measured on this fork path: an
-  opus-parent session's fork moved to `claude-haiku-4-5` when the skill
-  declared `model: haiku`, while the parent's own turns stayed on opus —
-  the pin binds the fork without touching the caller. Upstream has no
+  holds the two declarations in agreement. `recall/skills/recall/SKILL.md` pins
+  one for the same reason, with no `agent:` to hold it against. Measured on
+  this fork path: an opus-parent session's fork moved to `claude-haiku-4-5`
+  when the skill declared `model: haiku`, while the parent's own turns stayed
+  on opus — the pin binds the fork without touching the caller. Upstream has no
   equivalent because the gate does not run as a forked skill there.
 
   **This is documented harness design, not a bug — do not refile it.** The

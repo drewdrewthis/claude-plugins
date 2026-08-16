@@ -155,6 +155,14 @@ def _migrate(db):
         raise
 
 
+# Ordinals of the two prose columns in sessions_fts, named once here because
+# snippet() in search() addresses them positionally and has no way to check.
+# Kept immediately above the CREATE VIRTUAL TABLE in get_db() — the only other
+# place the order is written down.
+USER_TEXT_COL = 3
+ASSISTANT_TEXT_COL = 4
+
+
 def get_db():
     # PLUGIN ADAPTATION: a relocated CLAUDE_CONFIG_DIR may not exist yet.
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
@@ -190,8 +198,9 @@ def get_db():
     """)
     try:
         # ⚠ Column ORDER is load-bearing: search() addresses user_text and
-        # assistant_text by index (3, 4) in snippet(), so reordering them
-        # silently shows a hit the wrong side of the conversation.
+        # assistant_text by index in snippet(), so reordering them silently
+        # shows a hit the wrong side of the conversation. Move a column and
+        # USER_TEXT_COL / ASSISTANT_TEXT_COL above must move with it.
         db.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
                 file_path,
@@ -281,12 +290,16 @@ def read_cwd(jsonl_path):
     return None
 
 
-def display_path(cwd, project):
-    """What to show as a hit's provenance: the real cwd, else the raw dir name."""
+def display_cwd(cwd):
+    """A hit's real working directory, `~`-abbreviated, or None if none was recorded.
+
+    ⚠ None rather than a fallback to the encoded directory name. One field
+    carrying either a path or an identifier forced the caller to guess which by
+    shape; `project` carries the identifier and this carries the path, so
+    neither is ever mistaken for the other.
+    """
     if not cwd:
-        # Never fabricate a path from the encoded name — return it verbatim so a
-        # reader can tell it is an identifier, not somewhere they can cd to.
-        return project
+        return None
     home = os.path.expanduser("~")
     if cwd == home or cwd.startswith(home + os.sep):
         return "~" + cwd[len(home):]
@@ -330,9 +343,11 @@ def build_index():
         session_id = os.path.basename(f)[: -len(".jsonl")]
         project = os.path.basename(os.path.dirname(f))
         try:
-            # ONE pass over the file, partitioned by role — reading the file is
-            # the expensive part of a build, so a second pass for the other
-            # role would roughly double it.
+            # BOTH roles out of ONE pass, partitioned as they arrive — reading
+            # the file is the expensive part of a build, so a second full pass
+            # for the other role would roughly double it. read_cwd() below does
+            # reopen the file, but it returns on the first record carrying a
+            # cwd, which in a real transcript is line 1.
             prompts, replies = [], []
             for role, text in iter_messages(f, {"user", "assistant"}):
                 (replies if role == "assistant" else prompts).append(text)
@@ -448,12 +463,13 @@ def search(query, limit=10):
         raise IndexError_(f"query {query!r} has no searchable terms")
 
     try:
-        rows = db.execute("""
+        rows = db.execute(f"""
             SELECT
                 s.session_id, s.project, s.cwd, s.file_path, s.mtime,
                 s.message_count, s.first_prompt, s.last_prompt,
-                snippet(sessions_fts, 3, '>>>', '<<<', '...', 24) as snippet,
-                snippet(sessions_fts, 4, '>>>', '<<<', '...', 24)
+                snippet(sessions_fts, {USER_TEXT_COL}, '>>>', '<<<', '...', 24)
+                    as snippet,
+                snippet(sessions_fts, {ASSISTANT_TEXT_COL}, '>>>', '<<<', '...', 24)
                     as assistant_snippet
             FROM sessions_fts f
             JOIN sessions s ON s.file_path = f.file_path
@@ -466,7 +482,12 @@ def search(query, limit=10):
 
     return [{
         "session_id": row["session_id"],
-        "project": display_path(row["cwd"], row["project"]),
+        # Two fields, two kinds of thing. `project` is ALWAYS the encoded
+        # directory name — an identifier, never somewhere to cd — and `cwd` is
+        # the real path or null. Merged into one field the caller could only
+        # tell them apart by guessing at the shape of the string.
+        "project": row["project"],
+        "cwd": display_cwd(row["cwd"]),
         "file_path": row["file_path"],
         "mtime": row["mtime"],
         "message_count": row["message_count"],
@@ -531,6 +552,11 @@ def main():
         fail(str(exc))
     except sqlite3.OperationalError as exc:
         fail(f"database error: {exc}")
+    # ⚠ The skill is told EVERY failure arrives as {"error": ...}, and get_db's
+    # makedirs plus the glob/stat path both raise OSError — an unwritable
+    # CLAUDE_CONFIG_DIR handed it a traceback it has no way to parse.
+    except OSError as exc:
+        fail(f"could not access the index: {exc}")
 
     print(json.dumps(result, indent=2 if args.command != "build" else None))
 

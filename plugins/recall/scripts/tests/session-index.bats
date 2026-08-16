@@ -36,6 +36,14 @@ except sqlite3.OperationalError:
     print(0)"
 }
 
+# Octal permission bits of a file, e.g. 600. `stat -c` is GNU-only — macOS's
+# stat rejects the flag outright, so the two mode assertions below erred rather
+# than checked. Every other cross-platform probe in this suite already goes
+# through python3; these do too.
+file_mode() {
+  python3 -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])" "$1"
+}
+
 # write_session <project-dir> <session-id> <cwd-or-empty> <text>...
 write_session() {
   local project="$1" sid="$2" cwd="$3"; shift 3
@@ -94,8 +102,7 @@ PY
 @test "the index db is not world-readable" {
   write_session "-home-me-proj" "aaa" "" "some indexable conversation text here"
   python3 "$SCRIPT" build >/dev/null
-  run stat -c '%a' "$SESSION_INDEX_DB"
-  [ "$output" = "600" ]
+  [ "$(file_mode "$SESSION_INDEX_DB")" = "600" ]
 }
 
 @test "build is incremental — an unchanged transcript is skipped" {
@@ -196,6 +203,37 @@ assert ">>>quokkatron<<<" in hit["assistant_snippet"], hit["assistant_snippet"]
 assert "snippet" in hit, hit
 assert "quokkatron" not in hit["snippet"], hit["snippet"]
 assert "make of that plan" in hit["snippet"], hit["snippet"]'
+}
+
+@test "result ORDER across hits is pinned, not incidental" {
+  # SKILL.md tells the fork "results are ordered best-first — use the order",
+  # and nothing asserted the order: every other multi-hit test here checks a
+  # count or set membership, both of which survive any reshuffle.
+  #
+  # That matters because bm25 length-normalizes over the WHOLE row, not per
+  # column. Adding assistant_text beside user_text therefore re-scored hits
+  # that column never touched, and the top result changed with no test red.
+  # This fixture puts one occurrence of the term in a SHORT user_text and one
+  # in a LONG assistant_text and pins which wins, so the next column or weight
+  # change has to move this line deliberately.
+  local pad="" i
+  for i in $(seq 1 60); do pad="$pad padding word number $i in the long reply"; done
+  write_exchange "-home-me-proj" "short-user-hit" \
+    "should we use zorblax here" \
+    "that seems reasonable to me overall"
+  write_exchange "-home-me-proj" "long-assistant-hit" \
+    "what do you make of that plan" \
+    "$pad the zorblax cache is the bottleneck $pad"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "zorblax"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+got = [h["session_id"] for h in json.load(sys.stdin)]
+assert len(got) == 2, "both sessions must match before order means anything: %r" % (got,)
+# Measured, unweighted bm25 over this schema: the short session whose HUMAN
+# typed the term outranks the long reply that merely mentions it.
+assert got == ["short-user-hit", "long-assistant-hit"], "result order changed: %r" % (got,)'
 }
 
 @test "a tool_use or tool_result block is not indexed, but its sibling prose is" {
@@ -698,7 +736,7 @@ PY
   echo "$output" | python3 -c '
 import json, sys
 hit = json.load(sys.stdin)[0]
-assert hit["project"] == "/home/me/the-real-project", hit["project"]'
+assert hit["cwd"] == "/home/me/the-real-project", hit["cwd"]'
 }
 
 @test "the failure log is not world-readable" {
@@ -710,7 +748,7 @@ assert hit["project"] == "/home/me/the-real-project", hit["project"]'
   python3 "$SCRIPT" build >/dev/null 2>&1 || true
   chmod 644 "$SESSION_INDEX_PROJECTS/-home-me-proj/bad.jsonl"
   if [ -e "$SESSION_INDEX_DB.log" ]; then
-    [ "$(stat -c '%a' "$SESSION_INDEX_DB.log")" = "600" ]
+    [ "$(file_mode "$SESSION_INDEX_DB.log")" = "600" ]
   else
     skip "no failure was recorded, so there is no log to check"
   fi
@@ -738,16 +776,45 @@ assert hit["project"] == "/home/me/the-real-project", hit["project"]'
   [ ! -e "$FIX/ignored/sessions.db" ]
 }
 
-@test "a hit's project is the session's real cwd, hyphens and all" {
+@test "an unwritable config dir reports JSON, not a traceback" {
+  # SKILL.md tells the fork EVERY failure arrives as {"error": ...} and to
+  # report it verbatim. get_db's makedirs raises OSError, which main() did not
+  # catch — so a relocated, unwritable CLAUDE_CONFIG_DIR handed the skill a
+  # traceback it has no way to parse.
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "running as root — chmod 000 does not deny writes, so the failure cannot be simulated"
+  fi
+  local locked="$FIX/locked"
+  mkdir -p "$locked"
+  chmod 000 "$locked"
+  export CLAUDE_CONFIG_DIR="$locked/config"
+  unset SESSION_INDEX_DB SESSION_INDEX_PROJECTS
+
+  # Streams kept APART on purpose. fail() print()s to STDOUT, so a check that
+  # looked for the JSON on stderr — or for the traceback on stdout — would pass
+  # whether or not the handler exists. Same trap the concurrency test hit.
+  local rc=0
+  python3 "$SCRIPT" build >"$FIX/out" 2>"$FIX/err" || rc=$?
+  chmod 755 "$locked"
+
+  [ "$rc" -eq 1 ]
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "error" in d, d' "$FIX/out"
+  [[ "$(cat "$FIX/err")" != *Traceback* ]]
+}
+
+@test "cwd carries the real path while project stays the encoded dir name" {
   # The decisive case: the dir name encodes `/` as `-` without escaping, so
-  # `-home-me-my-project` is ambiguous. The recorded cwd is the only truth.
+  # `-home-me-my-project` is ambiguous. The recorded cwd is the only truth, and
+  # it travels in its OWN field — one field carrying either a path or an
+  # identifier left the caller guessing which by the shape of the string.
   write_session "-home-me-my-project" "aaa" "/home/me/my-project" "conversation inside a hyphenated repo"
   python3 "$SCRIPT" build >/dev/null
   run python3 "$SCRIPT" search "hyphenated"
   echo "$output" | python3 -c '
 import json,sys
 r = json.load(sys.stdin)
-assert r[0]["project"] == "/home/me/my-project", r[0]["project"]'
+assert r[0]["cwd"] == "/home/me/my-project", r[0]["cwd"]
+assert r[0]["project"] == "-home-me-my-project", r[0]["project"]'
 }
 
 @test "a hidden directory in the cwd survives intact" {
@@ -757,7 +824,7 @@ assert r[0]["project"] == "/home/me/my-project", r[0]["project"]'
   echo "$output" | python3 -c '
 import json,sys
 r = json.load(sys.stdin)
-assert r[0]["project"] == "/home/me/.claude", r[0]["project"]'
+assert r[0]["cwd"] == "/home/me/.claude", r[0]["cwd"]'
 }
 
 @test "a cwd under the real home renders as a ~ path" {
@@ -767,16 +834,19 @@ assert r[0]["project"] == "/home/me/.claude", r[0]["project"]'
   echo "$output" | python3 -c '
 import json,sys
 r = json.load(sys.stdin)
-assert r[0]["project"] == "~/recall-fixture", r[0]["project"]'
+assert r[0]["cwd"] == "~/recall-fixture", r[0]["cwd"]'
 }
 
-@test "with no recorded cwd the raw dir name is returned, never a fabricated path" {
+@test "with no recorded cwd, cwd is null and project is still the encoded name" {
+  # Null, not a fallback: the encoded name is an identifier, and the caller must
+  # never be handed it in the field it reads as a path — "/home/me/my/project"
+  # is what decoding it would invent, and that directory does not exist.
   write_session "-home-me-my-project" "aaa" "" "conversation with no cwd recorded anywhere"
   python3 "$SCRIPT" build >/dev/null
   run python3 "$SCRIPT" search "fabricated OR conversation"
   echo "$output" | python3 -c '
 import json,sys
 r = json.load(sys.stdin)
-# The encoded name verbatim — NOT "/home/me/my/project", which does not exist.
+assert r[0]["cwd"] is None, r[0]["cwd"]
 assert r[0]["project"] == "-home-me-my-project", r[0]["project"]'
 }
