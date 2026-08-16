@@ -15,18 +15,18 @@ description: Use when running project commands/tasks in a repo that has a justfi
    - `just <recipe> [args...]`
    - Module recipes: `just <module>::<recipe>` (e.g. `just global::deploy`).
 4. **Machine-readable introspection**, when you need the full recipe set/structure programmatically:
-   - `just --dump --json`
+   - `just --dump --dump-format json`
    - `just --summary`
 5. **Global/shared library convention.** A project justfile may mount a shared recipe library via `mod global '<path>'` (the path is per-machine — never hardcode a home directory path) and enable `set fallback` so recipes not found locally resolve from a parent directory's justfile. Expect these when a repo's own `just --list` looks sparse.
 
 ## Authoring conventions (when asked to add or edit a recipe)
 
 - Name in lowercase kebab-case with an explicit verb (`build-image`, not `image`).
-- Destructive actions must look destructive in the name: `kill-session`, `delete-server`, `drop-db` — never a bare noun or euphemism.
+- Destructive actions must look destructive in the name: `kill-session`, `delete-server`, `drop-db` — never a bare noun or euphemism. This naming is authoring guidance, not a safety check (see Boundaries).
 - Keep recipes thin: nontrivial logic goes in a script the recipe calls, not inline in the justfile.
 - Add a doc comment line directly above each recipe — `just --list` surfaces it.
 
 ## Boundaries
 
-- Never run a destructive-named recipe (`kill-*`, `delete-*`, `drop-*`, etc.) without explicit user instruction for that specific action.
-- `--list`, `--show`, `--dry-run`, `--summary`, `--dump` never execute recipe bodies — safe to run freely for discovery.
+- Never run any recipe that may mutate or delete data or infrastructure without explicit user instruction for that specific action — judge by what the recipe does, not by whether its name looks destructive; an innocuous name is not a safety signal.
+- `--list`, `--show`, `--dry-run`, `--summary`, `--dump` skip recipe bodies, not recipe files: top-level backticks, `shell(...)`, and `dotenv-command` can still evaluate during discovery. Not universally side-effect-free — read the justfile for these before treating discovery commands as inert.
