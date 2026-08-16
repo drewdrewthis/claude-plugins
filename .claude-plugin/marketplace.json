@@ -24,6 +24,11 @@
       "name": "take-note",
       "source": "./plugins/take-note",
       "description": "Daily working notes: /take-note scratchpad + SessionStart daily-note loader."
+    },
+    {
+      "name": "just-recipes",
+      "source": "./plugins/just-recipes",
+      "description": "Teaches Claude to prefer named just recipes over ad hoc shell, using just's native discovery/introspection features."
     }
   ]
 }
