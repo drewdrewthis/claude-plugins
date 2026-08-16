@@ -39,6 +39,15 @@
       "extra-files": [
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
       ]
+    },
+    "plugins/just-recipes": {
+      "release-type": "simple",
+      "component": "just-recipes",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
     }
   }
 }

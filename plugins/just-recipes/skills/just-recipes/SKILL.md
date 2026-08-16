@@ -5,6 +5,19 @@ description: Use when running project commands/tasks in a repo that has a justfi
 
 # just-recipes
 
+## Enforcement model
+
+- A PreToolUse hook denies raw Bash wherever a justfile resolves from the project dir. Discover recipes with `just --list`; escape hatch: `just wrap "<cmd>"` — runs the command under timeout/output-cap guardrails and logs it to `$CODEX_ROOT/state/wrap.log`.
+- Kill switch: `JUST_RECIPES_ENFORCE=off` (or `0`) disables enforcement. Commands starting with `just`, a tiny read-only allowlist (`cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`), repos without a justfile, and machines without `just` all pass through.
+
+## Habit loop
+
+Friction from a denied/wrapped command → write a script → add a recipe calling it, with a doc comment → discoverable via `just --list`. `just wrap-report` summarizes wrap.log — treat it as the recipe backlog.
+
+## Flat-recipe convention
+
+One kebab-case recipe per intent, flat namespace. Chooser stubs (e.g. `just log` printing which log-* recipes exist) are cheap — add them freely.
+
 ## Steps
 
 1. **Discover before composing.** Run `just --list` (and `just --list --list-submodules` if the justfile mounts modules) before writing any ad hoc shell command. If a listed recipe covers the intent, use it instead of assembling the equivalent shell yourself.
