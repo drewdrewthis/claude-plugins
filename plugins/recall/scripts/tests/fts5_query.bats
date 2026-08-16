@@ -245,9 +245,9 @@ assert_hits() {
 
 # --- the contract itself -----------------------------------------------------
 
-@test "translate is pure: same input, same output, no side effects" {
-  # Pinning purity is what lets every row above be a plain table lookup. If the
-  # translator ever reaches for the environment or a database, this goes red.
+@test "translate is deterministic and leaves the environment alone" {
+  # Pinning determinism is what lets every row above be a plain table lookup. If
+  # the translator ever reaches for the environment, this goes red.
   run python3 -c "
 import sys, os
 sys.path.insert(0, '$BATS_TEST_DIRNAME/..')
