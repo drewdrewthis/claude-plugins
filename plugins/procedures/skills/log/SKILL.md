@@ -15,7 +15,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" <kind> [flags…]
 
 The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal) and writing the file. No index files are maintained: discovery is the record's frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. You own the JUDGMENT half below.
 
-Record templates for every shape live in `${CLAUDE_PLUGIN_ROOT}/skills/log/templates/`. Kinds the writer script does not handle — `procedure`, `principle`, `evolution` — are written by hand from their template.
+Record templates for every shape live in `${CLAUDE_PLUGIN_ROOT}/skills/log/templates/`. Kinds the writer script does not handle — `procedure`, `principle`, `evolution`, `invariant`, `policy`, `standard` — are written by hand from their template. For the four rule kinds, `/create-new` carries the test for choosing between them.
 
 Resume the interrupted conversation immediately after — every kind takes <10 seconds and must not derail it.
 

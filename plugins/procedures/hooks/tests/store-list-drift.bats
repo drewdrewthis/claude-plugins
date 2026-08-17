@@ -28,6 +28,25 @@ setup() {
   done
 }
 
+@test "the four rule stores are configured, not just the original seven" {
+  # The test above iterates STORES, so it passes vacuously whatever STORES holds.
+  # These four are named explicitly because the GRC frame depends on the kinds
+  # being separable: invariant (absolute) vs principle (judgment) vs policy
+  # (standing authority) vs standard (measurable bar). Dropping one silently
+  # collapses that distinction back into "principle with a flag".
+  for s in references/invariants references/principles references/policies references/standards; do
+    printf '%s\n' "${STORES[@]}" | grep -qxF "$s"
+  done
+}
+
+@test "--list-stores reaches the rule stores end to end" {
+  run bash "$SCRIPT" --list-stores
+  [ "$status" -eq 0 ]
+  grep -qxF "references/invariants" <<< "$output"
+  grep -qxF "references/policies" <<< "$output"
+  grep -qxF "references/standards" <<< "$output"
+}
+
 @test "--list-stores includes env-configured extra stores" {
   run bash -c "QUERY_RECORDS_EXTRA_STORES='team-kb' bash '$SCRIPT' --list-stores"
   [ "$status" -eq 0 ]
