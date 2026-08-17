@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.4.1...procedures-v0.5.0) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **procedures:** the /log and /create-new slash commands no longer exist. Use /update-records <kind> for every knowledge artifact. Skill discovery is description-driven, so agents resolve the new command without changes; only a human typing the old slug is affected.
+
+### Features
+
+* **procedures:** GRC frame + replace /log and /create-new with /update-records ([#64](https://github.com/drewdrewthis/claude-plugins/issues/64)) ([da9d6f4](https://github.com/drewdrewthis/claude-plugins/commit/da9d6f4589a7123ed39a783db2f6cffb5b62821b))
+
 ## [0.4.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.4.0...procedures-v0.4.1) (2026-08-14)
 
 
