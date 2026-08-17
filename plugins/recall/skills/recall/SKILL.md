@@ -79,7 +79,7 @@ something Claude said that the human never restated.
    - **Open questions** — what was never resolved
 
    Cite the `session_id`s you drew on so the human can resume one:
-   `claude --continue <session-id>`.
+   `cd <cwd> && claude --resume <session-id>`.
 
 ## Boundaries
 

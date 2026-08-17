@@ -1,7 +1,7 @@
 """Translate a human's words into a valid FTS5 MATCH expression.
 
-`translate(str) -> str`. Deterministic and free of filesystem or environment
-access, so every behaviour is directly table-testable.
+`translate(str) -> str`. Deterministic: it depends on nothing but the SQLite
+build it runs against — no filesystem, no environment, no configuration.
 
 ⚠ It DOES open an in-memory SQLite connection, and that is deliberate. Deciding
 which tokens FTS5 will index is not something a regex can do: SQLite's unicode61
