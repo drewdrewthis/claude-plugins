@@ -1,23 +1,39 @@
 ---
-name: log
-description: "Log a durable record — a mistake, decision, solution, or failure-mode — to its record store. One entry point for all four record kinds. Use when the user corrects you (mistake), a judgment call is resolved (decision), a non-obvious fix is confirmed (solution), or a recurring agent mistake reaches the promotion bar (failure-mode). Triggers: 'log a mistake', 'record this decision', 'document this fix', 'promote this to a failure mode', or codifying a rule after a correction."
+name: update-records
+description: "Write any durable knowledge artifact to its store — mistake, decision, solution, failure-mode, procedure, evolution, principle, invariant, policy, standard, reference, or skill. THE single entry point: there is no separate create or log command. Use when the user corrects you (mistake), a judgment call is resolved (decision), a non-obvious fix is confirmed (solution), a recurring agent mistake reaches the promotion bar (failure-mode), or novel work needs crystallizing and /how-do-i returned nothing (procedure, reference, skill, or a rule kind). Triggers: 'log a mistake', 'record this decision', 'document this fix', 'promote this to a failure mode', 'write a procedure for this', 'create a new skill', or codifying a rule after a correction."
 user-invocable: true
 argument-hint: "<kind> [text]"
 ---
 
-# /log
+# /update-records
 
-One entry point for the four record kinds. `<kind>` is `mistake`, `decision`, `solution`, or `failure-mode`. This skill gathers the JUDGMENT fields, then calls the deterministic writer:
+THE single entry point for every knowledge artifact. Pick `<kind>` from the table, then follow that row. There is no separate create command — creating and recording are the same act, and splitting them across two skills only made agents pick the wrong one.
+
+| `<kind>` | how it is written | lands in |
+|---|---|---|
+| `mistake` | `log-record.sh` | `~/.claude/mistakes.jsonl` |
+| `decision` | `log-record.sh` | `references/decisions/` |
+| `solution` | `log-record.sh` | `references/solutions/` |
+| `failure-mode` | `log-record.sh` | `references/failure-modes/` |
+| `procedure` | follow `references/create-procedure.procedure.md` | `references/procedures/<name>/PROCEDURE.md` + seed its `EVOLUTION.md` |
+| `evolution` | by hand from `templates/evolution.template.md` | beside the procedure it tracks |
+| `principle` `invariant` `policy` `standard` | by hand from the matching `templates/<kind>.template.md` | `references/{principles,invariants,policies,standards}/` |
+| `reference` | follow `references/create-reference.procedure.md` | the store that procedure names |
+| `skill` | follow `references/create-skill.procedure.md` | a new skill directory — only when the operation earns an invocation handle |
+
+The four script-backed kinds call the deterministic writer:
 
 ```
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" <kind> [flags…]
 ```
 
-The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal) and writing the file. No index files are maintained: discovery is the record's frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. You own the JUDGMENT half below.
+The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal) and writing the file. No index files are maintained: discovery is the record's frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. You own the JUDGMENT half below. Templates live in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/templates/`, the longhand procedures in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/references/`.
 
-Record templates for every shape live in `${CLAUDE_PLUGIN_ROOT}/skills/log/templates/`. Kinds the writer script does not handle — `procedure`, `principle`, `evolution` — are written by hand from their template.
+**Choosing among the four rule kinds:** an **invariant** forbids absolutely and has no carve-outs — the moment you write "except when", it is a **principle**, which guides judgment where the rules do not reach. A **policy** grants or withholds authority and is in force from merge until a line is struck. A **standard** states the measurable bar a finished artifact must clear, never the steps to clear it. These are not a severity scale: promoting a rule you still intend to break trains every reader to treat the whole kind as advice.
 
-Resume the interrupted conversation immediately after — every kind takes <10 seconds and must not derail it.
+**Rules that hold for every kind:** check `/how-do-i` for an existing artifact first; six-key frontmatter on every record (the frontmatter hook enforces it); draft-then-promote — a first success earns a draft, promotion needs the gate in `docs/adrs/001-procedural-knowledge-system.md` ("Evolution"). Patching an existing PROCEDURE is `/evolve-procedure`, not this skill.
+
+Resume the interrupted conversation immediately after — the four script-backed kinds take <10 seconds and must not derail it.
 
 ---
 
@@ -25,7 +41,7 @@ Resume the interrupted conversation immediately after — every kind takes <10 s
 
 Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by the procedure-scout, which sweeps failure-modes + `mistakes.jsonl` per query.
 
-**Triggers:** user correction ("no", "wrong", "not that", a redirect); self-catch; after codifying a rule from a correction; manual `/log mistake <description>`.
+**Triggers:** user correction ("no", "wrong", "not that", a redirect); self-catch; after codifying a rule from a correction; manual `/update-records mistake <description>`.
 
 **Gather the fields:**
 
@@ -70,7 +86,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" mistake \
   [--pattern "<row-id>"] [--face "<face>"] [--recurrence-of "<earliest-ts>"]
 ```
 
-**After:** scan the last ~20 entries for the same `category` + similar `description` (or a shared `recurrence_of` chain). If **3+** entries share a pattern with no matching record in `references/failure-modes/`, promote it with `/log failure-mode <slug> "<rule>"` (see below). Below the ≥3 bar, leave the EVENT logged. Promotion at scale (condensation, demotion) stays a deliberate maintenance pass.
+**After:** scan the last ~20 entries for the same `category` + similar `description` (or a shared `recurrence_of` chain). If **3+** entries share a pattern with no matching record in `references/failure-modes/`, promote it with `/update-records failure-mode <slug> "<rule>"` (see below). Below the ≥3 bar, leave the EVENT logged. Promotion at scale (condensation, demotion) stays a deliberate maintenance pass.
 
 **Boundaries:** don't log clarifications (a correction changes direction; a clarification adds detail). Don't write vague entries ("made a mistake") — be specific.
 
@@ -137,7 +153,7 @@ grep -rl '<2-3 keywords>' ~/.claude/references/failure-modes/    # already exist
 grep -c '"pattern":"<slug>"' ~/.claude/mistakes.jsonl            # occurrence count
 ```
 
-- The script ENFORCES the ≥3 gate on a NEW record (counts `"pattern":"<slug>"` in the jsonl and refuses below 3). Below the bar, log the EVENT with `/log mistake` instead.
+- The script ENFORCES the ≥3 gate on a NEW record (counts `"pattern":"<slug>"` in the jsonl and refuses below 3). Below the bar, log the EVENT with `/update-records mistake` instead.
 - **If a record already exists, the script REFUSES by default** (non-zero exit, file untouched) — it does not read or merge the existing content. To add a face/instance or revise prose on a record that already exists, **hand-edit the file directly**; that is how every real failure-mode record has actually grown. `--force` overwrites the ENTIRE file from scratch (every prior face gone) and exists only for a genuinely intentional full rewrite — never pass it to "update" a record whose content you want to keep.
 
 **Gather:** `slug` (kebab-case, ≤6 words, names the failure behavior — the SAME bare slug used as the jsonl `pattern`, so the join holds), `rule` (ONE crisp imperative sentence — write it so a fresh agent can act on it in isolation), `keywords`, and the prose `mistake` / `correct` sections.
@@ -154,4 +170,4 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" failure-mode \
 
 New records start `verification: pending`, `status: active` — do not invent evidence.
 
-**failure-mode vs mistake:** `/log mistake` appends ONE structured EVENT per occurrence (cheap, at correction time). `/log failure-mode` creates/updates the durable RECORD that `pattern` points AT — and requires ≥3 occurrences. They compose: log the EVENT each time; promote to a RECORD when it recurs.
+**failure-mode vs mistake:** `/update-records mistake` appends ONE structured EVENT per occurrence (cheap, at correction time). `/update-records failure-mode` creates/updates the durable RECORD that `pattern` points AT — and requires ≥3 occurrences. They compose: log the EVENT each time; promote to a RECORD when it recurs.

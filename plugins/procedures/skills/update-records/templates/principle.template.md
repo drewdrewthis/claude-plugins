@@ -4,7 +4,8 @@ kind: principle
 date: YYYY-MM-DD
 keywords: [<grep surface — never empty>]
 links: { principles: [], procedures: [], decisions: [] }
-enforced_by: <path to the hook / lint / reviewer that makes this real, or omit>
+enforced_by: <path to the hook / lint / reviewer that makes this real, or `none-aspirational`>
+mitigates: [<fm.id of any failure-mode this rule treats — omit if none>]
 status: active
 title: <Title Case Name>
 purpose: <One line: what this principle decides, stated so the reader knows if it applies to them.>

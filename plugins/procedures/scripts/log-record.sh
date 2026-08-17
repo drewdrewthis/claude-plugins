@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# log-record.sh — the DETERMINISTIC half of `/log <kind>`.
+# log-record.sh — the DETERMINISTIC half of `/update-records <kind>`.
 #
 # PLUGIN ADAPTATION: no materialized views — the upstream gen-* regen steps are
 # removed; the procedure-scout compiles views on demand.
 #
 # Consolidates the four record-writers (log-mistake, record-decision,
 # record-solution, record-failure-mode) into one script with four
-# subcommands. The `/log` SKILL gathers the JUDGMENT fields (category,
+# subcommands. The `/update-records` SKILL gathers the JUDGMENT fields (category,
 # description, recurrence_of, pattern, keywords, prose body) and calls this
 # script, which does only the mechanical work: build the JSON / write the file.
 #

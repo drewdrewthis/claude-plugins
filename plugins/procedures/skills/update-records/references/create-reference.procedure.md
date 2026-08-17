@@ -68,7 +68,7 @@ Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.
 
 ## Boundaries
 
-- This skill is for FREE-FORM reference docs — not procedures (use `create-procedure.procedure.md`), not solution fixes (use `/log solution`), not failure-mode records (use `/log failure-mode`), not decision records (use `/log decision`).
+- This skill is for FREE-FORM reference docs — not procedures (use `create-procedure.procedure.md`), not solution fixes (use `/update-records solution`), not failure-mode records (use `/update-records failure-mode`), not decision records (use `/update-records decision`).
 - Do NOT create an index file in any store dir — frontmatter is the only index.
 - `status: active` always at creation (unlike procedures which start `draft`).
 - Keep the doc scannable: lead with conclusion, use headers, avoid prose blocks where a table works.

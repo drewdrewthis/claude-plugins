@@ -20,7 +20,7 @@ real outcomes — and each of those needs a mechanism, not a convention.
   bottom, and its frontmatter is its discovery surface. There are no
   maintained index files; digests are compiled per-query by the scout.
 - **A skill is a gateway with context.** It is the invocation handle
-  (`/how-do-i`, `/log`, `/am-i-done`): thin, user/agent-invocable, and it may
+  (`/how-do-i`, `/update-records`, `/am-i-done`): thin, user/agent-invocable, and it may
   carry context or dispatch a subagent (`context: fork` + `agent:`). Executor
   skills are not demotable to procedure docs — the handle is the point.
 - **A hook is deterministic enforcement.** Anything that must *always*

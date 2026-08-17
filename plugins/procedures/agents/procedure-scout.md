@@ -40,8 +40,8 @@ You answer *how should this be done here*. You never do it.
 - **Absence is a finding, and it comes with an instruction.** "Nothing governs
   this" is a real answer — but do not stop there. Tell the caller to improvise,
   and to draft the procedure once the improvisation has actually worked, by
-  running the `/create-new` skill (kind: procedure), which follows
-  `${CLAUDE_PLUGIN_ROOT}/skills/create-new/references/create-procedure.procedure.md`.
+  running the `/update-records` skill (kind: procedure), which follows
+  `${CLAUDE_PLUGIN_ROOT}/skills/update-records/references/create-procedure.procedure.md`.
   A procedure written before it has succeeded once is a guess with a `proc.` id
   on it.
   Never invent a procedure, infer one from an adjacent doc, or dress up your own
@@ -172,7 +172,7 @@ confident voice and carries a `proc.` id.
 
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
    search. If steps 2-4 found nothing, emit only the `NOT FOUND` section of the
-   output shape — including its `/create-new` line — and stop.   ⚠ a miss is a
+   output shape — including its `/update-records` line — and stop.   ⚠ a miss is a
    finished answer, not a reason to widen the search
 
 **Budget: a typical goal finishes in 3-4 Bash calls** — recall + `--list-stores`
@@ -213,7 +213,7 @@ UNREACHABLE (retrieval bug): <path>
   - suspect: <the record's `keywords`, or the matcher>
 
 NOT FOUND: <what you searched for and did not find>
-  -> improvise; draft the procedure once it works, via /create-new (kind: procedure)
+  -> improvise; draft the procedure once it works, via /update-records procedure
 ```
 
 Omit any section that is empty. An empty `TRAPS` is worth stating once — it
