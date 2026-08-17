@@ -142,11 +142,18 @@ assistant_tool() {
   [ -z "$output" ]
 }
 
-@test "how-do-i-gate: allows the Agent tool while outstanding (no deadlock)" {
+@test "how-do-i-gate: allows a compliance Agent dispatch while outstanding (no deadlock)" {
   start_turn
-  P="{\"session_id\":\"$SID\",\"tool_name\":\"Agent\",\"tool_input\":{}}"
+  P="{\"session_id\":\"$SID\",\"tool_name\":\"Agent\",\"tool_input\":{\"description\":\"procedures how-do-i lookup\"}}"
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
   [ -z "$output" ]
+}
+
+@test "how-do-i-gate: denies a work-delegation Agent dispatch while outstanding" {
+  start_turn
+  P="{\"session_id\":\"$SID\",\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"general-purpose\",\"description\":\"refactor auth\",\"prompt\":\"edit src/auth.ts\"}}"
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [[ "$output" == *"HOW-DO-I-GATE"* ]]
 }
 
 @test "how-do-i-gate: allows reading a procedure while outstanding" {
