@@ -5,7 +5,6 @@ date: YYYY-MM-DD
 keywords: [<grep surface — never empty>]
 links: { invariants: [], principles: [], procedures: [], decisions: [] }
 enforced_by: <path to the hook / gate that blocks the violating act — an invariant with no enforcer is a wish>
-control_type: <preventive — an invariant caught only after the fact is not an invariant>
 mitigates: [<fm.id of any failure-mode this law treats — omit if none>]
 status: active
 title: <Title Case Name>
@@ -44,11 +43,11 @@ Do not mint an invariant to give a principle more weight. The kinds are not a se
 Promoting a rule you still intend to break on occasion trains every agent to read invariants
 as suggestions, which destroys the one property the kind exists to carry.
 
-`control_type` should be `preventive`. An invariant that is only detected afterwards has
-already been violated, and the damage the record exists to prevent has already happened. If
-the only available control is detective, that gap is the work — record it in "How it is
-blocked" rather than hiding it behind a filled-in field. `scripts/grc-coverage.sh` reports
-which rules are actually machine-enforced.
+`enforced_by` must name something that BLOCKS the act, not something that notices it later.
+An invariant caught only after the fact has already been violated, and the damage the record
+exists to prevent has already happened. If the only thing available notices after the fact,
+that gap is the work — state it in "How it is blocked" rather than hiding it behind a
+filled-in field.
 
 Invariants are act-docs: rules, not essays. The reasoning for minting one belongs in a
 decision record, linked from `links.decisions`.

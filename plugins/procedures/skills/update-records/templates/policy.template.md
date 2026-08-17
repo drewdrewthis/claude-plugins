@@ -5,7 +5,6 @@ date: YYYY-MM-DD
 keywords: [<grep surface — never empty>]
 links: { policies: [], principles: [], procedures: [], decisions: [] }
 enforced_by: <path to the skill / reviewer / hook that applies this authority, or `none-aspirational`>
-control_type: <preventive | detective | corrective — omit only with none-aspirational>
 mitigates: [<fm.id of any failure-mode this authority treats — omit if none>]
 status: active
 title: <Title Case Name>

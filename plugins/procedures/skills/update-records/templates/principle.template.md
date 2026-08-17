@@ -5,7 +5,6 @@ date: YYYY-MM-DD
 keywords: [<grep surface — never empty>]
 links: { principles: [], procedures: [], decisions: [] }
 enforced_by: <path to the hook / lint / reviewer that makes this real, or `none-aspirational`>
-control_type: <preventive | detective | corrective — omit only with none-aspirational>
 mitigates: [<fm.id of any failure-mode this rule treats — omit if none>]
 status: active
 title: <Title Case Name>
@@ -35,12 +34,6 @@ procedure. If it is a one-time call with a rationale, it is a decision record.
 violated and nobody will notice. Name the hook, lint, or reviewer agent that catches the
 violation — and if none exists, that is the work, not the frontmatter. A missing
 `enforced_by` is a lint WARNING for exactly this reason.
-
-`control_type` says HOW it is caught: preventive (a hook/gate blocks the act), detective (a
-lint/reviewer finds it afterwards), corrective (it feeds `/update-records` → failure-mode → evolution).
-A domain that is all-detective ships the defect and catches it later — visible only if the
-field is filled in. Run `scripts/grc-coverage.sh` before adding a principle: it reports which
-existing rules are actually machine-enforced versus aspirational.
 
 Being loaded is not the same as being enforced. Universally-binding principles are imported
 into the root `CLAUDE.md`; role-scoped ones are imported by the agent that needs them. If a

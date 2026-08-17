@@ -5,7 +5,6 @@ date: YYYY-MM-DD
 keywords: [<grep surface — never empty>]
 links: { standards: [], policies: [], procedures: [], decisions: [] }
 enforced_by: <path to the lint / reviewer / CI check that measures the bar, or `none-aspirational`>
-control_type: <preventive | detective | corrective — omit only with none-aspirational>
 mitigates: [<fm.id of any failure-mode this bar treats — omit if none>]
 status: active
 title: <Title Case Name>
@@ -49,8 +48,7 @@ a preference wearing a kind. Write it so the check returns pass or fail without 
 
 `enforced_by` should name whatever actually measures the bar. If nothing does, the standard is
 aspirational and will drift the moment attention moves elsewhere — say `none-aspirational`
-honestly rather than naming a reviewer who has never been asked to check it. Run
-`scripts/grc-coverage.sh` to see which existing bars are measured and which are only written.
+honestly rather than naming a reviewer who has never been asked to check it.
 
 Standards are act-docs. The rationale for choosing this particular bar belongs in a decision
 record, linked from `links.decisions`.

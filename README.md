@@ -35,7 +35,6 @@ orchard-codex `develop-sweatshop`):
 | `am-i-done-gate` (Stop) | requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once |
 | `turn-state-reset` (UserPromptSubmit) / `turn-state-record` (PostToolUse:Skill) | the turn-boundary state the gates read (`$TURN_STATE_DIR`, default `/tmp/claude-turn-state`) |
 | `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation |
-| `scripts/grc-coverage.sh` | control-coverage report, run by hand or from CI — derives LIVE, per run, which obligations (`references/principles`, `references/policies`) name a control and how that control is actually invoked: AUTOMATED (machine config runs it), PROSE (an agent may choose to), SHELFWARE (nothing calls it), MISSING (not on disk), ASPIRATIONAL (`enforced_by: none-aspirational`), NO FIELD. Also reports which failure-modes no record points back at. `--summary` for counts, `--strict` to exit 1 on MISSING. No `status:` field is trusted as proof — a written tick is a cache, not live state |
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (`evolution.template.md` in `skills/update-records/templates/`) — one dated line per material change, newest first; `/update-records` explains it |
 
 The machinery is vendored from orchard-codex `develop-sweatshop` (skills,
@@ -49,7 +48,7 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   they must not write records into the plugin dir. Override with
   `CODEX_ROOT` (or the per-script vars: `QUERY_RECORDS_ROOT`,
   `MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`, `FAILURE_MODES_DIR`,
-  `LINT_FRONTMATTER_ROOT`, `GRC_COVERAGE_ROOT`, `TURN_STATE_DIR`,
+  `LINT_FRONTMATTER_ROOT`, `TURN_STATE_DIR`,
   `KNOWLEDGE_ROOT` for the frontmatter hook).
 - **Script paths in skill/agent bodies:** the skills and agents reference the
   plugin-shipped scripts via `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}`
