@@ -1,4 +1,4 @@
-<!-- TEMPLATE — the shape `/log decision` writes: one markdown file at
+<!-- TEMPLATE — the shape `/update-records decision` writes: one markdown file at
      <knowledge-root>/references/decisions/<YYYY-MM-DD>-<slug>.md
      (default root ~/.claude). Written by the log-record.sh writer script; use
      this template when hand-editing an existing record, or to know what to

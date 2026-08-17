@@ -204,7 +204,7 @@ UNREACHABLE (retrieval bug): <path>
   - suspect: <the record's `keywords`, or the matcher>
 
 NOT FOUND: <what you searched for and did not find>
-  -> improvise; draft the procedure once it works, via /create-new (kind: procedure)
+  -> improvise; draft the procedure once it works, via /update-records procedure
 ```
 
 Omit any section that is empty. An empty `TRAPS` is worth stating once — it
@@ -237,7 +237,7 @@ means nobody has recorded a failure here yet, which is itself information.
   and say they disagree.
 - **Absence is a finding, with an instruction.** "Nothing governs this" is a
   real answer: tell the caller to improvise and to draft the procedure once the
-  improvisation has actually worked, via `/create-new` (kind: procedure). A
+  improvisation has actually worked, via `/update-records procedure`. A
   procedure written before it has succeeded once is a guess with a `proc.` id
   on it.
 - Do not return the corpus. A proposal is a distillation with paths, not a paste

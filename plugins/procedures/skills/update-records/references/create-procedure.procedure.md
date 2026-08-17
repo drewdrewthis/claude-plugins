@@ -41,7 +41,7 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
 
 3. **Pick keywords** — lowercase, these are the discovery tokens for the procedures hook and skill. Include the operation verb, domain noun, and any common aliases.
 
-4. **Write `PROCEDURE.md`** at `references/procedures/<area>/<name>/PROCEDURE.md`, from `skills/log/templates/procedure.template.md` at the plugin root:
+4. **Write `PROCEDURE.md`** at `references/procedures/<area>/<name>/PROCEDURE.md`, from `skills/update-records/templates/procedure.template.md` at the plugin root:
 
    ```
    ---
@@ -63,7 +63,7 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
 
    Status starts as `draft` — creation is cheap and ungated. Draft-then-promote: a first success earns a draft, and promotion to `active` happens only after the procedure has been followed as written and worked. That promotion is NOT this skill's job.
 
-5. **Write `EVOLUTION.md`** in the SAME directory, from `skills/log/templates/evolution.template.md` at the plugin root:
+5. **Write `EVOLUTION.md`** in the SAME directory, from `skills/update-records/templates/evolution.template.md` at the plugin root:
 
    ```
    ---

@@ -25,9 +25,9 @@ stop — not every following of a procedure produces an evolution.
 | Situation | Action |
 |---|---|
 | A `PROCEDURE.md` was followed this session and something about it (a step, a ref, an instruction) didn't hold up | **This skill** — proceed to `steps/evolve-procedure.md` |
-| No procedure exists yet for work that just succeeded | **`/create-new`** (procedure kind) — not this skill |
+| No procedure exists yet for work that just succeeded | **`/update-records procedure`** — not this skill |
 | The friction was in a skill, agent, hook, CLAUDE.md row, or other record, not a procedure | **Edit that artifact directly** and log its own `EVOLUTION.md`/changelog if it keeps one — not this skill |
-| The only actionable output is a fact worth recording, with no procedure text to change | **`/log mistake`** (or the matching record kind) — not this skill |
+| The only actionable output is a fact worth recording, with no procedure text to change | **`/update-records mistake`** (or the matching record kind) — not this skill |
 
 A single turn can touch more than one of these; this skill only owns the
 procedure-patch lane. Dispatch the others separately.

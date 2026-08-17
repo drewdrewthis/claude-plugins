@@ -37,7 +37,7 @@ violation — and if none exists, that is the work, not the frontmatter. A missi
 `enforced_by` is a lint WARNING for exactly this reason.
 
 `control_type` says HOW it is caught: preventive (a hook/gate blocks the act), detective (a
-lint/reviewer finds it afterwards), corrective (it feeds `/log` → failure-mode → evolution).
+lint/reviewer finds it afterwards), corrective (it feeds `/update-records` → failure-mode → evolution).
 A domain that is all-detective ships the defect and catches it later — visible only if the
 field is filled in. Run `scripts/grc-coverage.sh` before adding a principle: it reports which
 existing rules are actually machine-enforced versus aspirational.

@@ -1,6 +1,6 @@
 ---
 name: evolve-procedure
-description: Patch an EXISTING procedure record from a correction, incident, or friction — a deviation, a missing step, or a stale/broken ref hit while following a PROCEDURE.md. Use after a procedure was followed and something about it didn't hold up. Scope is procedures only — a skill, agent, or other record is edited directly (see its own EVOLUTION.md convention); a NEW procedure is /create-new; recording a bare fact is /log.
+description: Patch an EXISTING procedure record from a correction, incident, or friction — a deviation, a missing step, or a stale/broken ref hit while following a PROCEDURE.md. Use after a procedure was followed and something about it didn't hold up. Scope is procedures only — a skill, agent, or other record is edited directly (see its own EVOLUTION.md convention); a NEW procedure is /update-records procedure; recording a bare fact is also /update-records.
 user-invocable: true
 argument-hint: "<procedure> <what changed / what friction>"
 ---
@@ -11,7 +11,7 @@ Thin wrapper. Read and follow `${CLAUDE_SKILL_DIR}/references/evolve.procedure.m
 
 Scope: procedures only. Skills, agents, and other records are edited
 directly — this skill does not route to them. A NEW procedure (nothing
-existing covers the work) is `/create-new`.
+existing covers the work) is `/update-records procedure`.
 
 Every material patch this produces appends a dated line to that procedure
 directory's `EVOLUTION.md`, newest first — that log is mandatory, not

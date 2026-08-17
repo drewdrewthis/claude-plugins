@@ -8,7 +8,7 @@
     {
       "name": "procedures",
       "source": "./plugins/procedures",
-      "description": "Procedural knowledge system: /how-do-i, /log (+templates), /am-i-done, and the how-do-i/am-i-done gate hooks with turn-state wiring."
+      "description": "Procedural knowledge system: /how-do-i, /update-records (+templates), /am-i-done, and the how-do-i/am-i-done gate hooks with turn-state wiring."
     },
     {
       "name": "delegation",
