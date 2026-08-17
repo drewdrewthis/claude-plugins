@@ -236,11 +236,12 @@ provenance from the recorded `cwd`, concurrency-safe open). Do not treat it as
 tracking upstream.
 
 `scripts/fts5_query.py` is a separate unit with its own table-driven tests: the
-translation of a human's words into an FTS5 MATCH expression shipped four
-consecutive same-class defects while it lived inline, each a *valid* expression
-that matched the wrong documents. It has a pure `str -> str` contract and no
-database, filesystem, or environment access. Do not reimplement it in the
-indexer.
+translation of a human's words into an FTS5 MATCH expression has repeatedly
+shipped same-class defects, each a *valid* expression that matched the wrong
+documents. It has a pure `str -> str` contract; it opens a private in-memory
+SQLite connection to ask the tokenizer whether a token indexes to anything, but
+touches no on-disk database, filesystem, or environment. Do not reimplement it
+in the indexer.
 
 Tests:
 
