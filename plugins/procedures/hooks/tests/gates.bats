@@ -133,6 +133,9 @@ assistant_tool() {
   start_turn
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [[ "$output" == *"HOW-DO-I-GATE"* ]]
+  # Pins the per-turn-scope explanation itself, not just the HOW-DO-I-GATE
+  # header — a trim of the payload's body text would otherwise stay green.
+  [[ "$output" == *"PER TURN"* ]]
 }
 
 @test "how-do-i-gate: allows once Skill(how-do-i) has run" {
