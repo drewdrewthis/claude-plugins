@@ -4,6 +4,7 @@ kind: procedure
 date: YYYY-MM-DD
 keywords: [<the words someone would grep to find this — never empty>]
 links: { procedures: [], principles: [], decisions: [], solutions: [] }
+mitigates: [<fm.id of any failure-mode these steps treat — omit if none>]
 status: active
 ---
 
