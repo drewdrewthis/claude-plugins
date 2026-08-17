@@ -26,6 +26,11 @@
       "description": "Daily working notes: /take-note scratchpad + SessionStart daily-note loader."
     },
     {
+      "name": "recall",
+      "source": "./plugins/recall",
+      "description": "Conversation history: /recall searches a SQLite FTS5 index over past session transcripts and synthesizes what you were doing into the current session."
+    },
+    {
       "name": "just-recipes",
       "source": "./plugins/just-recipes",
       "description": "Teaches Claude to prefer named just recipes over ad hoc shell, using just's native discovery/introspection features."

@@ -14,6 +14,7 @@ design record.
 /plugin install delegation@drewdrewthis
 /plugin install about-my-person@drewdrewthis
 /plugin install take-note@drewdrewthis
+/plugin install recall@drewdrewthis
 ```
 
 ## Plugins
@@ -60,10 +61,11 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   value is only honoured on the `Agent(subagent_type:)` path. So
   `skills/how-do-i/SKILL.md` and `skills/am-i-done/SKILL.md` each re-declare
   `model:` in their own frontmatter, and `hooks/tests/gate-skill-model.bats`
-  holds the two declarations in agreement. Measured on this fork path: an
-  opus-parent session's fork moved to `claude-haiku-4-5` when the skill
-  declared `model: haiku`, while the parent's own turns stayed on opus —
-  the pin binds the fork without touching the caller. Upstream has no
+  holds the two declarations in agreement. `recall/skills/recall/SKILL.md` pins
+  one for the same reason, with no `agent:` to hold it against. Measured on
+  this fork path: an opus-parent session's fork moved to `claude-haiku-4-5`
+  when the skill declared `model: haiku`, while the parent's own turns stayed
+  on opus — the pin binds the fork without touching the caller. Upstream has no
   equivalent because the gate does not run as a forked skill there.
 
   **This is documented harness design, not a bug — do not refile it.** The
@@ -198,6 +200,54 @@ Daily working notes: `/take-note` scratchpad (one file per day, rollover with
 carry-over) + a SessionStart hook loading today's (or yesterday's) note and
 `ABOUT_MY_PERSON.md` when present. Config: `KNOWLEDGE_WS` (default
 `~/workspace`) or `NOTES_DIR` directly.
+
+### recall (0.1.0)
+
+`/recall <topic>` — searches what **you and Claude** said in past Claude Code
+sessions and synthesizes it into the current one (what it is, what was decided,
+where it stands, what's open). Runs in a fork, so reading transcripts never
+lands in the main context. Ships the indexer it depends on: `scripts/session-index.py` (an
+incremental SQLite FTS5 index over the session transcripts) plus a `SessionEnd`
+hook that keeps it warm — the skill also rebuilds on invocation, so the hook is
+a latency optimisation, not a correctness requirement.
+
+Scope worth knowing before installing:
+
+- It indexes the **prose of both sides** — your prompts and Claude's replies —
+  but not tool calls or their output, so anything Claude only ever wrote into a
+  file or a command is not searchable.
+- It indexes **every project on the machine** into one store, so `/recall` can
+  surface content from unrelated repos or clients. There is no scoping flag.
+- Top-level sessions only; subagent transcripts are excluded.
+
+Requires `python3` and a `sqlite3` built with the **FTS5** extension (the default
+on most platforms; Alpine's stock sqlite and some conda builds lack it — recall
+reports this rather than failing obscurely).
+
+Config: `CLAUDE_CONFIG_DIR` (default `~/.claude`), or `SESSION_INDEX_DB` /
+`SESSION_INDEX_PROJECTS` to override either path directly. The index lives at
+`~/.claude/sessions.db`; to remove it, `rm ~/.claude/sessions.db*`.
+
+Started from the codex's `scripts/session-index.py` + `hooks/index-sessions.sh`,
+but unlike the other plugins this is **a fork, not a vendoring** — the data-root
+adaptation is marked `PLUGIN ADAPTATION` as elsewhere, and beyond that the
+indexer was substantially rewritten (schema versioning, incremental durability,
+provenance from the recorded `cwd`, concurrency-safe open). Do not treat it as
+tracking upstream.
+
+`scripts/fts5_query.py` is a separate unit with its own table-driven tests: the
+translation of a human's words into an FTS5 MATCH expression has repeatedly
+shipped same-class defects, each a *valid* expression that matched the wrong
+documents. It has a pure `str -> str` contract; it opens a private in-memory
+SQLite connection to ask the tokenizer whether a token indexes to anything, but
+touches no on-disk database, filesystem, or environment. Do not reimplement it
+in the indexer.
+
+Tests:
+
+```
+cd plugins/recall && bats scripts/tests hooks/tests
+```
 
 ## docs/
 
