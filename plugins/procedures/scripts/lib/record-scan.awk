@@ -11,8 +11,12 @@
 #   qkind  — frontmatter `kind:` must equal this exactly
 #   qid    — frontmatter `id:` must equal this exactly
 #   qlinks — frontmatter `links:` must reference this id token
-#   qproject — frontmatter `project:` must equal this exactly, or its
-#              repo basename (text after the last `/`) must equal it
+#   qproject — frontmatter `project:` must equal this exactly, or its repo
+#              NAME (the text after the last `/`) must equal it. There is NO
+#              owner/org-wide match: `langwatch` matches `langwatch/langwatch`
+#              only because that repo's NAME is also `langwatch`, and it does
+#              NOT match `langwatch/scenario`. A record with no `project:` key
+#              never matches.
 #
 # Replaces the per-file bash/awk fork loop (fm_value called per key per file):
 # one process for the whole corpus instead of ~2N forks.

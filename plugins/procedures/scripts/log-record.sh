@@ -22,6 +22,12 @@
 #   failure-mode  write/update references/failure-modes/<slug>.md
 #                 (gated: >=3 occurrences of the pattern in mistakes.jsonl first)
 #
+# `--project <owner/repo>` is OPTIONAL on decision/solution/failure-mode and
+# writes the frontmatter `project:` key that query-records.sh --project filters
+# on. Omitted when not passed — a record with no `project:` is corpus-wide, and
+# an EMPTY `project:` would be neither (unmatchable, and rejected by
+# lint-frontmatter.sh's shape check).
+#
 # Env overrides (used by tests so a dry-run never mutates committed records):
 #   MISTAKES_JSONL        path to the jsonl (default: $HOME/.claude/mistakes.jsonl).
 #                         Also the corpus the failure-mode >=3 gate counts.
@@ -118,9 +124,9 @@ cmd_mistake() {
 # decision
 # ===========================================================================
 cmd_decision() {
-    local slug date title keywords links status summary body force
+    local slug date title keywords links status summary body force project
     slug="" date="" title="" keywords="[]" links="{}" status="active"
-    summary="" body="" force=""
+    summary="" body="" force="" project=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --slug)     slug="$2"; shift 2 ;;
@@ -129,6 +135,7 @@ cmd_decision() {
             --keywords) keywords="$2"; shift 2 ;;
             --links)    links="$2"; shift 2 ;;
             --status)   status="$2"; shift 2 ;;
+            --project)  project="$2"; shift 2 ;;
             --summary)  summary="$2"; shift 2 ;;
             --body)     body="$2"; shift 2 ;;
             --force)    force="1"; shift 1 ;;
@@ -192,6 +199,10 @@ EOF
         printf 'keywords: %s\n' "$keywords"
         printf 'links: %s\n' "$links"
         printf 'status: %s\n' "$status"
+        # OPTIONAL, and OMITTED when empty: an empty `project:` is not "no
+        # project", it is a malformed value the shape lint rejects and the
+        # --project filter can never match.
+        [ -n "$project" ] && printf 'project: %s\n' "$project"
         printf -- '---\n'
         printf '# %s\n\n' "$title"
         printf '%s\n' "$body"
@@ -205,9 +216,9 @@ EOF
 # ===========================================================================
 cmd_solution() {
     local slug date title keywords links status situation_tags resolve_after
-    local summary body force
+    local summary body force project
     slug="" date="" title="" keywords="[]" links="{}" status="resolved"
-    situation_tags="[]" resolve_after="" summary="" body="" force=""
+    situation_tags="[]" resolve_after="" summary="" body="" force="" project=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --slug)           slug="$2"; shift 2 ;;
@@ -216,6 +227,7 @@ cmd_solution() {
             --keywords)       keywords="$2"; shift 2 ;;
             --links)          links="$2"; shift 2 ;;
             --status)         status="$2"; shift 2 ;;
+            --project)        project="$2"; shift 2 ;;
             --situation-tags) situation_tags="$2"; shift 2 ;;
             --resolve-after)  resolve_after="$2"; shift 2 ;;
             --summary)        summary="$2"; shift 2 ;;
@@ -266,6 +278,8 @@ EOF
         printf 'keywords: %s\n' "$keywords"
         printf 'links: %s\n' "$links"
         printf 'status: %s\n' "$status"
+        # OPTIONAL, and OMITTED when empty — see cmd_decision.
+        [ -n "$project" ] && printf 'project: %s\n' "$project"
         printf 'situation_tags: %s\n' "$situation_tags"
         printf 'resolve_after: %s\n' "$resolve_after"
         printf -- '---\n'
@@ -281,10 +295,10 @@ EOF
 # ===========================================================================
 cmd_failure_mode() {
     local slug date keywords rule mistake correct face_of status
-    local links_scenario links_criterion mega skip_gate force
+    local links_scenario links_criterion mega skip_gate force project
     slug="" date="" keywords="[]" rule="" mistake="" correct=""
     face_of="" status="active" links_scenario="" links_criterion=""
-    mega="" skip_gate="" force=""
+    mega="" skip_gate="" force="" project=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --slug)            slug="$2"; shift 2 ;;
@@ -295,6 +309,7 @@ cmd_failure_mode() {
             --correct)         correct="$2"; shift 2 ;;
             --face-of)         face_of="$2"; shift 2 ;;
             --status)          status="$2"; shift 2 ;;
+            --project)         project="$2"; shift 2 ;;
             --links-scenario)  links_scenario="$2"; shift 2 ;;
             --links-criterion) links_criterion="$2"; shift 2 ;;
             --mega)            mega="$2"; shift 2 ;;
@@ -354,6 +369,8 @@ cmd_failure_mode() {
         [ -n "$mega" ] && printf 'mega: %s\n' "$mega"
         printf 'verification: pending\n'
         printf 'status: %s\n' "$status"
+        # OPTIONAL, and OMITTED when empty — see cmd_decision.
+        [ -n "$project" ] && printf 'project: %s\n' "$project"
         printf -- '---\n'
         printf '# %s\n\n' "$slug"
         printf '## Mistake\n\n%s\n\n' "$mistake"

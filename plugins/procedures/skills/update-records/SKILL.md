@@ -33,6 +33,8 @@ The script owns the mechanical half — building the JSON via `jq -n` (never an 
 
 **Rules that hold for every kind:** check `/how-do-i` for an existing artifact first; six-key frontmatter on every record (the frontmatter hook enforces it); draft-then-promote — a first success earns a draft, promotion needs the gate in `docs/adrs/001-procedural-knowledge-system.md` ("Evolution"). Patching an existing PROCEDURE is `/evolve-procedure`, not this skill.
 
+`--project <owner/repo>` is OPTIONAL on `decision`, `solution`, and `failure-mode`, and writes the frontmatter `project:` key that `query-records.sh --project` filters on. Pass it only when the record is genuinely about ONE repo; omit it for anything corpus-wide. ⚠ `--project` matches the full `owner/name` or the repo name after the last `/`, never the owner alone — so a record filed under `langwatch/scenario` is invisible to `--project langwatch`.
+
 Resume the interrupted conversation immediately after — the four script-backed kinds take <10 seconds and must not derail it.
 
 ---

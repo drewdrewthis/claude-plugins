@@ -138,10 +138,48 @@ teardown() {
   [[ "$output" != *"sample-decision.md"* ]]
 }
 
-@test "--project bare repo name matches a record whose project is owner/name" {
+# The base fixture's project is `langwatch/langwatch`, where the owner and the
+# repo NAME are the same word. Any test using it passes identically under
+# basename semantics and under owner/org semantics, so it can prove neither.
+# These two tests use a record whose owner and name DIFFER, which is the only
+# fixture shape that can tell them apart.
+_seed_owner_ne_name_fixture() {
+  cat > "$FIX/references/decisions/owner-ne-name.md" <<'EOF'
+---
+id: dec.owner-ne-name
+kind: decision
+date: 2026-08-10
+keywords: [ownernenamekw]
+links: {}
+status: active
+project: langwatch/scenario
+---
+# Owner-differs-from-name record
+EOF
+}
+
+@test "--project matches the repo NAME after the last slash, not the owner" {
+  _seed_owner_ne_name_fixture
+  run bash -c "bash '$SCRIPT' --project scenario"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"owner-ne-name.md"* ]]
+}
+
+@test "--project <owner> does NOT match <owner>/<other-repo>: there is no org-wide match" {
+  _seed_owner_ne_name_fixture
+  # `langwatch` is this record's OWNER; its repo name is `scenario`, so neither
+  # the exact branch nor the basename branch can fire. The base fixture's
+  # sample-solution DOES come back for the same query — but only because its
+  # repo name happens to also be `langwatch`. That homonymy is what this test
+  # exists to stop anyone reading as org-wide scoping.
   run bash -c "bash '$SCRIPT' --project langwatch"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"references/solutions/sample-solution.md"* ]]
+  [[ "$output" != *"owner-ne-name.md"* ]]
+  # Non-vacuity guard: the record IS reachable by its full owner/name, so the
+  # assertion above is about org semantics, not about an unreadable fixture.
+  run bash -c "bash '$SCRIPT' --project langwatch/scenario"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"owner-ne-name.md"* ]]
 }
 
 @test "--project AND-combines with --keyword" {

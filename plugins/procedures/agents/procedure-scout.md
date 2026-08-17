@@ -126,12 +126,16 @@ confident voice and carries a `proc.` id.
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --keyword "<term set>"
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --kind procedure --keyword "<term set>"
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --links-to <id-you-already-found>
+   # repo-scoped goals only, and only AFTER the unscoped calls above
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh" --keyword "<term set>" --project <owner/repo>
    ```
 
-   When the goal names a repository, add `--project <repo>` (owner/name or bare
-   repo name) to scope the survey to records carrying that frontmatter
-   `project:` key. Records without one are EXCLUDED, so a scoped query is never
-   a substitute for the unscoped one — run both.
+   ⚠ `--project` REFINES the unscoped result above, it never replaces it —
+   every record with no `project:` key is excluded, so a scoped query that
+   returns nothing is not evidence that nothing governs the goal
+   ⚠ `--project` matches the full `owner/name`, or the repo name after the
+   last `/` — there is NO owner-wide match: `--project langwatch` does not
+   reach `project: langwatch/scenario`
 
    Gloss calls only (no `--full`). Expand synonyms — the caller's words rarely
    match the corpus's — and search the *capability* as well as the identifier:
@@ -243,7 +247,7 @@ means nobody has recorded a failure here yet, which is itself information.
   running `query-records.sh` is always in bounds. The wider repo, the working
   tree, and the web are not the answer surface.
 - `query-records.sh` is your ONLY retrieval tool — surveying with
-  `--keyword`/`--kind`/`--id`/`--links-to`/`--recall`, reading with
+  `--keyword`/`--kind`/`--id`/`--links-to`/`--project`/`--recall`, reading with
   `--cat`/`--full`. No `grep`, `find`, `awk`, `cat`, `head`, or `Read` of a
   record. They read the same bytes, so this is not about capability: a search
   the script cannot express is a corpus bug (step 4b), and a private tool is

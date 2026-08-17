@@ -27,9 +27,16 @@
 #   --id <id>          the record whose frontmatter `id:` equals <id> exactly.
 #   --links-to <id>    records whose `links:` value references <id>.
 #   --project <repo>   records whose frontmatter `project:` equals <repo>
-#                      exactly, or whose repo basename equals it — so
-#                      `--project langwatch` matches `project: langwatch/langwatch`.
-#                      Records without a `project:` key never match.
+#                      exactly, or whose repo NAME (the text after the last
+#                      `/`) equals it. There is NO owner/org-wide match:
+#                      `--project langwatch` matches `project: langwatch/langwatch`
+#                      only because that repo's NAME is also `langwatch`, and
+#                      it does NOT match `project: langwatch/scenario`. To
+#                      scope to one repo, name it: `--project langwatch/scenario`.
+#                      Records without a `project:` key never match, so this is
+#                      a REFINEMENT over an unscoped query, never a replacement
+#                      — a scoped empty result is not evidence the corpus is
+#                      silent on the goal.
 #   --limit <N>        cap the total result count (env QUERY_RECORDS_LIMIT).
 #                      0/absent = all matches (the default).
 #   --full             after the match list, print the FULL CONTENT of every
