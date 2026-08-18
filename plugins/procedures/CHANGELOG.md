@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.7.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.6.0...procedures-v0.7.0) (2026-08-18)
+
+
+### Features
+
+* **procedures:** --project filter over the record project: key ([752b798](https://github.com/drewdrewthis/claude-plugins/commit/752b7988fb1e5b2696f71bdb242e39bfb51d176b))
+* **procedures:** --project filter over the record project: key ([2f33e5e](https://github.com/drewdrewthis/claude-plugins/commit/2f33e5e667c090aebd95bed0e4a5e787c3e07539))
+* **procedures:** one off-switch per gate, on by default, recorded when used ([4c8552a](https://github.com/drewdrewthis/claude-plugins/commit/4c8552a5af8aaf95b1be38be6219c1eb84bf4a3e))
+* **procedures:** one off-switch per gate, on by default, recorded when used ([c830914](https://github.com/drewdrewthis/claude-plugins/commit/c830914ca485f433e96a98fbdf8aefe59278296a))
+* **procedures:** write and validate the record `project:` field end to end ([6810f9b](https://github.com/drewdrewthis/claude-plugins/commit/6810f9ba1f49be0b057c06d095787a70d042705b))
+
+
+### Bug Fixes
+
+* address CodeRabbit review — vendor marker + POSIX-portable KEYS extraction ([3ed4119](https://github.com/drewdrewthis/claude-plugins/commit/3ed41199bf310eb4265a4e750e1f8429cc8e105c))
+* **procedures:** clarify --recurrence-of governs by pattern's earliest ts ([b0a269f](https://github.com/drewdrewthis/claude-plugins/commit/b0a269fbb75ed2765cd9ca3aa67d20f54b8da11f))
+* **procedures:** clarify --recurrence-of governs by pattern's earliest ts ([aa74c18](https://github.com/drewdrewthis/claude-plugins/commit/aa74c18e9e83cd73fe3a99d0eaff55f8c6167f40))
+* **procedures:** final review polish — pin the shim, correct the comments ([47372f0](https://github.com/drewdrewthis/claude-plugins/commit/47372f07cc99db1d882c69fdbb103783263feb34))
+* **procedures:** make --recurrence-of lookup return the pattern's earliest ts ([8b56a1f](https://github.com/drewdrewthis/claude-plugins/commit/8b56a1f33b00d7dc474f2d7038913b0a9d7d054d))
+* **procedures:** review — record releases not invocations, correct the docs ([840e799](https://github.com/drewdrewthis/claude-plugins/commit/840e79914946b40bf372fe8eec8d3924b6cc16b4))
+* **procedures:** review round 2 — classify releases correctly in both directions ([7501f6c](https://github.com/drewdrewthis/claude-plugins/commit/7501f6c916cff54f33715141f7067ddb341cfc40))
+* **procedures:** say WHY how-do-i re-gates each turn in the deny message ([81f6830](https://github.com/drewdrewthis/claude-plugins/commit/81f6830febd2a0cfb2c81123acc7887f0a939030))
+
+
+### Documentation
+
+* **procedures:** emit the bare earliest ts, not the whole record ([3fd1e3b](https://github.com/drewdrewthis/claude-plugins/commit/3fd1e3ba1b0cd474492550ea93aa309d8539866e))
+
+
+### Tests
+
+* **procedures:** give the escape-lib mutation sandbox a skills/ dir ([ff3921a](https://github.com/drewdrewthis/claude-plugins/commit/ff3921ac5aa400e746375c5163f157a68fd689aa))
+* **procedures:** pin the deny message's reasoning and the per-turn invariant ([28d926e](https://github.com/drewdrewthis/claude-plugins/commit/28d926e41dd7429a1e09c98cbb0f5fa831550865))
+
 ## [0.6.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.5.0...procedures-v0.6.0) (2026-08-18)
 
 

@@ -1,8 +1,10 @@
 {
   "name": "procedures",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Procedural knowledge system: /how-do-i router, /update-records (procedure/decision/solution + templates), /am-i-done cold-read review, and the gate hooks — how-do-i-gate (PreToolUse) + am-i-done-gate (Stop) with turn-state wiring, from orchard-codex develop-sweatshop.",
-  "author": { "name": "Drü" },
+  "author": {
+    "name": "Drü"
+  },
   "userConfig": {
     "enable_how_do_i_gate": {
       "type": "boolean",
