@@ -315,6 +315,12 @@ assistant_tool() {
   mkdir -p "$COPY"
   cp -r "$HOOKS" "$COPY/hooks"
   cp -r "$BATS_TEST_DIRNAME/../../scripts" "$COPY/scripts"
+  # skills/ too: both gates fail OPEN when they cannot read the SKILL.md they
+  # are about to name (the "skill-unresolvable" proxy — denying while naming an
+  # unresolvable skill is a hard wedge). A sandbox without skills/ therefore
+  # releases for that reason and never reaches the switch, which would make
+  # this test pass or fail for the wrong reason.
+  cp -r "$BATS_TEST_DIRNAME/../../skills" "$COPY/skills"
   chmod 000 "$COPY/hooks/lib/gate-escape.sh"
 
   start_turn
