@@ -114,10 +114,16 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
-@test "allowlist: Agent is allowed so a delegating skill cannot deadlock" {
+@test "allowlist: a compliance Agent dispatch is allowed (no deadlock)" {
   source "$LIB/gate-allowlist.sh"
-  run gal_is_compliance_path Agent '{"tool_name":"Agent"}'
+  run gal_is_compliance_path Agent '{"tool_name":"Agent","tool_input":{"prompt":"run procedures:how-do-i for this goal"}}'
   [ "$status" -eq 0 ]
+}
+
+@test "allowlist: a work-delegation Agent dispatch is refused" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path Agent '{"tool_name":"Agent","tool_input":{"subagent_type":"general-purpose","description":"update GOALS","prompt":"append a line to GOALS.md"}}'
+  [ "$status" -ne 0 ]
 }
 
 @test "allowlist: Read under references/procedures is allowed" {

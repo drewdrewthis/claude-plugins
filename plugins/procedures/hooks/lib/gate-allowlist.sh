@@ -7,10 +7,14 @@
 #
 # ALLOWLISTED:
 #   Skill  — Skill(how-do-i) / Skill(am-i-done) ARE compliance.
-#   Agent  — /how-do-i and /am-i-done dispatch a subagent, so the delegation
-#            itself is the compliance path. Without this the gate denies the
-#            Agent call that would satisfy it. Added 2026-08-02 with the
-#            delegating skills; the pre-delegation gate did not need it.
+#   Agent  — ONLY when the dispatch payload names a compliance skill
+#            (how-do-i / am-i-done / procedures). A blanket Agent allow let
+#            any delegated write bypass the gate — delegation is the main way
+#            a lead makes durable changes, so it was the widest hole in the
+#            gate (clara defect report 2026-08-17). The /how-do-i and
+#            /am-i-done dispatches carry the skill name in
+#            subagent_type/description/prompt, so they still pass and cannot
+#            deadlock; a work delegation does not.
 #   Read   — any file read (Read / Grep / Glob / NotebookRead).
 #   Bash   — any command line that only reads (see lib/readonly-shape.sh).
 #
@@ -47,7 +51,20 @@ gal_is_compliance_path() {
     local tool="${1:-}" payload="${2:-}"
 
     case "$tool" in
-        Skill|Agent) return 0 ;;
+        Skill) return 0 ;;
+        Agent)
+            # Compliance dispatches name their skill somewhere in the payload;
+            # a work delegation does not. jq failure yields "" → deny, which
+            # costs one Skill(how-do-i) — fail closed is safe here.
+            local ap
+            ap="$(printf '%s' "$payload" | jq -r '
+                (.tool_input // .input // {})
+                | [(.subagent_type // ""), (.description // ""), (.prompt // "")]
+                | join(" ")' 2>/dev/null || true)"
+            case "$ap" in
+                *how-do-i*|*am-i-done*|*procedures*) return 0 ;;
+            esac
+            return 1 ;;
     esac
 
     case "$tool" in
