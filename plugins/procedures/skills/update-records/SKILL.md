@@ -60,10 +60,10 @@ Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by the proced
 1. **`recurrence_of`** — grep for a near-match prior entry (same `pattern`/`category` or overlapping `description` keywords). ⚠ `fm.unverified-claim-acted-on`: this is set correctly ONLY if you find the prior entry first.
 
    ```bash
-   grep -iE '<2-3 keywords from this mistake>' ~/.claude/mistakes.jsonl | tail -3
+   grep -iE '<2-3 keywords from this mistake>' ~/.claude/mistakes.jsonl | jq -sr '[.[] | select(.ts)] | sort_by(.ts) | .[0].ts // empty'
    ```
 
-   If a prior entry shares the same root pattern, pass `--recurrence-of "<that-ts>"` (the earliest occurrence's `ts`). The first occurrence of a pattern has no `recurrence_of` — omit the flag.
+   If a prior entry shares the same root pattern, pass `--recurrence-of "<that-ts>"` — the `ts` of the **`pattern`'s** earliest occurrence, never the narrower `face`'s. The first occurrence of a pattern has no `recurrence_of` — omit the flag. A prior entry sharing your `face` (step 2) does not change which `ts` this flag points to: `face` is an orthogonal annotation naming a variant of a registry record, not a second recurrence lineage.
 
 2. **`pattern`** — match against the `failure-modes/` registry for the join key:
 
