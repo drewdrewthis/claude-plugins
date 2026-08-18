@@ -81,7 +81,14 @@ ts_is_marked "$SID" how_do_i && exit 0
 [ -r "$SCRIPT_DIR/../skills/how-do-i/SKILL.md" ] \
     || gate_failopen "how-do-i" "skill-unresolvable" "$SID"
 
-jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(procedures:how-do-i). Run it before acting, then retry. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
+# The reason string is the ONLY channel this gate has to the blocked agent —
+# it is read at the moment of denial, by an agent that may have run how-do-i
+# minutes ago in an earlier turn and reads the block as redundant. So it states
+# the per-turn scope AND why, or the agent files a bug against the design
+# (observed: a main agent proposed exactly that, on the premise that a
+# same-session run should carry over). Per-turn re-gating is deliberate and
+# load-bearing — see lib/turn-state.sh and turn-state-reset.sh.
+jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(procedures:how-do-i). Run it before acting, then retry. Gating is PER TURN by design — one user prompt is one turn, and a lookup from an earlier turn says nothing about what this turn is about to do, so a run earlier in the session does not carry over. The pass is bounded — a typical goal finishes in 3-4 Bash calls in a forked session, not a research project. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
