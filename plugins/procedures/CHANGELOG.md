@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.5.0...procedures-v0.6.0) (2026-08-18)
+
+
+### Features
+
+* **recall:** new plugin — /recall over a bundled session index ([#27](https://github.com/drewdrewthis/claude-plugins/issues/27)) ([1f770da](https://github.com/drewdrewthis/claude-plugins/commit/1f770da712b1de86305e57c0da6f73039fd6bd1b))
+
+
+### Bug Fixes
+
+* **procedures:** close how-do-i-gate allowlist holes (Agent bypass, chain guard) ([#59](https://github.com/drewdrewthis/claude-plugins/issues/59)) ([827da27](https://github.com/drewdrewthis/claude-plugins/commit/827da270532c5acf5c620e3a653331162cccf07d))
+* **procedures:** restrict how-do-i-gate Agent allow to compliance dispatches ([827da27](https://github.com/drewdrewthis/claude-plugins/commit/827da270532c5acf5c620e3a653331162cccf07d))
+
 ## [0.5.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.4.1...procedures-v0.5.0) (2026-08-17)
 
 
