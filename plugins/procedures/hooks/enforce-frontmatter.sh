@@ -15,6 +15,24 @@
 
 set -uo pipefail
 
+# Resolved WITHOUT the external `dirname`: this now runs before the jq check,
+# and that path is exercised with PATH emptied entirely
+# (enforce-frontmatter.bats "jq-less PATH"). `${x%/*}` is parameter expansion
+# and `cd`/`pwd` are builtins, so nothing here needs PATH — same shape as the
+# two gates.
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
+SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
+
+# PLUGIN ADAPTATION: this check's own off-switch — userConfig
+# `enable_frontmatter_check`, on by default. See lib/gate-escape.sh. Sourced
+# here, CALLED below the scope filters: the switch is evaluated only once this
+# hook knows the write is a record it would have linted, so the escape record
+# means "a check was released" and not "a Write happened somewhere on disk".
+# An unreadable lib leaves the check ARMED.
+# shellcheck source=lib/gate-escape.sh
+. "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
+
 command -v jq >/dev/null 2>&1 || exit 0
 INPUT="$(cat 2>/dev/null || true)"
 
@@ -26,7 +44,6 @@ ROOT="${KNOWLEDGE_ROOT:-${CODEX_ROOT:-$HOME/.claude}}"
 case "$FILE" in "$ROOT"/*) ;; *) exit 0 ;; esac
 REL="${FILE#"$ROOT"/}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || exit 0
 LINTER="$SCRIPT_DIR/../scripts/lint-frontmatter.sh"
 [ -x "$LINTER" ] || exit 0
 
@@ -45,6 +62,12 @@ case "$OUT" in
     *) OUT_OF_SCOPE=0 ;;
 esac
 if [ "$STATUS" -ne 0 ] && [ "$OUT_OF_SCOPE" -eq 0 ]; then
+    # A real violation: this check WOULD have fired. Only here does the switch
+    # matter, and only here is a release worth recording. Anywhere above, the
+    # record-store predicate has not run yet — it lives inside the linter — so
+    # most .md under $ROOT (CLAUDE.md, agents/*.md, SKILL.md, templates/) would
+    # log a release nothing was ever going to block.
+    if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "FRONTMATTER_CHECK"; then exit 0; fi
     {
         echo "FRONTMATTER: $REL violates the record frontmatter schema. Fix it now:"
         printf '%s\n' "$OUT"

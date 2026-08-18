@@ -33,6 +33,18 @@ INPUT="$(cat 2>/dev/null || true)"
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
+
+# PLUGIN ADAPTATION: this gate's own off-switch — userConfig
+# `enable_am_i_done_gate`, on by default. See lib/gate-escape.sh. Sourced here,
+# CALLED at the block point, so the escape record means "a gate was released"
+# rather than "a hook process started". EXCEPTION: on degenerate paths (no jq,
+# unreadable lib) the switch is asked FIRST, before audience filtering — a set
+# switch is a better explanation of a release than blindness, and without jq the
+# audience cannot be known. Those rows are not audience-filtered. An unreadable
+# lib leaves the gate ARMED.
+# shellcheck source=lib/gate-escape.sh
+. "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
+
 # gate_failopen <gate> <why> [session_id] — hooks/lib/gate-failopen.sh
 # (orchard-codex#210 AC-4). Sourced FIRST, before the jq check, so every
 # degenerate path below can reach it. If THIS is unreadable we cannot record
@@ -42,7 +54,7 @@ SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 
 # jq: without it we cannot even read the event name, so every later release
 # would be blind.
-command -v jq >/dev/null 2>&1 || gate_failopen "am-i-done" "no-jq"
+command -v jq >/dev/null 2>&1 || ge_release_or_failopen "AM_I_DONE_GATE" "am-i-done" "no-jq"
 
 # Not a Stop event => not ours. A legitimate release, not blindness.
 [ "$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)" = "Stop" ] || exit 0
@@ -51,18 +63,18 @@ command -v jq >/dev/null 2>&1 || gate_failopen "am-i-done" "no-jq"
 case "${CLAUDE_CODE_ENTRYPOINT:-}" in sdk-cli) exit 0 ;; esac
 
 # shellcheck source=lib/turn-state.sh
-. "$SCRIPT_DIR/lib/turn-state.sh" 2>/dev/null || gate_failopen "am-i-done" "lib-unreadable:turn-state"
+. "$SCRIPT_DIR/lib/turn-state.sh" 2>/dev/null || ge_release_or_failopen "AM_I_DONE_GATE" "am-i-done" "lib-unreadable:turn-state"
 # shellcheck source=lib/gate-audience.sh
-. "$SCRIPT_DIR/lib/gate-audience.sh" 2>/dev/null || gate_failopen "am-i-done" "lib-unreadable:gate-audience"
+. "$SCRIPT_DIR/lib/gate-audience.sh" 2>/dev/null || ge_release_or_failopen "AM_I_DONE_GATE" "am-i-done" "lib-unreadable:gate-audience"
 # shellcheck source=lib/turn-activity.sh
-. "$SCRIPT_DIR/lib/turn-activity.sh" 2>/dev/null || gate_failopen "am-i-done" "lib-unreadable:turn-activity"
+. "$SCRIPT_DIR/lib/turn-activity.sh" 2>/dev/null || ge_release_or_failopen "AM_I_DONE_GATE" "am-i-done" "lib-unreadable:turn-activity"
 
 # Not our audience (subagent, or a non-main agent) => legitimate release.
 ga_binds_main "$INPUT" || exit 0
 
 SID="$(ts_session_id "$INPUT")"
 # No .turn marker => the reset hook never ran => the gate is unwired, not clear.
-ts_turn_started "$SID" || gate_failopen "am-i-done" "reset-hook-never-ran" "$SID"
+ts_turn_started "$SID" || ge_release_or_failopen "AM_I_DONE_GATE" "am-i-done" "reset-hook-never-ran" "$SID"
 
 # Already reviewed this turn => release.
 ts_is_marked "$SID" am_i_done && exit 0
@@ -76,7 +88,7 @@ ta_turn_used_tools "$SID"
 case "$?" in
     0) ;;                                   # tools were used — ask for the review
     1) exit 0 ;;                            # clean turn
-    *) gate_failopen "am-i-done" "activity-undetermined" "$SID" ;;
+    *) ge_release_or_failopen "AM_I_DONE_GATE" "am-i-done" "activity-undetermined" "$SID" ;;
 esac
 
 # PLUGIN ADAPTATION: plugin-scoped skill name in the message below, plus this
@@ -88,6 +100,11 @@ esac
 # would suppress the next legitimate ask this turn.
 [ -r "$SCRIPT_DIR/../skills/am-i-done/SKILL.md" ] \
     || gate_failopen "am-i-done" "skill-unresolvable" "$SID"
+
+# Everything above said this turn WOULD be blocked. Only now does the switch
+# matter, so only now is a release worth recording — and the mark is not set,
+# because a released turn was never asked.
+if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "AM_I_DONE_GATE"; then exit 0; fi
 
 ts_mark "$SID" am_i_done_asked
 

@@ -95,3 +95,13 @@ gate_failopen() {
         >> "$GATE_FAILOPEN_LOG" 2>/dev/null || true
     exit 0
 }
+
+# PLUGIN ADAPTATION: no upstream counterpart. ge_release_or_failopen exists only
+# to serve the plugin-only gate-escape.sh, which upstream does not have, and this
+# shim covers the state where that lib is unreadable.
+# ge_release_or_failopen fallback. gate-escape.sh defines the real one and is
+# sourced FIRST by both gates, so this guard never clobbers it — it only covers
+# the state where that lib was unreadable. Without it an undefined function
+# returns 127 and execution FALLS THROUGH into the gate's deny/block, which is
+# the one outcome a degraded path must never produce.
+declare -F ge_release_or_failopen >/dev/null 2>&1 || ge_release_or_failopen() { shift; gate_failopen "$@"; }

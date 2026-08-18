@@ -29,6 +29,18 @@ INPUT="$(cat 2>/dev/null || true)"
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
+
+# PLUGIN ADAPTATION: this gate's own off-switch — userConfig
+# `enable_how_do_i_gate`, on by default. See lib/gate-escape.sh. Sourced here,
+# CALLED at the deny point, so the escape record means "a gate was released"
+# rather than "a hook process started". EXCEPTION: on degenerate paths (no jq,
+# unreadable lib) the switch is asked FIRST, before audience or allowlist
+# filtering — a set switch is a better explanation of a release than blindness,
+# and without jq the audience cannot be known. Those rows are therefore not
+# audience-filtered. An unreadable lib leaves the gate ARMED.
+# shellcheck source=lib/gate-escape.sh
+. "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
+
 # gate_failopen <gate> <why> [session_id]. Sourced BEFORE the jq check below —
 # jq's absence is itself one of the paths this must record, so the recorder
 # has to be reachable before that check runs. If gate-failopen.sh itself is
@@ -37,16 +49,16 @@ SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 # shellcheck source=lib/gate-failopen.sh
 . "$SCRIPT_DIR/lib/gate-failopen.sh" 2>/dev/null || exit 0
 
-command -v jq >/dev/null 2>&1 || gate_failopen "how-do-i" "no-jq"
+command -v jq >/dev/null 2>&1 || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "no-jq"
 
 # Unlike gate-failopen.sh above, these fail with the recorder already loaded —
 # so they are BLIND fail-opens we can and do record, not silent ones.
 # shellcheck source=lib/turn-state.sh
-. "$SCRIPT_DIR/lib/turn-state.sh" 2>/dev/null || gate_failopen "how-do-i" "lib-unreadable:turn-state"
+. "$SCRIPT_DIR/lib/turn-state.sh" 2>/dev/null || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "lib-unreadable:turn-state"
 # shellcheck source=lib/gate-audience.sh
-. "$SCRIPT_DIR/lib/gate-audience.sh" 2>/dev/null || gate_failopen "how-do-i" "lib-unreadable:gate-audience"
+. "$SCRIPT_DIR/lib/gate-audience.sh" 2>/dev/null || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "lib-unreadable:gate-audience"
 # shellcheck source=lib/gate-allowlist.sh
-. "$SCRIPT_DIR/lib/gate-allowlist.sh" 2>/dev/null || gate_failopen "how-do-i" "lib-unreadable:gate-allowlist"
+. "$SCRIPT_DIR/lib/gate-allowlist.sh" 2>/dev/null || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "lib-unreadable:gate-allowlist"
 
 ga_binds_main "$INPUT" || exit 0
 
@@ -56,7 +68,7 @@ gal_is_compliance_path "$TOOL_NAME" "$INPUT" && exit 0
 SID="$(ts_session_id "$INPUT")"
 # No .turn marker => the reset hook never ran => the gate is unwired, not
 # clear. Record (BLIND), then allow.
-ts_turn_started "$SID" || gate_failopen "how-do-i" "reset-hook-never-ran" "$SID"
+ts_turn_started "$SID" || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "reset-hook-never-ran" "$SID"
 ts_is_marked "$SID" how_do_i && exit 0
 
 # PLUGIN ADAPTATION: plugin-scoped skill name in the message below, plus this
@@ -80,6 +92,10 @@ ts_is_marked "$SID" how_do_i && exit 0
 # Costs one builtin test, no fork.
 [ -r "$SCRIPT_DIR/../skills/how-do-i/SKILL.md" ] \
     || gate_failopen "how-do-i" "skill-unresolvable" "$SID"
+
+# Everything above said this call WOULD be denied. Only now does the switch
+# matter, so only now is a release worth recording.
+if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "HOW_DO_I_GATE"; then exit 0; fi
 
 # The reason string is the ONLY channel this gate has to the blocked agent —
 # it is read at the moment of denial, by an agent that may have run how-do-i
