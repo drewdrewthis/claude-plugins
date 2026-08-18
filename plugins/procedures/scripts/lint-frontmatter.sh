@@ -16,6 +16,9 @@
 #   (d) NONEMPTY  — `keywords:` is a non-empty list (AC21).
 #   (e) PRINCIPLES — `enforced_by:` is OPTIONAL; a principle without it gets
 #                    a WARNING (not a hard fail).
+#   (f) PROJECT   — `project:` is OPTIONAL; absent is fine (the record is
+#                   corpus-wide). PRESENT-but-malformed hard-fails: the value
+#                   must be `<repo>` or `<owner>/<repo>` in [a-z0-9._-].
 #
 # INDEX.md is excluded (retired in phase 3; frontmatter IS the index).
 # A procedure's steps/*.md and templates/*.md are also excluded: they are
@@ -57,6 +60,10 @@ source "$SCRIPT_DIR/lib/stores.sh"
 # shellcheck source=scripts/lib/frontmatter.sh
 source "$SCRIPT_DIR/lib/frontmatter.sh"
 REQUIRED_KEYS=(id kind date keywords links status)
+# `project:` is OPTIONAL — absent means the record is corpus-wide. When present
+# it is the column `query-records.sh --project` filters on, so a malformed value
+# is worse than an absent one: it looks scoped and is unreachable by any query.
+PROJECT_RE='^[a-z0-9._-]+(/[a-z0-9._-]+)?$'
 
 # ---- collect the full corpus (for id uniqueness + link resolution) ----
 # Excludes INDEX.md everywhere and archived plan records (_archived*) — those
@@ -216,6 +223,29 @@ for f in "${TARGETS[@]:-}"; do
                 *$'\n'"enforced_by:"*) ;;
                 *) warn "$f: principle has no 'enforced_by:' — aspirational (not enforced)" ;;
             esac
+            ;;
+    esac
+
+    # (f) PROJECT — OPTIONAL key, shape-checked only when present.
+    # NORMALISED EXACTLY AS scripts/lib/record-scan.awk DOES (truncate at the
+    # first whitespace, then strip one outer quote pair, in that order): the
+    # lint must validate the value the MATCHER indexes, or a record can pass
+    # the lint and still be unreachable by --project.
+    # Same haystack/case idiom as the required-key loop above, and for the same
+    # SIGPIPE reason (#46) — never `printf | grep -q`.
+    case "$fm_haystack" in
+        *$'\n'"project:"*)
+            proj="$(fm_value "$block" project)"
+            proj="${proj%%[[:space:]]*}"
+            case "$proj" in
+                \"*\") proj="${proj#\"}"; proj="${proj%\"}" ;;
+                \'*\') proj="${proj#\'}"; proj="${proj%\'}" ;;
+            esac
+            # PROJECT_RE unquoted: bash 3.2 (macOS) treats a quoted =~ operand
+            # as a literal string, which would match nothing.
+            if ! [[ "$proj" =~ $PROJECT_RE ]]; then
+                err "$f: project: '${proj}' is malformed — expected <repo> or <owner>/<repo>, characters [a-z0-9._-] (omit the key entirely for a corpus-wide record)"
+            fi
             ;;
     esac
 

@@ -11,6 +11,12 @@
 #   qkind  — frontmatter `kind:` must equal this exactly
 #   qid    — frontmatter `id:` must equal this exactly
 #   qlinks — frontmatter `links:` must reference this id token
+#   qproject — frontmatter `project:` must equal this exactly, or its repo
+#              NAME (the text after the last `/`) must equal it. There is NO
+#              owner/org-wide match: `langwatch` matches `langwatch/langwatch`
+#              only because that repo's NAME is also `langwatch`, and it does
+#              NOT match `langwatch/scenario`. A record with no `project:` key
+#              never matches.
 #
 # Replaces the per-file bash/awk fork loop (fm_value called per key per file):
 # one process for the whole corpus instead of ~2N forks.
@@ -20,13 +26,13 @@
 # would have listed an empty file on a filterless narrowing pass. Records are
 # never legitimately empty; an empty record is a bug upstream, not a result.
 
-BEGIN { qkind = qkind ""; qid = qid ""; qlinks = qlinks "" }
+BEGIN { qkind = qkind ""; qid = qid ""; qlinks = qlinks ""; qproject = qproject "" }
 
 FNR == 1 {
     # flush the previous file
     if (NR > 1) emit()
     infm = 0; fmdone = 0
-    id = ""; kind = ""; links = ""; gloss = ""
+    id = ""; kind = ""; links = ""; project = ""; gloss = ""
     fpath = FILENAME
     if ($0 == "---") { infm = 1; next }
     fmdone = 1
@@ -39,6 +45,7 @@ infm == 1 {
     if ($0 ~ /^id:/)    { id = $0;    sub(/^id:[[:space:]]*/, "", id);    sub(/[[:space:]].*$/, "", id);    id = stripq(id) }
     if ($0 ~ /^kind:/)  { kind = $0;  sub(/^kind:[[:space:]]*/, "", kind); sub(/[[:space:]].*$/, "", kind); kind = stripq(kind) }
     if ($0 ~ /^links:/) { links = $0; sub(/^links:[[:space:]]*/, "", links) }
+    if ($0 ~ /^project:/) { project = $0; sub(/^project:[[:space:]]*/, "", project); sub(/[[:space:]].*$/, "", project); project = stripq(project) }
     next
 }
 
@@ -58,6 +65,11 @@ END { if (NR > 0) emit() }
 function emit(   g, n, toks, i, t, found) {
     if (qkind != "" && kind != qkind) return
     if (qid   != "" && id   != qid)   return
+    if (qproject != "") {
+        t = project
+        sub(/^.*\//, "", t)
+        if (project != qproject && t != qproject) return
+    }
     if (qlinks != "") {
         g = links
         gsub(/[{}\[\],]/, " ", g)

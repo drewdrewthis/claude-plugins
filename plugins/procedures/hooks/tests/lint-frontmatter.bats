@@ -366,3 +366,80 @@ EOF
       references/decisions/typo-not-a-file.md
   [ "$status" -ne 0 ]
 }
+
+# ---- (f) PROJECT: OPTIONAL key, shape-checked only when present ----
+#
+# `project:` is the column `query-records.sh --project` filters on. Absent is a
+# corpus-wide record and must stay legal (the field was added to a corpus of
+# ~1,800 records that carry none). Present-but-malformed must FAIL, because it
+# looks scoped and is reachable by no query at all — worse than absent.
+
+_write_project_record() {
+  # $1 = filename stem, $2 = the raw `project:` line (or "" to omit the key)
+  {
+    printf -- '---\n'
+    printf 'id: dec.%s\n' "$1"
+    printf 'kind: decision\n'
+    printf 'date: 2026-08-10\n'
+    printf 'keywords: [projectshapekw]\n'
+    printf 'links: {}\n'
+    printf 'status: active\n'
+    [ -n "$2" ] && printf '%s\n' "$2"
+    printf -- '---\n'
+    printf '# Project shape record\n'
+  } > "$FIX/references/decisions/$1.md"
+}
+
+@test "project: is OPTIONAL — a record with no project key passes" {
+  _write_project_record no-project ""
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/no-project.md
+  [ "$status" -eq 0 ]
+}
+
+@test "project: owner/repo passes the shape check" {
+  _write_project_record ok-owner-repo 'project: langwatch/scenario'
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/ok-owner-repo.md
+  [ "$status" -eq 0 ]
+}
+
+@test "project: a bare repo name passes the shape check" {
+  _write_project_record ok-bare 'project: claude-plugins'
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/ok-bare.md
+  [ "$status" -eq 0 ]
+}
+
+@test "project: a quoted scalar passes — the lint normalises as the matcher does" {
+  # record-scan.awk strips one outer quote pair before comparing, so a quoted
+  # value IS queryable. A lint that rejected it would fail a working record.
+  _write_project_record ok-quoted 'project: "langwatch/scenario"'
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/ok-quoted.md
+  [ "$status" -eq 0 ]
+}
+
+@test "project: an uppercase value FAILS — present-but-malformed is not optional" {
+  _write_project_record bad-case 'project: LangWatch/Scenario'
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/bad-case.md
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"project: 'LangWatch/Scenario' is malformed"* ]]
+}
+
+@test "project: an empty value FAILS — it is neither scoped nor corpus-wide" {
+  _write_project_record bad-empty 'project:'
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/bad-empty.md
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is malformed"* ]]
+}
+
+@test "project: a nested owner/group/repo path FAILS — one slash at most" {
+  _write_project_record bad-nested 'project: langwatch/group/scenario'
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/bad-nested.md
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is malformed"* ]]
+}

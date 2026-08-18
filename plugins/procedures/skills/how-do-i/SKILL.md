@@ -107,7 +107,16 @@ below. Every command in this section runs through it.
    bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --keyword "<term set>"
    bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --kind procedure --keyword "<term set>"
    bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --links-to <id-you-already-found>
+   # repo-scoped goals only, and only AFTER the unscoped calls above
+   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --keyword "<term set>" --project <owner/repo>
    ```
+
+   ⚠ `--project` REFINES the unscoped result above, it never replaces it —
+   every record with no `project:` key is excluded, so a scoped query that
+   returns nothing is not evidence that nothing governs the goal
+   ⚠ `--project` matches the full `owner/name`, or the repo name after the
+   last `/` — there is NO owner-wide match: `--project langwatch` does not
+   reach `project: langwatch/scenario`
 
    Gloss calls only (no `--full`). Expand synonyms — the caller's words rarely
    match the corpus's — and search the *capability* as well as the identifier:
@@ -213,7 +222,7 @@ means nobody has recorded a failure here yet, which is itself information.
 # Boundaries
 
 - **`query-records.sh` is your ONLY retrieval tool** — surveying with
-  `--keyword`/`--kind`/`--id`/`--links-to`/`--recall`, reading with
+  `--keyword`/`--kind`/`--id`/`--links-to`/`--project`/`--recall`, reading with
   `--cat`/`--full`. No `grep`, `find`, `ls`, `awk`, `cat`, `head`, or `Read` of
   a record. They read the same bytes, so this is not about capability: a search
   the script cannot express is a corpus bug (step 4b), and a private tool is how

@@ -10,7 +10,10 @@
        known. A reversal is a NEW record referencing this one in `links` —
        never rewrite a decision's history.
      - Leave `[pending]` in any section that needs future evidence; that is
-       correct on creation. -->
+       correct on creation.
+     - `project:` is OPTIONAL (`--project` on the writer). DELETE the line for
+       a corpus-wide decision — an empty or placeholder value is unmatchable
+       and fails the lint. -->
 ---
 id: dec.<YYYY-MM-DD>-<slug>
 kind: decision
@@ -18,6 +21,7 @@ date: <YYYY-MM-DD>
 keywords: [<lowercase — domain, options considered, key actors>]
 links: {}
 status: active
+project: <owner/repo this decision is scoped to — delete if corpus-wide>
 ---
 
 # <Title — the takeaway as a sentence, not the topic>

@@ -1,3 +1,6 @@
+<!-- TEMPLATE — `project:` is OPTIONAL (`--project` on the writer). DELETE the
+     line for a corpus-wide failure-mode; an empty or placeholder value is
+     unmatchable and fails the lint. -->
 ---
 id: fm.<kebab-name>
 kind: failure-mode
@@ -5,6 +8,7 @@ date: YYYY-MM-DD
 keywords: [<symptom words + tool names — what recurrence would grep>]
 links: { procedures: [] }
 status: active
+project: <owner/repo this failure-mode is scoped to — delete if corpus-wide>
 ---
 
 # <kebab-name — the mistake as a short noun phrase>
