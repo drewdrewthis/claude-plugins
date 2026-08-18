@@ -136,6 +136,27 @@ assistant_tool() {
   # Pins the per-turn-scope explanation itself, not just the HOW-DO-I-GATE
   # header — a trim of the payload's body text would otherwise stay green.
   [[ "$output" == *"PER TURN"* ]]
+  # The two clauses that do the persuading. The whole point of this message is
+  # that an agent who ran the skill last turn reads the block as bureaucracy and
+  # argues with the invariant instead of clearing it. Pin the reason, not just
+  # the instruction, or a later trim quietly restores the bare version.
+  [[ "$output" == *"does not carry over"* ]]
+  [[ "$output" == *"bounded"* ]]
+}
+
+@test "how-do-i-gate: a skill run in an EARLIER turn does not release this one" {
+  # The invariant the deny message asserts, tested as behaviour rather than as
+  # prose. Without this, the message could claim per-turn scope while the gate
+  # actually honoured a stale flag, and both the message test above and the
+  # same-turn release test below would still pass.
+  start_turn
+  ran_skill how-do-i
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ -z "$output" ]
+
+  start_turn
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [[ "$output" == *"HOW-DO-I-GATE"* ]]
 }
 
 @test "how-do-i-gate: allows once Skill(how-do-i) has run" {
