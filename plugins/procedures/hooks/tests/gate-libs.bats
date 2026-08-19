@@ -178,6 +178,8 @@ teardown() {
 
 @test "allowlist: unknown tools still fall through to deny" {
   source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path Edit '{"tool_input":{"file_path":"/tmp/x"}}'
+  [ "$status" -eq 1 ]
   run gal_is_compliance_path Write '{"tool_input":{"file_path":"/tmp/x"}}'
   [ "$status" -eq 1 ]
   run gal_is_compliance_path mcp__x__y '{}'

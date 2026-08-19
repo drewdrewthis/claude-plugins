@@ -17,8 +17,9 @@
 #            deadlock; a work delegation does not.
 #   WebFetch / WebSearch
 #          — read-only web discovery, unconditional. No payload or URL
-#            inspection: neither tool can mutate anything, and a lookup is
-#            often how the turn's /how-do-i query gets formed.
+#            inspection: neither can mutate the local tree or the session
+#            state this gate protects, and a lookup is often how the
+#            turn's /how-do-i query gets formed.
 #   Read   — any file read (Read / Grep / Glob / NotebookRead).
 #   Bash   — any command line that only reads (see lib/readonly-shape.sh).
 #

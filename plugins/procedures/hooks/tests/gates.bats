@@ -191,6 +191,7 @@ assistant_tool() {
   start_turn
   P="{\"session_id\":\"$SID\",\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"https://example.com\"}}"
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
 
