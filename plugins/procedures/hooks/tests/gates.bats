@@ -187,6 +187,14 @@ assistant_tool() {
   [ -z "$output" ]
 }
 
+@test "how-do-i-gate: WebFetch is allowed while the gate is armed" {
+  start_turn
+  P="{\"session_id\":\"$SID\",\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"https://example.com\"}}"
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "how-do-i-gate: never gates a delegated subagent" {
   start_turn
   P="{\"session_id\":\"$SID\",\"agent_id\":\"sub1\",\"tool_name\":\"Edit\"}"

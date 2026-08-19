@@ -15,6 +15,11 @@
 #            /am-i-done dispatches carry the skill name in
 #            subagent_type/description/prompt, so they still pass and cannot
 #            deadlock; a work delegation does not.
+#   WebFetch / WebSearch
+#          — read-only web discovery, unconditional. No payload or URL
+#            inspection: neither can mutate the local tree or the session
+#            state this gate protects, and a lookup is often how the
+#            turn's /how-do-i query gets formed.
 #   Read   — any file read (Read / Grep / Glob / NotebookRead).
 #   Bash   — any command line that only reads (see lib/readonly-shape.sh).
 #
@@ -52,6 +57,7 @@ gal_is_compliance_path() {
 
     case "$tool" in
         Skill) return 0 ;;
+        WebFetch|WebSearch) return 0 ;;
         Agent)
             # Compliance dispatches name their skill somewhere in the payload;
             # a work delegation does not. jq failure yields "" → deny, which
