@@ -806,6 +806,39 @@ SH
   [ "$output" -eq 1 ]
 }
 
+@test "a non-numeric WORKLOG_DEDUP_SCAN falls back rather than disabling the dedup" {
+  # WORKLOG_DEDUP_SCAN is the count that reaches `tail -n`. A typo'd value makes
+  # tail error, the error is swallowed by 2>/dev/null, wl_seen reports "not
+  # seen", and the second Stop fire of EVERY turn writes a duplicate row — the
+  # one-row-per-turn key silently off, with no failure anywhere to notice it.
+  # `0` is rejected for the same reason by a quieter route: `tail -n 0` is not
+  # an error, it just prints nothing.
+  fixture_full
+
+  # POSITIVE CONTROL, same reason the recursion-guard tests carry one: with a
+  # VALID value the identical drive must write a row. Absence-only assertions
+  # cannot tell a working dedup from a harness that never ran the hook.
+  run drive_with WORKLOG_DEDUP_SCAN=500 -- "$CLEAN"
+  [ "$status" -eq 0 ]
+  [ -s "$WORKLOG_JSONL" ]
+  run drive_with WORKLOG_DEDUP_SCAN=500 -- "$CLEAN"
+  [ "$status" -eq 0 ]
+  run bash -c "wc -l < '$WORKLOG_JSONL'"
+  [ "$output" -eq 1 ]
+
+  for bad in abc 0 -5 " " 12abc; do
+    : > "$WORKLOG_JSONL"
+    : > "$GATE_FAILOPEN_LOG"
+    run drive_with WORKLOG_DEDUP_SCAN="$bad" -- "$CLEAN"
+    [ "$status" -eq 0 ]
+    [ -s "$WORKLOG_JSONL" ]              # the first fire still records the turn
+    run drive_with WORKLOG_DEDUP_SCAN="$bad" -- "$CLEAN"
+    [ "$status" -eq 0 ]
+    run bash -c "wc -l < '$WORKLOG_JSONL'"
+    [ "$output" -eq 1 ]                  # ...and the second fire is deduped
+  done
+}
+
 @test "null-keyed rows already in the store do not block a new row" {
   # wl_seen refuses to treat an empty ask as a key: a null key would collapse
   # every degraded turn in the file into one row — a dedup that deletes data on

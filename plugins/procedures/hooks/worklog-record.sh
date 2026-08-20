@@ -117,12 +117,19 @@ WORKLOG_WINDOW="${WORKLOG_WINDOW:-60}"
 # Hard ceiling on the judgment call. A hung child must not linger.
 WORKLOG_MODEL_TIMEOUT="${WORKLOG_MODEL_TIMEOUT:-120}"
 WORKLOG_MODEL="${WORKLOG_MODEL:-claude-haiku-4-5-20251001}"
-# Non-numeric values feed `sleep`/`timeout`, which error rather than default —
-# a typo'd env var must not change the contract (same guard as
+# Rows of the store scanned for the dedup key. See wl_seen.
+WORKLOG_DEDUP_SCAN="${WORKLOG_DEDUP_SCAN:-500}"
+# Non-numeric values feed `sleep`/`timeout`/`tail`, which error rather than
+# default — a typo'd env var must not change the contract (same guard as
 # lib/session-digest.sh).
 case "$WORKLOG_SETTLE_SECS"   in ''|*[!0-9]*) WORKLOG_SETTLE_SECS=3 ;; esac
 case "$WORKLOG_WINDOW"        in ''|*[!0-9]*|0) WORKLOG_WINDOW=60 ;; esac
 case "$WORKLOG_MODEL_TIMEOUT" in ''|*[!0-9]*|0) WORKLOG_MODEL_TIMEOUT=120 ;; esac
+# 0 is rejected, not honoured: `tail -n 0` is not an error, it prints nothing,
+# so wl_seen would report "not seen" for every turn and the second Stop fire
+# would write a duplicate row — silently disabling the one-row-per-turn key
+# with no failure anywhere to notice.
+case "$WORKLOG_DEDUP_SCAN"    in ''|*[!0-9]*|0) WORKLOG_DEDUP_SCAN=500 ;; esac
 
 INPUT=""
 
@@ -263,7 +270,7 @@ wl_seen() {
     local store="${1:-}" ask="${2:-}" hit=""
     [ -n "$ask" ] || return 1
     [ -r "$store" ] || return 1
-    hit="$(tail -n "${WORKLOG_DEDUP_SCAN:-500}" "$store" 2>/dev/null \
+    hit="$(tail -n "$WORKLOG_DEDUP_SCAN" "$store" 2>/dev/null \
         | jq -R -r --arg a "$ask" \
             'fromjson? | select(type == "object") | select(.ask_uuid == $a) | "hit"' \
             2>/dev/null | head -n 1 || true)"
