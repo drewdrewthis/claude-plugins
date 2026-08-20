@@ -50,10 +50,10 @@ setup() {
   mkdir -p "$FAKE_HOME/.claude/projects"
 
   SID="bats-wl-$$-$BATS_TEST_NUMBER"
-  # The transcript lives in its OWN directory, one below the explicit store.
-  # Without that separation the default store (a sibling of the transcript) and
-  # the overridden store resolve to the same path, and the test that claims to
-  # prove the default is a sibling proves nothing.
+  # The transcript lives in its OWN directory, whose basename is the project
+  # slug the default store is keyed by ("proj"). Keeping it out of $SCRATCH
+  # also keeps the default store and the overridden store distinct paths, so a
+  # test asserting where the default lands cannot pass by accident.
   TXDIR="$SCRATCH/proj"
   mkdir -p "$TXDIR"
   TX="$TXDIR/$SID.jsonl"
@@ -86,6 +86,8 @@ SH
   U4="44444444-4444-4444-8444-44444444aaa4"
   U5="55555555-5555-4555-8555-55555555aaa5"
   U6="66666666-6666-4666-8666-66666666aaa6"
+  U7="77777777-7777-4777-8777-77777777aaa7"
+  U8="88888888-8888-4888-8888-88888888aaa8"
 }
 
 teardown() {
@@ -115,6 +117,16 @@ fixture_full() {
     result_line "$U5" "ok"
     printf '{"type":"atis-latch"}\n'
   } > "$TX"
+}
+
+# A SECOND turn appended to the same transcript. Distinct from firing the hook
+# twice over the same transcript: that is one turn seen twice, and the dedup
+# key exists precisely to tell the two apart.
+fixture_next_turn() {
+  {
+    user_line "$U7" "do another thing"
+    text_line "$U8" "did another thing"
+  } >> "$TX"
 }
 
 payload() {
@@ -380,7 +392,13 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
   [ "$(why)" = "store-unwritable" ]
 }
 
-@test "with no override the store is a sibling of the transcript" {
+@test "with no override the store is under ~/.claude/worklog, NOT beside the transcript" {
+  # The transcript lives under ~/.claude/projects/<slug>/, and other tools glob
+  # that directory for `*.jsonl` and treat what they find as session data: one
+  # sweeps it into corpus, another takes the NEWEST match as the transcript —
+  # and a file rewritten every turn is permanently the newest. So the store is
+  # keyed by project slug OUTSIDE that tree. Asserting the absence beside the
+  # transcript is the half of this test that protects the other tools.
   fixture_full
   run env -u CLAUDE_CODE_ENTRYPOINT -u WORKLOG_DISABLE -u WORKLOG_JSONL \
     PATH="$STUB:$PATH" HOME="$FAKE_HOME" \
@@ -388,11 +406,94 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
     WORKLOG_SYNC=1 WORKLOG_SETTLE_SECS=0 CLAUDE_STUB="$CLEAN" \
     bash -c "printf '%s' \"\$1\" | bash \"\$2\"" _ "$(payload)" "$HOOK"
   [ "$status" -eq 0 ]
-  [ -s "$TXDIR/worklog.jsonl" ]         # beside the transcript
+  # TXDIR is named "proj", so the slug is "proj"
+  [ -s "$FAKE_HOME/.claude/worklog/proj.jsonl" ]
+  [ ! -e "$TXDIR/worklog.jsonl" ]       # NOT beside the transcript
   [ ! -e "$SCRATCH/worklog.jsonl" ]     # not where the override would have put it
+  # nothing new in the transcript's own directory at all
+  run bash -c "ls '$TXDIR' | wc -l"
+  [ "$output" -eq 1 ]
   # and the transcript itself is untouched
   run bash -c "wc -l < '$TX'"
   [ "$output" -eq 9 ]
+}
+
+@test "the default store directory is created when absent" {
+  # ~/.claude/worklog/ will not exist on a first run. Failing to make it must
+  # not lose the row.
+  fixture_full
+  [ ! -d "$FAKE_HOME/.claude/worklog" ]
+  run env -u CLAUDE_CODE_ENTRYPOINT -u WORKLOG_DISABLE -u WORKLOG_JSONL \
+    PATH="$STUB:$PATH" HOME="$FAKE_HOME" \
+    GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    WORKLOG_SYNC=1 WORKLOG_SETTLE_SECS=0 CLAUDE_STUB="$CLEAN" \
+    bash -c "printf '%s' \"\$1\" | bash \"\$2\"" _ "$(payload)" "$HOOK"
+  [ "$status" -eq 0 ]
+  [ -d "$FAKE_HOME/.claude/worklog" ]
+  no_log
+}
+
+@test "a project slug full of dashes is not mistaken for a session file" {
+  # The store-safety check refuses anything shaped like a session transcript.
+  # A project slug is all dashes — `-home-ubuntu--claude` has four — so a check
+  # that merely COUNTS dashes would refuse the hook's own default store and
+  # every row would be lost to a fail-open. It matches the real uuid shape.
+  fixture_full
+  SLUGDIR="$SCRATCH/-home-ubuntu--claude"
+  mkdir -p "$SLUGDIR"
+  mv "$TX" "$SLUGDIR/$SID.jsonl"
+  PAYLOAD="$(payload "$SLUGDIR/$SID.jsonl")"
+  run env -u CLAUDE_CODE_ENTRYPOINT -u WORKLOG_DISABLE -u WORKLOG_JSONL \
+    PATH="$STUB:$PATH" HOME="$FAKE_HOME" \
+    GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    WORKLOG_SYNC=1 WORKLOG_SETTLE_SECS=0 CLAUDE_STUB="$CLEAN" \
+    bash -c "printf '%s' \"\$1\" | bash \"\$2\"" _ "$PAYLOAD" "$HOOK"
+  [ "$status" -eq 0 ]
+  [ -s "$FAKE_HOME/.claude/worklog/-home-ubuntu--claude.jsonl" ]
+  no_log
+}
+
+@test "a traversal session_id cannot escape into the projects glob" {
+  # The payload is harness-controlled, so this is hardening rather than a live
+  # exploit — but a session_id is interpolated into a path, and a traversal
+  # that reaches a glob is not a thing to leave standing on the grounds that
+  # today's caller is trusted. Sanitized through the same character class
+  # turn-state.sh uses.
+  fixture_full
+
+  # (a) with transcript_path present the glob is never reached, but the same
+  # id still lands in the row — so prove it is sanitized there too.
+  PAYLOAD="$(jq -nc --arg tp "$TX" \
+    '{session_id:"../../../../tmp/pwned", hook_event_name:"Stop",
+      transcript_path:$tp, cwd:"/tmp"}')"
+  run drive "$CLEAN"
+  [ "$status" -eq 0 ]
+  run bash -c "jq -r '.session' '$WORKLOG_JSONL'"
+  case "$output" in */*|*..*) false ;; esac
+
+  # (b) with transcript_path ABSENT the hook falls back to the
+  # $HOME/.claude/projects/*/<sid>.jsonl glob — the path the traversal was
+  # aiming at. It must resolve nothing and write nothing outside scratch.
+  : > "$WORKLOG_JSONL"
+  : > "$GATE_FAILOPEN_LOG"
+  PAYLOAD="$(jq -nc \
+    '{session_id:"../../../../tmp/pwned", hook_event_name:"Stop", cwd:"/tmp"}')"
+  run drive "$CLEAN"
+  [ "$status" -eq 0 ]
+  no_row
+  [ ! -e "/tmp/pwned.jsonl" ]
+  [ "$(why)" = "transcript-unreadable" ]
+}
+
+@test "a payload with no session_id records under the same 'unknown' bucket turn-state uses" {
+  # ts_session_id falls back to a single stable "unknown". Falling back to
+  # empty here instead would name one condition two different things across
+  # hooks that are meant to be joinable on `session`.
+  fixture_full
+  PAYLOAD="$(jq -nc --arg tp "$TX" \
+    '{hook_event_name:"Stop", transcript_path:$tp, cwd:"/tmp"}')"
+  drive "$CLEAN"
+  [ "$(field .session)" = "unknown" ]
 }
 
 # ==========================================================================
@@ -565,25 +666,47 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
   no_log
 }
 
-@test "the default path returns immediately rather than waiting on the model" {
+@test "the default path returns before the model call finishes, and the child still lands the row" {
   # The whole point of detaching: several workers land at once, and a
-  # synchronous per-turn model call would serialize every one of them. The
-  # stub sleeps well past what the parent may take.
+  # synchronous per-turn model call would serialize every one of them.
+  #
+  # THE SLEEP IS SHORT ON PURPOSE. An earlier version slept 10s and asserted
+  # only that the parent returned inside 5 — which left a child still running
+  # against $SCRATCH when teardown deleted it, and proved nothing about
+  # whether the detached half ever did the work. Sleep just long enough to
+  # separate parent from child, then WAIT for the child instead of abandoning
+  # it.
   fixture_full
   cat > "$STUB/claude" <<'SH'
 #!/usr/bin/env bash
 cat >/dev/null
-sleep 10
+sleep 2
 printf '%s' "${CLAUDE_STUB:-}"
 SH
   chmod +x "$STUB/claude"
+
   start=$(date +%s)
   printf '%s' "$(payload)" | env -u CLAUDE_CODE_ENTRYPOINT -u WORKLOG_DISABLE \
     PATH="$STUB:$PATH" HOME="$FAKE_HOME" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
     WORKLOG_JSONL="$WORKLOG_JSONL" WORKLOG_SETTLE_SECS=0 CLAUDE_STUB="$CLEAN" \
     bash "$HOOK"
   elapsed=$(( $(date +%s) - start ))
-  [ "$elapsed" -lt 5 ]
+
+  # The parent returned while the child was still inside its 2s model call.
+  [ "$elapsed" -lt 2 ]
+  # ...which is only meaningful because the row was NOT there yet.
+  no_row
+
+  # Bounded poll: the child is reparented to init, so it cannot be `wait`ed
+  # for. Poll up to ~10s, well past the stub's 2s, and fail loudly rather than
+  # hanging if it never arrives.
+  for _ in $(seq 1 40); do
+    if [ -s "$WORKLOG_JSONL" ]; then break; fi
+    sleep 0.25
+  done
+  [ -s "$WORKLOG_JSONL" ]
+  [ "$(field .did)" = "did a thing" ]
+  # The child is done before teardown removes $SCRATCH out from under it.
 }
 
 # ==========================================================================
@@ -624,18 +747,104 @@ SH
   no_log
 }
 
-@test "two turns append rather than replace" {
+@test "two DIFFERENT turns append rather than replace" {
+  fixture_full
+  drive "$CLEAN"
+  fixture_next_turn
+  drive "$CLEAN"
+  run bash -c "wc -l < '$WORKLOG_JSONL'"
+  [ "$output" -eq 2 ]
+  # and they are two distinct turns, not one turn written twice
+  run bash -c "jq -r '.ask_uuid' '$WORKLOG_JSONL' | sort -u | wc -l"
+  [ "$output" -eq 2 ]
+}
+
+# ==========================================================================
+# 8. one row per turn — Stop fires twice for one turn on the NORMAL path
+# ==========================================================================
+# am-i-done-gate.sh BLOCKS the first Stop and releases the next, so a turn
+# firing Stop twice is this fleet's ordinary behaviour, not an edge case. Both
+# fires bracket the same turn, so both slice to the same ask_uuid; without a
+# key the "one line per turn" contract in the README is simply false.
+
+@test "firing twice for ONE turn writes one row" {
   fixture_full
   drive "$CLEAN"
   drive "$CLEAN"
   run bash -c "wc -l < '$WORKLOG_JSONL'"
-  [ "$output" -eq 2 ]
+  [ "$output" -eq 1 ]
+}
+
+@test "a repeat fire is a decline, not a fail-open" {
+  # The hook DID its job on the first fire. Recording the second as a blind
+  # failure would put a fail-open in the log for a turn that was logged fine,
+  # which is the exact blurring gate-failopen.sh forbids.
+  fixture_full
+  drive "$CLEAN"
+  : > "$GATE_FAILOPEN_LOG"
+  run drive "$CLEAN"
+  [ "$status" -eq 0 ]
+  no_log
+}
+
+@test "a repeat fire does not pay for a second model call" {
+  # Dedup is checked BEFORE the judgment. If it were checked after, every
+  # double-Stop turn would buy an answer and throw it away.
+  fixture_full
+  COUNT="$SCRATCH/model-calls"
+  : > "$COUNT"
+  cat > "$STUB/claude" <<SH
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'x' >> "$COUNT"
+printf '%s' "\${CLAUDE_STUB:-}"
+SH
+  chmod +x "$STUB/claude"
+  drive "$CLEAN"
+  drive "$CLEAN"
+  run bash -c "wc -c < '$COUNT'"
+  [ "$output" -eq 1 ]
+}
+
+@test "null-keyed rows already in the store do not block a new row" {
+  # wl_seen refuses to treat an empty ask as a key: a null key would collapse
+  # every degraded turn in the file into one row — a dedup that deletes data on
+  # exactly the turns that were already having a bad day. This pins the
+  # consequence that is reachable from outside: a store containing null-keyed
+  # rows still accepts the next real turn.
+  fixture_full
+  printf '%s\n' '{"ask_uuid":null,"session":"a"}' >> "$WORKLOG_JSONL"
+  printf '%s\n' '{"ask_uuid":null,"session":"b"}' >> "$WORKLOG_JSONL"
+  drive "$CLEAN"
+  run bash -c "jq -r 'select(.ask_uuid != null) | .ask_uuid' '$WORKLOG_JSONL' | wc -l"
+  [ "$output" -eq 1 ]
+}
+
+@test "a malformed line in the store does not abort the dedup scan" {
+  # Same hazard the uuid-presence scan has: `fromjson?` binds to fromjson only,
+  # so an unparseable or non-object line must be selected out rather than
+  # indexed. If the scan aborted, dedup would silently stop working.
+  fixture_full
+  printf 'not json at all\n' >> "$WORKLOG_JSONL"
+  printf '"a bare string"\n' >> "$WORKLOG_JSONL"
+  drive "$CLEAN"
+  drive "$CLEAN"
+  # Read with -R: the store deliberately holds junk lines here, so a plain
+  # `jq .` over the file would fail on the fixture rather than on the bug.
+  run bash -c "jq -R -r 'fromjson? | select(type == \"object\") | select(.ask_uuid != null) | .ask_uuid' '$WORKLOG_JSONL' | wc -l"
+  [ "$output" -eq 1 ]
 }
 
 @test "every line is independently valid JSON" {
   fixture_full
   drive "$CLEAN"
+  # A SECOND turn, not a second fire of the first: one row per turn is keyed on
+  # ask_uuid, so re-driving the same transcript would leave this test asserting
+  # over a single line while still passing.
+  fixture_next_turn
   drive "$(jq -nc --arg a "$U1" '{did:"second",flag:"mistake",flag_uuids:[$a],flag_quote:"do the thing"}')"
+  run bash -c "wc -l < '$WORKLOG_JSONL'"
+  [ "$output" -eq 2 ]
   run bash -c "while IFS= read -r l; do printf '%s' \"\$l\" | jq -e . >/dev/null || exit 1; done < '$WORKLOG_JSONL'"
   [ "$status" -eq 0 ]
 }

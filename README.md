@@ -34,6 +34,7 @@ orchard-codex `develop-sweatshop`):
 | `/evolve-procedure` | patch an EXISTING procedure from a correction, incident, or friction — deviation, missing step, or stale/broken ref; procedures only, every material patch appends a dated line to that procedure dir's `EVOLUTION.md` |
 | `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded; off-switch `enable_how_do_i_gate` |
 | `am-i-done-gate` (Stop) | requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once; off-switch `enable_am_i_done_gate` |
+| `worklog-record` (Stop) | appends one JSONL line per turn describing what the agent did — the mechanical half (`session`, `ask_uuid`, `end_uuid`, `changed[]`) read from the transcript, the judged half (`did`, `flag`, `flag_uuids`, `flag_quote`) from a cheap model that may only COPY uuids from a candidate list. Never blocks and never emits a `decision`; runs detached so it cannot serialize a finishing worker. One row per turn, keyed on `ask_uuid`, because `am-i-done-gate` blocking the first Stop and releasing the next makes two Stop fires per turn the normal path. Store `WORKLOG_JSONL` (default `$HOME/.claude/worklog/<project-slug>.jsonl` — deliberately NOT under `~/.claude/projects/`, which other tools glob for session files); `WORKLOG_SETTLE_SECS` (default 3, the transcript tail lags Stop), `WORKLOG_WINDOW` (candidate records offered to the model, default 60), `WORKLOG_MODEL` (default `claude-haiku-4-5-20251001`), `WORKLOG_MODEL_TIMEOUT` (default 120s), `WORKLOG_DEDUP_SCAN` (rows scanned for the dedup key, default 500), `WORKLOG_SYNC=1` (run inline instead of detached, for tests), `WORKLOG_DISABLE` (any non-empty value = off; also the child's re-entrancy guard). A non-numeric value on any count falls back to its default rather than erroring |
 | `turn-state-reset` (UserPromptSubmit) / `turn-state-record` (PostToolUse:Skill) | the turn-boundary state the gates read (`$TURN_STATE_DIR`, default `/tmp/claude-turn-state`) |
 | `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation; off-switch `enable_frontmatter_check` |
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (`evolution.template.md` in `skills/update-records/templates/`) — one dated line per material change, newest first; `/update-records` explains it |
@@ -105,21 +106,19 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   to `GATE_FAILOPEN_LOG` under gate `digest-record` — group by gate before
   computing any fail-open rate, since this one is a writer, not a gate.
 
-- **Turn worklog:** `hooks/worklog-record.sh` appends one JSONL line per turn
-  to a `worklog.jsonl` sibling of the session transcript, so a later pass can
-  see what happened without trawling raw transcripts. The record is split down
-  the middle: the mechanical half (`session`, `ask_uuid`, `end_uuid`,
-  `changed[]`) is derived from the transcript by the script, and the judged
-  half (`did`, `flag`, `flag_quote`, `flag_uuids`) comes from a cheap model
-  reading the turn cold. The model never types a uuid — it selects from a
-  candidate list, and every uuid it returns is intersected with that list
-  before the row is written, because a dead pointer is worse than a null one.
-  `flag` is `"mistake"` or null with no severity or category; it never writes
-  `mistakes.jsonl`, which feeds the failure-mode promotion path. Fires
-  detached so it cannot serialize a finishing worker or interfere with the
-  blocking `am-i-done-gate.sh` that shares the `Stop` array. Like
-  `digest-record`, it records blind failures under its own name — a writer,
-  not a gate.
+- **Turn worklog:** `hooks/worklog-record.sh` records one line per turn (shape
+  and tunables in the table above) so a later pass can see what happened
+  without trawling raw transcripts. Two constraints are not preferences. It
+  never writes `$HOME/.claude/mistakes.jsonl`: rows there are promoted into
+  `references/failure-modes/` and thence into the `@`-imported
+  `common-mistakes.md`, where one bad row becomes a fleet-wide rule, so `flag`
+  here is deliberately inert — `"mistake"` or null, no severity, no category,
+  no failure-mode name, each of those being a corpus-relative judgment this
+  hook has no standing to make. And the worklog does not live beside the
+  session transcript: `~/.claude/projects/` is globbed for `*.jsonl` by
+  consumers that treat what they find as session data, so a file rewritten
+  every turn in that directory is swept into corpus and, where a consumer
+  takes the newest match, mistaken for the transcript itself.
 
 - **Fork-path agent prompt:** a `context: fork` skill takes its `agent:` as
   identity only — the agent file's prompt body and its `tools:` allowlist are

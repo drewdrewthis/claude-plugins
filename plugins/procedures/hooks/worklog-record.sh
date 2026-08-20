@@ -69,9 +69,24 @@
 # Recording those makes the log useless as a fail-open rate numerator, which is
 # the same line gate-failopen.sh draws.
 #
-# PLUGIN ADAPTATION: no upstream counterpart. Class: "Fork-path session state"
-# in the root README — like digest-record.sh this is a WRITER, not a gate, so
-# group by <gate> before computing any fail-open rate over the log.
+# ONE LINE PER TURN, AND STOP CAN FIRE TWICE FOR ONE TURN. am-i-done-gate.sh
+# BLOCKS the first Stop and releases the next, so a turn firing Stop twice is
+# the normal path in this fleet, not an edge case — and both fires bracket the
+# SAME turn, so both slice to the same ask_uuid. The append is therefore keyed:
+# a row whose ask_uuid is already present is not written again (wl_seen).
+#
+# STORE LOCATION IS A COMPATIBILITY CONSTRAINT, not a preference. The worklog
+# does NOT live beside the transcript under ~/.claude/projects/, because
+# consumers in the codex repo glob that directory for session files —
+# hourly-self-eval.sh takes `ls -t .../*.jsonl | head -1` as THE transcript, and
+# a file rewritten every turn is always the newest; night-watch-run.sh sweeps
+# `find projects -name '*.jsonl'` into corpus, recursively, so a subdirectory
+# would not escape it either. It lives under $HOME/.claude/worklog/ keyed by
+# project slug instead: outside every one of those globs, present and future.
+#
+# PLUGIN ADAPTATION: no upstream counterpart. Class: "Turn worklog" in the root
+# README — like digest-record.sh this is a WRITER, not a gate, so group by
+# <gate> before computing any fail-open rate over the log.
 
 set -uo pipefail
 
@@ -112,12 +127,17 @@ case "$WORKLOG_MODEL_TIMEOUT" in ''|*[!0-9]*|0) WORKLOG_MODEL_TIMEOUT=120 ;; esa
 INPUT=""
 
 # wl_sid — the session id, sanitized to the same character class
-# turn-state.sh's ts_session_id uses, so one session names one thing across
-# every hook in this plugin.
+# turn-state.sh's ts_session_id uses, AND falling back to the same single
+# "unknown" bucket, so one session names one thing across every hook in this
+# plugin. Returning empty here instead would put a `"session":""` row in the
+# worklog and an empty session_id in the fail-open log for the same payload
+# turn-state files under `unknown` — one condition with two names.
 wl_sid() {
     local sid=""
     sid="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
-    printf '%s' "$sid" | tr -c 'a-zA-Z0-9_-' '_' 2>/dev/null || true
+    sid="$(printf '%s' "$sid" | tr -c 'a-zA-Z0-9_-' '_' 2>/dev/null || true)"
+    [ -n "$sid" ] || sid="unknown"
+    printf '%s' "$sid"
 }
 
 # wl_precheck — every condition under which this hook has nothing to do.
@@ -170,8 +190,13 @@ wl_transcript() {
     local tp sid cand
     tp="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
     if [ -n "$tp" ] && [ -r "$tp" ]; then printf '%s' "$tp"; return 0; fi
-    sid="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
-    [ -n "$sid" ] || return 0
+    # Sanitized through wl_sid before it is interpolated into a path. The
+    # payload is harness-controlled so this is not a live exploit, but a
+    # session_id of `../../../etc/x` would otherwise reach a glob, and a
+    # traversal that reaches a glob is not a thing to leave standing on the
+    # grounds that today's caller is trusted.
+    sid="$(wl_sid)"
+    [ -n "$sid" ] && [ "$sid" != "unknown" ] || return 0
     for cand in "$HOME"/.claude/projects/*/"$sid".jsonl; do
         [ -r "$cand" ] && { printf '%s' "$cand"; return 0; }
     done
@@ -191,10 +216,58 @@ wl_store_ok() {
     # Also refuse any flat session transcript, not only THIS one: the worklog
     # must never be mistaken for a session file by a reader globbing the
     # project dir.
-    case "${p##*/}" in
-        *-*-*-*-*.jsonl) return 1 ;;
-    esac
+    #
+    # Matched on the ACTUAL uuid shape (8-4-4-4-12 hex), not on a loose
+    # `*-*-*-*-*.jsonl`. The loose form counts dashes and nothing else, and a
+    # project slug is all dashes — `-home-ubuntu--claude.jsonl` has four of
+    # them, so the default store this hook now writes to would have been
+    # refused by its own safety check.
+    if [[ "${p##*/}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.jsonl$ ]]; then
+        return 1
+    fi
     return 0
+}
+
+# wl_store <transcript> — absolute path of the worklog for this project.
+#
+# NOT a sibling of the transcript. See the header: ~/.claude/projects/ is
+# globbed by three consumers in the codex repo, one of which takes the newest
+# *.jsonl in the directory AS the transcript — and a file rewritten every turn
+# is permanently the newest. Keyed by project slug (the transcript directory's
+# own name, which is already the realpath slug), so per-project grouping
+# survives; per-session grouping needs no separate file because every row
+# carries `session`.
+wl_store() {
+    local tx="${1:-}" pdir slug
+    if [ -n "${WORKLOG_JSONL:-}" ]; then printf '%s' "$WORKLOG_JSONL"; return 0; fi
+    pdir="${tx%/*}"
+    slug="${pdir##*/}"
+    slug="${slug//[^A-Za-z0-9_.-]/_}"
+    [ -n "$slug" ] || slug="unknown"
+    printf '%s' "$HOME/.claude/worklog/$slug.jsonl"
+}
+
+# wl_seen <store> <ask_uuid> — 0 when this turn is already on the record.
+#
+# Stop fires TWICE for one turn on the normal path here: am-i-done-gate.sh
+# blocks the first and releases the next. Both fires bracket the same turn and
+# so slice to the same ask_uuid, which is what makes it a usable key.
+#
+# An EMPTY ask is never a key. It means the uuid did not resolve, and treating
+# null as a key would collapse every such turn in the file into one row —
+# turning a dedup into silent data loss on exactly the turns already degraded.
+#
+# Bounded scan: the two fires are adjacent, so the tail is generous already,
+# and an unbounded re-read of a file that only grows is a cost paid every turn.
+wl_seen() {
+    local store="${1:-}" ask="${2:-}" hit=""
+    [ -n "$ask" ] || return 1
+    [ -r "$store" ] || return 1
+    hit="$(tail -n "${WORKLOG_DEDUP_SCAN:-500}" "$store" 2>/dev/null \
+        | jq -R -r --arg a "$ask" \
+            'fromjson? | select(type == "object") | select(.ask_uuid == $a) | "hit"' \
+            2>/dev/null | head -n 1 || true)"
+    [ "$hit" = "hit" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -458,7 +531,7 @@ Reply with ONE JSON object and nothing else. No prose, no markdown fence.
 
 Fields:
 
-"did" — one line, at most 160 characters, plain past tense, describing what the
+"did" — one line, at most 200 characters, plain past tense, describing what the
 agent DID in the lines marked THIS-TURN. Concrete over vague: name the thing
 acted on. Do not evaluate the work.
 
@@ -535,6 +608,23 @@ wl_run() {
     printf '%s\n' "$present" | grep -Fxq -- "$ask" 2>/dev/null || ask=""
     printf '%s\n' "$present" | grep -Fxq -- "$end" 2>/dev/null || end=""
 
+    # --- store, and the one-row-per-turn key ------------------------------
+    # Resolved BEFORE the judgment, not after, so a second Stop for a turn
+    # already on the record costs nothing. The model call is the expensive part
+    # of this hook; paying for it and then discarding the answer would make the
+    # dedup a correctness fix that doubles the bill on the common path.
+    local store; store="$(wl_store "$tx")"
+    wl_store_ok "$store" "$tx" || gate_failopen worklog-record store-unwritable "$sid"
+    case "$store" in
+        # Only when there is a directory component to make. `mkdir -p` on a
+        # bare filename would create a DIRECTORY where the store belongs.
+        */*) mkdir -p "${store%/*}" 2>/dev/null \
+                || gate_failopen worklog-record store-unwritable "$sid" ;;
+    esac
+    # Already logged => a legitimate decline, and NOT a fail-open: the hook did
+    # its job the first time Stop fired.
+    wl_seen "$store" "$ask" && exit 0
+
     # --- judgment -------------------------------------------------------
     local raw="" did="" flag="" quote="" fuuids="[]" judged=1
     if command -v claude >/dev/null 2>&1; then
@@ -556,7 +646,12 @@ wl_run() {
         judged=0
         did="$(printf '%s' "$raw" | jq -r '(.did // "") | if type == "string" then .[0:200] else "" end' 2>/dev/null || true)"
         flag="$(printf '%s' "$raw" | jq -r 'if .flag == "mistake" then "mistake" else "" end' 2>/dev/null || true)"
-        quote="$(printf '%s' "$raw" | jq -r '(.flag_quote // "") | if type == "string" then .[0:240] else "" end' 2>/dev/null || true)"
+        # 200 for both, matching what wl_prompt ASKS for character-for-
+        # character. The truncation is the backstop for a model that ignores
+        # the limit, not a second, looser limit of its own: a documented bound
+        # the code does not enforce teaches a reader the wrong contract, and
+        # the enforced-but-undocumented one is what they discover later.
+        quote="$(printf '%s' "$raw" | jq -r '(.flag_quote // "") | if type == "string" then .[0:200] else "" end' 2>/dev/null || true)"
         # EVERY returned uuid is intersected with the candidate set the slicer
         # built. This is the check the header promises; without it a
         # transposed character writes a pointer that resolves to nothing and
@@ -572,10 +667,6 @@ wl_run() {
     if [ "$flag" != "mistake" ]; then fuuids="[]"; quote=""; fi
 
     # --- write ----------------------------------------------------------
-    local store; store="${WORKLOG_JSONL:-${tx%/*}/worklog.jsonl}"
-    wl_store_ok "$store" "$tx" || gate_failopen worklog-record store-unwritable "$sid"
-    mkdir -p "${store%/*}" 2>/dev/null || true
-
     # Built with `jq -n --arg`, never an echoed brace literal — the hard rule
     # in scripts/log-record.sh. An apostrophe in `did` or `flag_quote` is not
     # hypothetical here; it is the common case.
