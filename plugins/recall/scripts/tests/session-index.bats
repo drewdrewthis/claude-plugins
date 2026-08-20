@@ -271,7 +271,7 @@ import json,sys
 assert len(json.load(sys.stdin)) == 1, "the text block was dropped with the tool blocks"'
 }
 
-@test "first_prompt, last_prompt and message_count stay user-only" {
+@test "first_prompt, last_prompt and prompt_count stay user-only" {
   # Prompt-shaped fields the skill reports back to the human. An assistant reply
   # leaking in would be presented as something the human typed, and the count
   # would silently double.
@@ -286,7 +286,7 @@ import json,sys
 hit = json.load(sys.stdin)[0]
 assert hit["first_prompt"] == "the first thing the human asked about", hit["first_prompt"]
 assert hit["last_prompt"] == "the second thing the human asked about", hit["last_prompt"]
-assert hit["message_count"] == 2, hit["message_count"]'
+assert hit["prompt_count"] == 2, hit["prompt_count"]'
 }
 
 @test "search honours --limit" {

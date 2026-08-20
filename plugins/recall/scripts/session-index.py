@@ -230,7 +230,7 @@ def get_db():
             cwd TEXT,
             mtime REAL,
             size INTEGER,
-            message_count INTEGER,
+            prompt_count INTEGER,
             first_prompt TEXT,
             last_prompt TEXT
         )
@@ -474,7 +474,7 @@ def build_index():
 
         # ⚠ Prompt-shaped fields stay USER-only. They are quoted back to the
         # human as what they asked; a reply folded in here would be presented
-        # as something they said, and message_count would silently double.
+        # as something they said, and prompt_count would silently double.
         first_prompt = prompts[0][:200] if prompts else ""
         last_prompt = prompts[-1][:200] if prompts else ""
 
@@ -483,12 +483,12 @@ def build_index():
         db.execute("""
             INSERT INTO sessions
                 (file_path, session_id, project, cwd, mtime, size,
-                 message_count, first_prompt, last_prompt)
+                 prompt_count, first_prompt, last_prompt)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(file_path) DO UPDATE SET
                 session_id=excluded.session_id, project=excluded.project,
                 cwd=excluded.cwd, mtime=excluded.mtime, size=excluded.size,
-                message_count=excluded.message_count,
+                prompt_count=excluded.prompt_count,
                 first_prompt=excluded.first_prompt, last_prompt=excluded.last_prompt
         """, (f, session_id, project, cwd, mtime, size,
               len(prompts), first_prompt, last_prompt))
@@ -614,7 +614,7 @@ def search(query, limit=10, project=None):
         rows = db.execute(f"""
             SELECT
                 s.session_id, s.project, s.cwd, s.file_path, s.mtime,
-                s.message_count, s.first_prompt, s.last_prompt,
+                s.prompt_count, s.first_prompt, s.last_prompt,
                 f.line_offset as line_offset, f.roles as roles,
                 snippet(sessions_fts, {USER_TEXT_COL}, '>>>', '<<<', '...', 24)
                     as snippet,
@@ -643,7 +643,7 @@ def search(query, limit=10, project=None):
         "line_offset": int(row["line_offset"]),
         "roles": row["roles"],
         "mtime": row["mtime"],
-        "message_count": row["message_count"],
+        "prompt_count": row["prompt_count"],
         "first_prompt": row["first_prompt"],
         "last_prompt": row["last_prompt"],
         # Two snippets rather than one merged blob: which SIDE said it changes

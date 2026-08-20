@@ -79,7 +79,7 @@ matched.
    synonym set before concluding anything is absent.
 
    Results are ordered best-first — use the order, and prefer hits with a high
-   `message_count` (substantive) and a recent `mtime`.
+   `prompt_count` (substantive) and a recent `mtime`.
 
 3. **Read the top 5–10 hits, each centred on its own match:**
 
