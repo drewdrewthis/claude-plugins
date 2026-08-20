@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.7.0...procedures-v0.7.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* **procedures:** allowlist WebFetch/WebSearch in the how-do-i gate ([25cdbb1](https://github.com/drewdrewthis/claude-plugins/commit/25cdbb15482f471c06c683b244aaee40f0f82ff8))
+* **procedures:** allowlist WebFetch/WebSearch in the how-do-i gate ([f35c987](https://github.com/drewdrewthis/claude-plugins/commit/f35c987f73ad34ce49b05d96723034c91f74fc94))
+* **procedures:** review fixes — Edit -eq 1 coverage, hook status assert, honest comments ([6d5552c](https://github.com/drewdrewthis/claude-plugins/commit/6d5552c2717d5d41cd562a0658d75b31871d4ce5))
+
 ## [0.7.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.6.0...procedures-v0.7.0) (2026-08-18)
 
 
