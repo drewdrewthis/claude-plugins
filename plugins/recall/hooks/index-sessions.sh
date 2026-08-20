@@ -9,4 +9,7 @@
 # session end would surface an error the user cannot act on (ADR-001: hooks fail
 # open). The index is rebuilt on demand by /recall anyway, so a miss here costs
 # latency, never correctness.
+# setsid puts the build in its own session/process group, detached from the
+# hook's — so when Claude Code reaps the hook's process group at SessionEnd,
+# the still-running indexer is not killed along with it.
 setsid python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-index.py" build >/dev/null 2>&1 &

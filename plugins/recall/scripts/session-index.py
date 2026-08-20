@@ -192,14 +192,22 @@ def _migrate(db):
         raise
 
 
-# Ordinals of the two prose columns in sessions_fts, named once here because
-# snippet() in search() addresses them positionally and has no way to check.
-# line_offset and roles are appended AFTER them, and UNINDEXED, precisely so
-# these two ordinals did not have to move.
-# Kept immediately above the CREATE VIRTUAL TABLE in get_db() — the only other
-# place the order is written down.
-USER_TEXT_COL = 3
-ASSISTANT_TEXT_COL = 4
+# Single source of truth for the sessions_fts column order. USER_TEXT_COL /
+# ASSISTANT_TEXT_COL below and the CREATE VIRTUAL TABLE DDL in get_db() both
+# derive from this ONE tuple, so reordering a column can no longer desync
+# them silently — it used to take two hand-kept ⚠ comments to hold this in
+# agreement, and nothing enforced it.
+FTS_COLUMNS = ("file_path", "session_id", "project", "user_text",
+               "assistant_text", "line_offset", "roles")
+# UNINDEXED: appended after the two prose columns precisely so their ordinals
+# never have to move.
+FTS_UNINDEXED = {"line_offset", "roles"}
+
+# Ordinals of the two prose columns, named once because snippet() in search()
+# addresses them positionally and has no way to check. Derived with .index()
+# rather than hardcoded, so a reordering of FTS_COLUMNS above moves these too.
+USER_TEXT_COL = FTS_COLUMNS.index("user_text")
+ASSISTANT_TEXT_COL = FTS_COLUMNS.index("assistant_text")
 
 
 def get_db():
@@ -236,19 +244,18 @@ def get_db():
         )
     """)
     try:
-        # ⚠ Column ORDER is load-bearing: search() addresses user_text and
-        # assistant_text by index in snippet(), so reordering them silently
-        # shows a hit the wrong side of the conversation. Move a column and
-        # USER_TEXT_COL / ASSISTANT_TEXT_COL above must move with it.
-        db.execute("""
+        # Built from FTS_COLUMNS, not hand-typed: column ORDER is load-bearing
+        # (search() addresses user_text/assistant_text by index in snippet()),
+        # so generating the DDL from the same tuple USER_TEXT_COL/
+        # ASSISTANT_TEXT_COL derive from means there is only one place left
+        # to reorder a column, not two kept in agreement by comment alone.
+        fts_ddl_columns = ",\n                ".join(
+            f"{name} UNINDEXED" if name in FTS_UNINDEXED else name
+            for name in FTS_COLUMNS
+        )
+        db.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-                file_path,
-                session_id,
-                project,
-                user_text,
-                assistant_text,
-                line_offset UNINDEXED,
-                roles UNINDEXED,
+                {fts_ddl_columns},
                 tokenize='porter unicode61'
             )
         """)
@@ -416,6 +423,18 @@ def display_cwd(cwd):
     return cwd
 
 
+# #68 drift-detection tuning. A ratio, not "every parsed file was empty":
+# issue #68 itself notes the all-or-nothing version collapses on a mixed
+# incremental build (a handful of genuinely noisy sessions alongside one real
+# one still parses at least one non-empty file and would never trip). Fires
+# past EMPTY_DRIFT_RATIO of parsed files coming back empty, but only once
+# EMPTY_DRIFT_MIN_PARSED files were parsed this build at all — the floor
+# exists so a routine incremental build that touches a single noise-only file
+# (ratio 1.0 on a denominator of 1) doesn't cry wolf on a normal day.
+EMPTY_DRIFT_RATIO = 0.5
+EMPTY_DRIFT_MIN_PARSED = 3
+
+
 def build_index():
     db = get_db()
     files = [f for f in glob.glob(os.path.join(PROJECTS_DIR, "*", "*.jsonl"))]
@@ -561,13 +580,13 @@ def build_index():
     db.commit()
     total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
 
-    # The aggregate drift signal the issue asks for: every transcript this
-    # build actually parsed (not skipped as unchanged, not a bare stat
-    # failure) came back with zero turns. One noisy file is normal — a broken
-    # extractor or a harness format drift looks like ALL of them at once.
-    # `indexed == 0` is required alongside `empty` so a build that parsed a
-    # healthy mix (some empty, some real) does not trip this.
-    drift = empty > 0 and indexed == 0
+    # The aggregate drift signal the issue asks for: MOST of what this build
+    # actually parsed (not skipped as unchanged, not a bare stat failure) came
+    # back with zero turns. A ratio, with a floor on the denominator — see
+    # EMPTY_DRIFT_RATIO / EMPTY_DRIFT_MIN_PARSED above for why not
+    # all-or-nothing.
+    parsed = empty + indexed
+    drift = parsed >= EMPTY_DRIFT_MIN_PARSED and empty / parsed > EMPTY_DRIFT_RATIO
 
     # The SessionEnd hook discards stdout AND stderr, so `failed`/`empty` in
     # the return value are invisible on the only path that runs automatically
@@ -591,7 +610,7 @@ def build_index():
                     fh.write(
                         f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
                         f"{empty} non-empty transcript(s) extracted zero turns"
-                        f"{' (ALL parsed files this build)' if drift else ''}\n"
+                        f"{f' ({empty}/{parsed} parsed files this build)' if drift else ''}\n"
                     )
         except OSError:
             pass
@@ -617,8 +636,8 @@ def build_index():
         # channel available without changing the fail-open contract — it is
         # still just a field in a successful result, never an exception.
         result["warning"] = (
-            f"every parsed transcript this build extracted zero messages "
-            f"({empty} file(s)) — possible extraction drift in iter_messages"
+            f"{empty}/{parsed} parsed transcripts this build extracted zero "
+            f"messages — possible extraction drift in iter_messages"
         )
     return result
 
@@ -715,6 +734,14 @@ def search(query, limit=10, project=None):
 # short in practice, and the cost is bounded regardless of file size.
 AROUND_LOOKBACK_LINES = 400
 
+# Named rather than left as `tail // 5` capped at `3`: LEAD_IN_FRACTION is how
+# thin a slice of the tail budget goes to lead-in before the match (a small
+# fraction, since most of the value is what comes AFTER the hit — see
+# _context_around's docstring), and MAX_LEAD_IN_TURNS caps it so a big --tail
+# doesn't burn an ever-larger chunk on context nobody asked to see the start of.
+LEAD_IN_FRACTION = 5
+MAX_LEAD_IN_TURNS = 3
+
 # Words FTS5 reads as syntax rather than as something to look for. --match does
 # its own scoring over the raw text, so it has to drop them itself.
 _QUERY_OPERATORS = {"and", "or", "not", "near"}
@@ -809,11 +836,10 @@ def context(jsonl_path, tail=10, around=None, match=None):
     try:
         if match is not None:
             around = best_window_offset(real, match)
-            if around is None:
-                # Nothing matched. The tail is still a truthful answer to
-                # "show me this session", and is what the caller had before.
-                around = None
         if around is not None:
+            # Nothing matched -> around stays None and the tail is still a
+            # truthful answer to "show me this session", which is what the
+            # caller had before.
             return _context_around(real, around, tail)
         return _context_tail(real, tail)
     except OSError as exc:
@@ -848,7 +874,7 @@ def _context_around(real, around, tail):
     offset and stops as soon as the trailing budget is full, so the cost does
     not grow with the size of the transcript.
     """
-    before = collections.deque(maxlen=min(max(tail // 5, 1), 3))
+    before = collections.deque(maxlen=min(max(tail // LEAD_IN_FRACTION, 1), MAX_LEAD_IN_TURNS))
     after = []
     start = max(1, around - AROUND_LOOKBACK_LINES)
     for line_no, role, text in iter_messages(real, {"user", "assistant"}, start_line=start):
