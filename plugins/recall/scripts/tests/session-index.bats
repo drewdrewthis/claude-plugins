@@ -996,3 +996,73 @@ assert "trailing answer number 39" in m[-1]["text"], m[-1]'
   [ "$status" -ne 0 ]
 }
 
+# ─── project scoping (#69) ──────────────────────────────────────────────────
+
+@test "search --project scopes to one project by encoded directory name" {
+  # `--project=<value>`, not `--project <value>`: an encoded directory name
+  # begins with a hyphen, which argparse would otherwise read as a flag.
+  write_session "-home-me-alpha" "aaa" "/home/me/alpha" "the tokenizer decision we made here"
+  write_session "-home-me-beta"  "bbb" "/home/me/beta"  "the tokenizer decision we made here"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==2, "fixture is wrong: both must match unscoped"'
+  run python3 "$SCRIPT" search "tokenizer" --project=-home-me-alpha
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert len(r) == 1, r
+assert r[0]["project"] == "-home-me-alpha", r[0]["project"]'
+}
+
+@test "search --project accepts a real path as well as the encoded name" {
+  write_session "-home-me-alpha" "aaa" "/home/me/alpha" "the tokenizer decision we made here"
+  write_session "-home-me-beta"  "bbb" "/home/me/beta"  "the tokenizer decision we made here"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer" --project "/home/me/beta"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert len(r) == 1, r
+assert r[0]["session_id"] == "bbb", r[0]'
+}
+
+@test "--cwd is accepted as the name for the same scoping flag" {
+  write_session "-home-me-alpha" "aaa" "/home/me/alpha" "the tokenizer decision we made here"
+  write_session "-home-me-beta"  "bbb" "/home/me/beta"  "the tokenizer decision we made here"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer" --cwd "/home/me/alpha"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert len(r) == 1 and r[0]["session_id"] == "aaa", r'
+}
+
+@test "a project scope that matches nothing returns an empty list, not an error" {
+  write_session "-home-me-alpha" "aaa" "/home/me/alpha" "the tokenizer decision we made here"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer" --project=-home-me-nowhere
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c 'import json,sys; assert json.load(sys.stdin) == []'
+}
+
+@test "scoping applies before --limit, not after" {
+  # Filtering the result list afterwards returns fewer rows than asked for
+  # whenever the unscoped top-N came from elsewhere.
+  local i
+  for i in $(seq 1 5); do
+    write_session "-home-me-beta" "b$i" "/home/me/beta" "tokenizer discussion number $i in beta"
+  done
+  write_session "-home-me-alpha" "a1" "/home/me/alpha" "tokenizer discussion number one in alpha"
+  write_session "-home-me-alpha" "a2" "/home/me/alpha" "tokenizer discussion number two in alpha"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer" --project=-home-me-alpha --limit 2
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert len(r) == 2, "scope was applied after the limit: %r" % (r,)
+assert all(h["project"] == "-home-me-alpha" for h in r), r'
+}

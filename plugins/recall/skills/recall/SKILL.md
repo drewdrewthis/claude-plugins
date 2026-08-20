@@ -60,6 +60,20 @@ matched.
    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session-index.py search "judge OR verifier OR quorum OR adjudicate OR verdict OR proof" --limit 15
    ```
 
+   Scope to one project when the human's question is about a specific repo or
+   directory — `--project` takes either the encoded directory name a hit
+   reports as `project`, or a real path (`--cwd` is the same flag):
+
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session-index.py search "tokenizer" --project ~/work/myrepo
+   ```
+
+   An encoded directory name starts with a hyphen, so pass that form joined by
+   `=` or it is read as a flag: `--project=-home-me-myrepo`.
+
+   Do NOT scope by default: the human usually cannot say which project a
+   conversation happened in, and that is the question they are asking you.
+
    A literal phrase can return zero where the union finds it: "panel quorum
    judgement proof" → 0 hits; the union above → the right sessions. Broaden the
    synonym set before concluding anything is absent.

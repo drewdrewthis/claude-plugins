@@ -7,7 +7,7 @@ Supports incremental updates (only re-parses changed files).
 
 Usage:
     session-index.py build                              # Build/update the index
-    session-index.py search <query> [--limit N]
+    session-index.py search <query> [--limit N] [--project P]
     session-index.py context <path.jsonl> --tail N      # Last N turns
     session-index.py context <path.jsonl> --around L    # Turns around line L
     session-index.py context <path.jsonl> --match Q     # Turns around the best
@@ -569,7 +569,25 @@ def build_index():
     }
 
 
-def search(query, limit=10):
+def project_filter(value):
+    """(encoded-dir-name, cwd) to scope a search by, from a name OR a path.
+
+    Sessions live at <projects>/<munged-cwd>/<session>.jsonl, where Claude Code
+    munges a cwd by replacing every `/` with `-`. That encoding is lossy — a
+    real hyphen is indistinguishable from a separator — so this goes the
+    lossless direction only: a PATH is munged forward to compare against the
+    directory name, and is additionally compared against the cwd recorded
+    inside the transcript. Anything without a separator is taken as the
+    encoded directory name itself, which is what `search` reports as `project`.
+    """
+    value = os.path.expanduser(value)
+    if os.sep in value:
+        path = os.path.abspath(value)
+        return path.replace(os.sep, "-"), path
+    return value, None
+
+
+def search(query, limit=10, project=None):
     db = open_for_read()
     total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     if total == 0:
@@ -581,6 +599,16 @@ def search(query, limit=10):
         raise IndexError_(str(exc)) from exc
     if not match:
         raise IndexError_(f"query {query!r} has no searchable terms")
+
+    scope, params = "", [match]
+    if project:
+        # Scoping happens in SQL rather than by filtering the result list:
+        # filtering afterwards would silently return fewer than --limit rows
+        # whenever the unscoped top-N happened to be from other projects.
+        encoded, cwd = project_filter(project)
+        scope = " AND (s.project = ? OR s.cwd = ?)"
+        params += [encoded, cwd]
+    params.append(limit)
 
     try:
         rows = db.execute(f"""
@@ -594,10 +622,10 @@ def search(query, limit=10):
                     as assistant_snippet
             FROM sessions_fts f
             JOIN sessions s ON s.file_path = f.file_path
-            WHERE sessions_fts MATCH ?
+            WHERE sessions_fts MATCH ?{scope}
             ORDER BY rank
             LIMIT ?
-        """, (match, limit)).fetchall()
+        """, params).fetchall()
     except sqlite3.OperationalError as exc:
         raise IndexError_(f"could not search for {query!r}: {exc}") from exc
 
@@ -792,6 +820,12 @@ def main():
     p_search = sub.add_parser("search", help="search indexed sessions")
     p_search.add_argument("query")
     p_search.add_argument("--limit", type=int, default=10)
+    # --cwd is the same flag under the name the caller is more likely to have
+    # in hand: a search hit reports both `project` (the encoded directory
+    # name) and `cwd` (the real path), and either is accepted.
+    p_search.add_argument(
+        "--project", "--cwd", dest="project", default=None,
+        help="scope to one project: its encoded directory name, or a path")
     p_context = sub.add_parser("context", help="messages from one session")
     p_context.add_argument("path")
     p_context.add_argument(
@@ -812,7 +846,7 @@ def main():
         if args.command == "build":
             result = build_index()
         elif args.command == "search":
-            result = search(args.query, args.limit)
+            result = search(args.query, args.limit, args.project)
         else:
             result = context(args.path, args.tail, args.around, args.match)
     except IndexError_ as exc:
