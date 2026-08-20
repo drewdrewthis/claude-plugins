@@ -20,8 +20,16 @@ composite ORDER BY is still needed.
 
 Exit status is 0 if the windowed index ranks the long substantive answer first,
 1 if the inversion survives — so it can also be used as a check.
+
+As of #66, this exits 1: the inversion SURVIVES windowing (see the "verdict"
+section this script prints — a composite ORDER BY over bm25 and `roles` is
+the next step, not yet built). That is the documented, known status quo, not
+a regression — do NOT wire this into CI expecting a 0, and do not treat a
+change from 1 to 0 (or the reverse) as itself news without reading the printed
+scores; the number alone doesn't say why.
 """
 
+import dataclasses
 import json
 import os
 import shutil
@@ -108,18 +116,33 @@ def build_whole_session_index(db_path, out_path):
                 "file_path, session_id, project, user_text, assistant_text,"
                 " line_offset UNINDEXED, roles UNINDEXED,"
                 " tokenize='porter unicode61')")
+    # Named fields, not a positional 5-slot list: a list indexed 0..4 reads
+    # back as "what was cur[3] again" at every use site below, and a field
+    # inserted or reordered upstream would desync silently.
+    @dataclasses.dataclass
+    class MergedSession:
+        file_path: str
+        session_id: str
+        project: str
+        user_chunks: list = dataclasses.field(default_factory=list)
+        assistant_chunks: list = dataclasses.field(default_factory=list)
+
     merged = {}
-    for r in src.execute("SELECT file_path, session_id, project,"
-                         " user_text, assistant_text FROM sessions_fts"):
-        cur = merged.setdefault(r[1], [r[0], r[1], r[2], [], []])
-        cur[3].append(r[3])
-        cur[4].append(r[4])
+    for file_path, session_id, project, user_text, assistant_text in src.execute(
+        "SELECT file_path, session_id, project, user_text, assistant_text"
+        " FROM sessions_fts"
+    ):
+        cur = merged.setdefault(
+            session_id, MergedSession(file_path, session_id, project))
+        cur.user_chunks.append(user_text)
+        cur.assistant_chunks.append(assistant_text)
     for cur in merged.values():
         dst.execute("INSERT INTO sessions_fts (file_path, session_id, project,"
                     " user_text, assistant_text, line_offset, roles)"
                     " VALUES (?,?,?,?,?,?,?)",
-                    (cur[0], cur[1], cur[2], "\n".join(cur[3]),
-                     "\n".join(cur[4]), 1, "whole-session"))
+                    (cur.file_path, cur.session_id, cur.project,
+                     "\n".join(cur.user_chunks), "\n".join(cur.assistant_chunks),
+                     1, "whole-session"))
     dst.commit()
 
 
@@ -137,6 +160,13 @@ def main():
         out = subprocess.run(
             [sys.executable, SCRIPT, "search", TERM, "--limit", "10"],
             capture_output=True, text=True, env=env)
+        # Mirrors build_fixture's own check above: a RecallIndexError prints a
+        # JSON error object on stdout with a non-zero exit, and json.loads()
+        # on that (or on an empty stdout from a crash) raises a TypeError/
+        # JSONDecodeError that reads nothing like "search failed" — check the
+        # exit code first so a broken search fails loudly and specifically.
+        if out.returncode != 0:
+            sys.exit("search failed: %s%s" % (out.stdout, out.stderr))
         hits = json.loads(out.stdout)
         for h in hits:
             print("  %-16s line_offset=%-5s roles=%-14s %s"
