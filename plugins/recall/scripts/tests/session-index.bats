@@ -529,6 +529,44 @@ assert len(r) >= 1, "silently returned nothing"' || { echo "empty result for: $q
   grep -q "skipped 1 unreadable transcript" "$SESSION_INDEX_DB.log"
 }
 
+@test "a transcript that parses cleanly but yields zero turns is surfaced, not silently indexed" {
+  # #68: every line filtered by iter_messages (too short, in this fixture) is
+  # a DIFFERENT failure mode than a raise — nothing in the existing `failed`
+  # counter would ever see it, and a naive INSERT would write prompt_count 0
+  # and then the incremental skip at the top of the next build would never
+  # look at the file again.
+  local f="$SESSION_INDEX_PROJECTS/-home-me-proj/zzz.jsonl"
+  mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  python3 -c 'import json; print(json.dumps({"type": "user", "message": {"content": "hi"}}))' >"$f"
+  run python3 "$SCRIPT" build
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["empty"]==1, d; assert d["indexed"]==0, d; assert d["total"]==0, d'
+  # Not durably done: a second build with nothing changed on disk parses the
+  # same file again rather than marking it "skipped" (which would mean its
+  # (mtime, size) got recorded on the first pass).
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["empty"]==1, d; assert d["skipped"]==0, d'
+}
+
+@test "a zero-turn transcript does not cost an unrelated normal transcript its index entry" {
+  write_session "-home-me-proj" "aaa" "" "a perfectly ordinary indexable conversation"
+  local f="$SESSION_INDEX_PROJECTS/-home-me-proj/zzz.jsonl"
+  python3 -c 'import json; print(json.dumps({"type": "user", "message": {"content": "hi"}}))' >"$f"
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["indexed"]==1, d; assert d["empty"]==1, d; assert d["total"]==1, d'
+  run python3 "$SCRIPT" search "ordinary"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1'
+}
+
+@test "a genuinely empty transcript file does not trip the zero-turn canary" {
+  # size 0 is a legitimate empty session (e.g. created but nothing written
+  # yet), not extraction drift — must not be counted in `empty`.
+  mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  : >"$SESSION_INDEX_PROJECTS/-home-me-proj/zzz.jsonl"
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["empty"]==0, d; assert d["failed"]==0, d'
+}
+
 @test "a prefix term still matches" {
   # Quoting every token turned `kuber*` into a literal and silently killed
   # prefix search — a recall regression with no error to notice.

@@ -426,7 +426,13 @@ def build_index():
     }
 
     on_disk = set()
-    indexed = skipped = failed = 0
+    # `empty` is the #68 canary: a non-empty file that parsed cleanly but
+    # yielded zero turns — every line filtered by iter_messages, or a format
+    # drift that makes nothing match. Kept distinct from `failed` (which means
+    # the read/parse itself raised) because this is silent by construction: no
+    # exception fires, a sessions row would look identical to a real empty
+    # session, and the incremental skip below would then hide it forever.
+    indexed = skipped = failed = empty = 0
     start = time.time()
 
     for f in files:
@@ -470,6 +476,23 @@ def build_index():
             # transcript abort the pass — which is the whole point of `failed`,
             # a typed skip surfaced in the result rather than swallowed.
             failed += 1
+            continue
+
+        # ⚠ The #68 canary. size > 0 already guards the genuinely-empty case
+        # (a freshly-created transcript with nothing written yet, which is a
+        # legitimate zero-turn file, not drift) — iter_messages on a size-0
+        # file always yields nothing, so this would otherwise fire on every
+        # brand new session before its first line lands.
+        #
+        # Deliberately `continue` WITHOUT inserting a row and WITHOUT recording
+        # (mtime, size) anywhere: `existing` is untouched, so the incremental
+        # check at the top of the next build (`existing.get(f) == (mtime,
+        # size)`) still misses and this file is parsed again — cheap, since a
+        # noise-only file is small, and it is the only way a fixed extraction
+        # bug (or a file that later gains real content) gets picked up rather
+        # than being durably marked "done" at prompt_count 0 forever.
+        if size > 0 and not turns:
+            empty += 1
             continue
 
         # ⚠ Prompt-shaped fields stay USER-only. They are quoted back to the
@@ -538,10 +561,19 @@ def build_index():
     db.commit()
     total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
 
-    # The SessionEnd hook discards stdout AND stderr, so `failed` in the return
-    # value is invisible on the only path that runs automatically — a skip
-    # absorbed into a success count. Leave a durable breadcrumb instead.
-    if failed:
+    # The aggregate drift signal the issue asks for: every transcript this
+    # build actually parsed (not skipped as unchanged, not a bare stat
+    # failure) came back with zero turns. One noisy file is normal — a broken
+    # extractor or a harness format drift looks like ALL of them at once.
+    # `indexed == 0` is required alongside `empty` so a build that parsed a
+    # healthy mix (some empty, some real) does not trip this.
+    drift = empty > 0 and indexed == 0
+
+    # The SessionEnd hook discards stdout AND stderr, so `failed`/`empty` in
+    # the return value are invisible on the only path that runs automatically
+    # — a skip absorbed into a success count. Leave a durable breadcrumb
+    # instead, same as the `failed` precedent below.
+    if failed or empty:
         try:
             log_path = DB_PATH + ".log"
             # Same reasoning as the db itself: this names transcript paths, so
@@ -550,23 +582,45 @@ def build_index():
             if not os.path.exists(log_path):
                 os.close(os.open(log_path, os.O_CREAT | os.O_WRONLY, 0o600))
             with open(log_path, "a") as fh:
-                fh.write(
-                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
-                    f"skipped {failed} unreadable transcript(s) of {len(files)}\n"
-                )
+                if failed:
+                    fh.write(
+                        f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
+                        f"skipped {failed} unreadable transcript(s) of {len(files)}\n"
+                    )
+                if empty:
+                    fh.write(
+                        f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
+                        f"{empty} non-empty transcript(s) extracted zero turns"
+                        f"{' (ALL parsed files this build)' if drift else ''}\n"
+                    )
         except OSError:
             pass
 
-    return {
+    result = {
         "indexed": indexed,
         "skipped": skipped,
         "removed": removed,
         # Surfaced because the SessionEnd hook discards output: a transcript that
         # never indexes is otherwise invisible forever.
         "failed": failed,
+        # The #68 canary: non-empty transcripts that parsed cleanly but
+        # yielded zero turns. Never folded into `failed` — nothing raised — and
+        # never folded into `indexed` — no row was written, see above.
+        "empty": empty,
         "total": total,
         "elapsed_seconds": round(time.time() - start, 2),
     }
+    if drift:
+        # search/manual `build` print this JSON directly (the hook path is
+        # the one caller that can't see it, same limitation `failed` already
+        # has above); `search` also runs `build` first, so this is the loudest
+        # channel available without changing the fail-open contract — it is
+        # still just a field in a successful result, never an exception.
+        result["warning"] = (
+            f"every parsed transcript this build extracted zero messages "
+            f"({empty} file(s)) — possible extraction drift in iter_messages"
+        )
+    return result
 
 
 def project_filter(value):
