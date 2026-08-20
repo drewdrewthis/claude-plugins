@@ -95,7 +95,7 @@ def _schema_version(db):
     return db.execute("PRAGMA user_version").fetchone()[0]
 
 
-class IndexError_(Exception):
+class RecallIndexError(Exception):
     """A failure the caller should see as JSON, not as a traceback."""
 
 
@@ -113,7 +113,7 @@ def open_for_read():
     answered says so; it does not repair anything.
     """
     if not os.path.exists(DB_PATH):
-        raise IndexError_(
+        raise RecallIndexError(
             "no index yet — run `session-index.py build` first"
         )
     # ⚠ Percent-encode the path. SQLite parses a URI filename, so a `#` in the
@@ -126,7 +126,7 @@ def open_for_read():
     db = sqlite3.connect(uri, uri=True, timeout=60)
     db.row_factory = sqlite3.Row
     if _schema_version(db) != SCHEMA_VERSION:
-        raise IndexError_(
+        raise RecallIndexError(
             "the index was built by an older version of this script — "
             "run `session-index.py build` to rebuild it"
         )
@@ -254,7 +254,7 @@ def get_db():
         """)
     except sqlite3.OperationalError as exc:
         if "fts5" in str(exc).lower():
-            raise IndexError_(
+            raise RecallIndexError(
                 "this python's sqlite3 was built without the FTS5 extension, "
                 "which recall requires. See the plugin README for details."
             ) from exc
@@ -523,7 +523,7 @@ def build_index():
     # /recall answering "no transcripts indexed". The read path already refuses
     # to repair by deletion; the write path owes the same refusal.
     if not files and existing:
-        raise IndexError_(
+        raise RecallIndexError(
             "found no transcripts under %s but the index holds %d — refusing to "
             "prune. Check the directory is readable." % (PROJECTS_DIR, len(existing))
         )
@@ -591,14 +591,14 @@ def search(query, limit=10, project=None):
     db = open_for_read()
     total = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     if total == 0:
-        raise IndexError_("index is empty — no transcripts have been indexed yet")
+        raise RecallIndexError("index is empty — no transcripts have been indexed yet")
 
     try:
         match = translate(query)
     except Fts5QueryError as exc:
-        raise IndexError_(str(exc)) from exc
+        raise RecallIndexError(str(exc)) from exc
     if not match:
-        raise IndexError_(f"query {query!r} has no searchable terms")
+        raise RecallIndexError(f"query {query!r} has no searchable terms")
 
     scope, params = "", [match]
     if project:
@@ -627,7 +627,7 @@ def search(query, limit=10, project=None):
             LIMIT ?
         """, params).fetchall()
     except sqlite3.OperationalError as exc:
-        raise IndexError_(f"could not search for {query!r}: {exc}") from exc
+        raise RecallIndexError(f"could not search for {query!r}: {exc}") from exc
 
     return [{
         "session_id": row["session_id"],
@@ -673,9 +673,9 @@ def _resolve_transcript(jsonl_path):
     # The contract is "reads indexed transcripts"; without this the subcommand
     # will open any file the user can read.
     if os.path.commonpath([projects, real]) != projects:
-        raise IndexError_(f"{jsonl_path} is not under the transcripts directory")
+        raise RecallIndexError(f"{jsonl_path} is not under the transcripts directory")
     if not os.path.isfile(real):
-        raise IndexError_(f"{jsonl_path} is not a file")
+        raise RecallIndexError(f"{jsonl_path} is not a file")
     return real
 
 
@@ -726,7 +726,7 @@ def best_window_offset(real, query):
     """
     terms = query_terms(query)
     if not terms:
-        raise IndexError_(f"query {query!r} has no searchable terms")
+        raise RecallIndexError(f"query {query!r} has no searchable terms")
     best_score, best_offset = (0, 0), None
     for window in iter_windows(iter_messages(real, {"user", "assistant"})):
         score = _score_window(window, terms)
@@ -750,7 +750,7 @@ def context(jsonl_path, tail=10, around=None, match=None):
     """
     real = _resolve_transcript(jsonl_path)
     if tail < 1:
-        raise IndexError_("--tail must be at least 1")
+        raise RecallIndexError("--tail must be at least 1")
 
     try:
         if match is not None:
@@ -763,7 +763,7 @@ def context(jsonl_path, tail=10, around=None, match=None):
             return _context_around(real, around, tail)
         return _context_tail(real, tail)
     except OSError as exc:
-        raise IndexError_(f"could not read {jsonl_path}: {exc}") from exc
+        raise RecallIndexError(f"could not read {jsonl_path}: {exc}") from exc
 
 
 def _context_tail(real, tail):
@@ -849,7 +849,7 @@ def main():
             result = search(args.query, args.limit, args.project)
         else:
             result = context(args.path, args.tail, args.around, args.match)
-    except IndexError_ as exc:
+    except RecallIndexError as exc:
         fail(str(exc))
     except sqlite3.OperationalError as exc:
         fail(f"database error: {exc}")
