@@ -24,6 +24,18 @@
 #   5. IT NEVER BLOCKS. am-i-done-gate.sh is the Stop hook that emits a
 #      `decision`, and it must stay the only one — two blocking Stop hooks make
 #      an unclearable turn.
+#   6. ONE ROW PER TURN SURVIVES THE DEPLOYED SHAPE, not just the test shape.
+#      Two Stop fires per turn is the normal path here, and on the default
+#      dispatch they run CONCURRENTLY — see section 8b.
+#
+# ⚠ WORKLOG_SYNC=1 AND WORKLOG_SETTLE_SECS=0 HIDE THE RACE. drive() pins both,
+# which serializes the two fires and lets the first finish writing before the
+# second starts — the two conditions under which the dedup cannot be raced.
+# They are pinned because a suite that paid the settle wait and detached every
+# call would be slow and non-deterministic, NOT because the deployed path looks
+# like that. Anything about ordering between fires belongs in section 8b, which
+# drives the real detached path; a new test added to the sections above proves
+# nothing about concurrency.
 #
 # ⚠ GATE_FAILOPEN_LOG DANGER — the same one gate-failopen.bats documents at
 # length. gate_failopen() defaults to the REAL $HOME/.claude/gate-failopen.jsonl
@@ -348,6 +360,46 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
   [ "$(field .flag_quote)" = "null" ]
 }
 
+@test "a flag_quote copied from a candidate line survives verification" {
+  # POSITIVE CONTROL for the two blanking tests below: verification must be
+  # capable of PASSING, or "the field was null" proves nothing about the check.
+  # "do the thing" is $U1's own text, so it is in the candidate bodies verbatim.
+  fixture_full
+  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a],flag_quote:"do the thing"}')"
+  [ "$(field .flag_quote)" = "do the thing" ]
+}
+
+@test "a flag_quote traceable to no candidate line is blanked, not written" {
+  # flag_quote is a POINTER sold to the reader as verbatim, and it is the only
+  # one the model was ever trusted on: flag_uuids are intersected with the
+  # candidate set, ask_uuid/end_uuid are re-checked against the transcript. An
+  # untraceable quote reads as evidence, so it is checked the same way.
+  fixture_full
+  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a],flag_quote:"a sentence nobody in this transcript ever said"}')"
+  [ "$(field .flag_quote)" = "null" ]
+  # ...and blanking the quote does not discard the rest of the flag.
+  [ "$(field .flag)" = "mistake" ]
+  [ "$(field '.flag_uuids|length')" -eq 1 ]
+}
+
+@test "flag_quote verification ignores whitespace, not words" {
+  # Candidate bodies reach the model whitespace-collapsed by the slicer's
+  # flat(), so a quote re-typed with different spacing is the same quote and
+  # must survive. Both sides are normalized identically.
+  fixture_full
+  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a],flag_quote:"do   the\n thing"}')"
+  [ "$(field .flag_quote)" = "do the thing" ]
+}
+
+@test "a flag_quote cannot be stitched together from two different candidates" {
+  # "an earlier answer" and "do the thing" are separate records. Matching over
+  # the joined candidate blob rather than per line would accept a span crossing
+  # them, which points at a line that does not exist.
+  fixture_full
+  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a],flag_quote:"an earlier answer do the thing"}')"
+  [ "$(field .flag_quote)" = "null" ]
+}
+
 @test "no severity, category or failure-mode key can enter the record" {
   fixture_full
   drive '{"did":"x","flag":"mistake","flag_uuids":[],"flag_quote":"q","severity":"high","category":"process","pattern":"some-fm"}'
@@ -593,11 +645,49 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
   [ "$(why)" = "judgment-unavailable" ]
 }
 
+@test "BLIND: a detach that cannot start is recorded as detach-failed" {
+  # NOT store-unwritable. wl_detach fails when mktemp fails or $TMPDIR is
+  # unwritable; the store is never touched on that path, so naming it sends a
+  # later reader to the wrong directory to look for a fault that is not there.
+  #
+  # Drives the DEFAULT path deliberately — no WORKLOG_SYNC — because the branch
+  # under test only exists there.
+  fixture_full
+
+  # POSITIVE CONTROL: the same invocation with a usable $TMPDIR detaches fine
+  # and records nothing, so the record below is the missing TMPDIR and not the
+  # harness.
+  run env -u CLAUDE_CODE_ENTRYPOINT -u WORKLOG_DISABLE \
+    PATH="$STUB:$PATH" HOME="$FAKE_HOME" \
+    GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" WORKLOG_JSONL="$WORKLOG_JSONL" \
+    TMPDIR="$SCRATCH" WORKLOG_SETTLE_SECS=0 CLAUDE_STUB="$CLEAN" \
+    bash -c "printf '%s' \"\$1\" | bash \"\$2\"" _ "$(payload)" "$HOOK"
+  [ "$status" -eq 0 ]
+  no_log
+  # Let the detached child of the control finish before the real case runs, so
+  # its row cannot land mid-assertion below.
+  for _ in $(seq 1 40); do
+    if [ -s "$WORKLOG_JSONL" ]; then break; fi
+    sleep 0.25
+  done
+  : > "$WORKLOG_JSONL"
+  : > "$GATE_FAILOPEN_LOG"
+
+  run env -u CLAUDE_CODE_ENTRYPOINT -u WORKLOG_DISABLE \
+    PATH="$STUB:$PATH" HOME="$FAKE_HOME" \
+    GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" WORKLOG_JSONL="$WORKLOG_JSONL" \
+    TMPDIR="$SCRATCH/no-such-dir" WORKLOG_SETTLE_SECS=0 CLAUDE_STUB="$CLEAN" \
+    bash -c "printf '%s' \"\$1\" | bash \"\$2\"" _ "$(payload)" "$HOOK"
+  [ "$status" -eq 0 ]                    # never blocks, even blind
+  no_row
+  [ "$(why)" = "detach-failed" ]
+}
+
 @test "every why this hook emits survives gate-failopen's closed set unchanged" {
   # An unrecognized why is quarantined under an `unrecognized:` prefix, which
   # would silently keep these rows out of any rate a consumer computes.
   for w in transcript-unreadable judgment-unavailable store-unwritable \
-           malformed-payload non-object-payload no-jq; do
+           malformed-payload non-object-payload no-jq detach-failed; do
     : > "$GATE_FAILOPEN_LOG"
     env HOME="$FAKE_HOME" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
       bash -c ". '$HOOKS/lib/gate-failopen.sh'; gate_failopen 'worklog-record' '$w' 'sess1'"
@@ -804,6 +894,118 @@ SH
   drive "$CLEAN"
   run bash -c "wc -c < '$COUNT'"
   [ "$output" -eq 1 ]
+}
+
+# --------------------------------------------------------------------------
+# 8b. ...and the two fires OVERLAP, so a store scan alone cannot key them
+# --------------------------------------------------------------------------
+# Every test above pins WORKLOG_SYNC=1 and WORKLOG_SETTLE_SECS=0, which are
+# exactly the two conditions that make the race structurally impossible: the
+# fires serialize, and the first has finished writing before the second starts.
+# The deployed path does neither. Both fires detach, so fire 2 lands while fire
+# 1 is still inside a judgment call that has written nothing — a scan-then-
+# write reads "not seen", buys a second answer and appends a duplicate. These
+# tests drive the REAL detached path.
+
+# fire_detached — one Stop fire on the default (detached) dispatch.
+fire_detached() {
+  printf '%s' "${PAYLOAD:-$(payload)}" | env -u CLAUDE_CODE_ENTRYPOINT -u WORKLOG_DISABLE \
+    PATH="$STUB:$PATH" HOME="$FAKE_HOME" \
+    GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" WORKLOG_JSONL="$WORKLOG_JSONL" \
+    WORKLOG_SETTLE_SECS=0 CLAUDE_STUB="${1:-$CLEAN}" \
+    bash "$HOOK"
+}
+
+@test "two OVERLAPPING detached fires write one row and pay for one model call" {
+  fixture_full
+  COUNT="$SCRATCH/model-calls"
+
+  # POSITIVE CONTROLS. Both assertions at the end are counts, and a count that
+  # can never exceed 1 proves nothing. Seed each surface with the duplicate
+  # this test exists to forbid and watch the check SEE it, then reset.
+  printf '%s\n%s\n' '{"ask_uuid":"x"}' '{"ask_uuid":"x"}' > "$WORKLOG_JSONL"
+  run bash -c "wc -l < '$WORKLOG_JSONL'"
+  [ "$output" -eq 2 ]
+  printf 'xx' > "$COUNT"
+  run bash -c "wc -c < '$COUNT'"
+  [ "$output" -eq 2 ]
+  : > "$WORKLOG_JSONL"
+  : > "$COUNT"
+
+  # The stub counts the call BEFORE it sleeps, so a second call is visible
+  # immediately rather than only after the window closes. The sleep is what
+  # holds the race open: fire 1 sits in here, having written nothing, for the
+  # whole time fire 2 is deciding.
+  cat > "$STUB/claude" <<SH
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'x' >> "$COUNT"
+sleep 4
+printf '%s' "\${CLAUDE_STUB:-}"
+SH
+  chmod +x "$STUB/claude"
+
+  fire_detached "$CLEAN"
+  sleep 1                    # fire 1 is now inside the stub's 4s call
+  fire_detached "$CLEAN"     # ...and fire 2 arrives mid-window, as it does live
+
+  # Poll for the row, then wait past the stub's sleep so a SECOND child that
+  # wrongly ran to completion would have landed its duplicate before counting.
+  for _ in $(seq 1 60); do
+    if [ -s "$WORKLOG_JSONL" ]; then break; fi
+    sleep 0.25
+  done
+  sleep 3
+
+  run bash -c "wc -l < '$WORKLOG_JSONL'"
+  [ "$output" -eq 1 ]
+  run bash -c "wc -c < '$COUNT'"
+  [ "$output" -eq 1 ]
+  # The loser is a legitimate decline — another fire IS recording the turn —
+  # so it must not leave a fail-open behind.
+  no_log
+  # And the claim is released once the row is durable, so markers do not
+  # accumulate one-per-turn beside the store forever.
+  [ ! -d "$SCRATCH/.worklog.jsonl.claims/$U1" ]
+}
+
+@test "a claim marker cannot permanently suppress its turn" {
+  # A fire that claims and is then killed before appending leaves a marker
+  # nobody will release. Markers are per-ask_uuid, so a stuck one can only ever
+  # suppress its own turn — and it must not suppress even that one forever.
+  fixture_full
+  CLAIMS="$SCRATCH/.worklog.jsonl.claims"
+  mkdir -p "$CLAIMS/$U1"
+
+  # CONTROL: a FRESH marker really does hold the turn back. Without this, the
+  # reclaim below could pass on a marker that was never load-bearing.
+  run drive "$CLEAN"
+  [ "$status" -eq 0 ]
+  no_row
+  no_log
+
+  # Aged past any live fire, the marker is stolen and the turn is recorded.
+  touch -d '@1' "$CLAIMS/$U1"
+  run drive "$CLEAN"
+  [ "$status" -eq 0 ]
+  [ -s "$WORKLOG_JSONL" ]
+  [ "$(field .ask_uuid)" = "$U1" ]
+  no_log
+  [ ! -d "$CLAIMS/$U1" ]
+}
+
+@test "a claim directory that cannot be created fails OPEN rather than dropping the turn" {
+  # ADR-001: an environmental failure to claim is not evidence that someone
+  # else owns the turn. A possible duplicate row beats a silently dropped one.
+  fixture_full
+  CLAIMS="$SCRATCH/.worklog.jsonl.claims"
+  # A FILE where the claims directory must go — mkdir -p cannot proceed.
+  printf 'in the way\n' > "$CLAIMS"
+  run drive "$CLEAN"
+  [ "$status" -eq 0 ]
+  [ -s "$WORKLOG_JSONL" ]
+  [ "$(field .ask_uuid)" = "$U1" ]
+  no_log
 }
 
 @test "a non-numeric WORKLOG_DEDUP_SCAN falls back rather than disabling the dedup" {

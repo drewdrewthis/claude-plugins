@@ -72,8 +72,36 @@
 # ONE LINE PER TURN, AND STOP CAN FIRE TWICE FOR ONE TURN. am-i-done-gate.sh
 # BLOCKS the first Stop and releases the next, so a turn firing Stop twice is
 # the normal path in this fleet, not an edge case — and both fires bracket the
-# SAME turn, so both slice to the same ask_uuid. The append is therefore keyed:
-# a row whose ask_uuid is already present is not written again (wl_seen).
+# SAME turn, so both slice to the same ask_uuid.
+#
+# BOTH FIRES RUN CONCURRENTLY, so a store scan alone cannot key the append. The
+# default dispatch is wl_detach, so fire 2 does not queue behind fire 1: it
+# starts while fire 1 is still inside a judgment call bounded by
+# WORKLOG_MODEL_TIMEOUT (120s) that has written NOTHING yet. A scan-then-write
+# therefore reads "not seen", buys a second model answer, and appends a
+# duplicate — on the common path, not a rare one. The turn is claimed
+# ATOMICALLY instead, before the model call, with `mkdir` (atomic on POSIX, and
+# needing no flock this hook does not otherwise depend on):
+#
+#   wl_claim — the CONCURRENCY claim. One marker directory per ask_uuid beside
+#     the store. Whoever creates it owns the turn; a concurrent fire declines.
+#     Released once the row is on disk, so the markers do not accumulate.
+#   wl_seen  — the DURABLE record. Survives marker loss across a reboot, and
+#     covers every fire arriving after the marker was released.
+#
+# A fire proceeds only when BOTH say unseen. Either check failing for an
+# ENVIRONMENTAL reason (the claim directory cannot be made) fails OPEN — a
+# possible duplicate row beats a dropped turn (ADR-001).
+#
+# A CLAIM THAT DIES MID-TURN MUST NOT SUPPRESS ITS TURN FOREVER. A fire that
+# claims and is then killed before appending leaves a marker nobody will
+# release. Markers are therefore STEALABLE once older than
+# WORKLOG_CLAIM_TTL_SECS, which defaults to longer than any live fire can run
+# (settle + model timeout + margin) so a steal cannot race a working fire.
+# The tradeoff, deliberately: the crashed turn's row is lost until the next
+# Stop fire for it, and a steal on a badly skewed clock could duplicate one row.
+# Both beat the alternative — a permanent silent hole. Markers are keyed PER
+# ask_uuid, so a stuck one can never suppress any turn but its own.
 #
 # STORE LOCATION IS A COMPATIBILITY CONSTRAINT, not a preference. The worklog
 # does NOT live beside the transcript under ~/.claude/projects/, because
@@ -130,8 +158,21 @@ case "$WORKLOG_MODEL_TIMEOUT" in ''|*[!0-9]*|0) WORKLOG_MODEL_TIMEOUT=120 ;; esa
 # would write a duplicate row — silently disabling the one-row-per-turn key
 # with no failure anywhere to notice.
 case "$WORKLOG_DEDUP_SCAN"    in ''|*[!0-9]*|0) WORKLOG_DEDUP_SCAN=500 ;; esac
+# Age at which a claim marker is stealable. Derived from the other two rather
+# than fixed, so raising the model timeout cannot make a live fire's own claim
+# stealable out from under it. 0 is rejected like the counts above and for the
+# same class of reason: a zero TTL makes every marker instantly stealable,
+# which is the race with an extra step.
+WORKLOG_CLAIM_TTL_SECS="${WORKLOG_CLAIM_TTL_SECS:-$(( WORKLOG_SETTLE_SECS + WORKLOG_MODEL_TIMEOUT + 60 ))}"
+case "$WORKLOG_CLAIM_TTL_SECS" in
+    ''|*[!0-9]*|0) WORKLOG_CLAIM_TTL_SECS=$(( WORKLOG_SETTLE_SECS + WORKLOG_MODEL_TIMEOUT + 60 )) ;;
+esac
 
 INPUT=""
+# The marker this process holds, or empty when it holds none — either because
+# the turn had no key, or because claiming failed environmentally and the fire
+# proceeded unclaimed. wl_unclaim releases exactly what was taken.
+WL_MARKER=""
 
 # wl_sid — the session id, sanitized to the same character class
 # turn-state.sh's ts_session_id uses, AND falling back to the same single
@@ -275,6 +316,129 @@ wl_seen() {
             'fromjson? | select(type == "object") | select(.ask_uuid == $a) | "hit"' \
             2>/dev/null | head -n 1 || true)"
     [ "$hit" = "hit" ]
+}
+
+# wl_marker <store> <ask> — path of the claim marker for one turn, or empty.
+#
+# Beside the store and keyed by it, so two stores in one directory (the default
+# and a WORKLOG_JSONL override) cannot claim each other's turns.
+#
+# `ask` becomes a PATH COMPONENT, so it is sanitized to the same class wl_sid
+# uses first. A uuid is unaffected by that class; a `..` is not, and a traversal
+# reaching `mkdir` is not a thing to leave standing because today's caller is
+# trusted.
+wl_marker() {
+    local store="${1:-}" ask="${2:-}" dir base
+    [ -n "$store" ] || return 1
+    ask="${ask//[^A-Za-z0-9_-]/_}"
+    [ -n "$ask" ] || return 1
+    case "$store" in */*) dir="${store%/*}" ;; *) dir="." ;; esac
+    base="${store##*/}"
+    base="${base//[^A-Za-z0-9_.-]/_}"
+    printf '%s/.%s.claims/%s' "$dir" "$base" "$ask"
+}
+
+# wl_marker_age <marker> — seconds since the marker was created, or nonzero
+# when that cannot be determined. Undeterminable age is NOT treated as old: a
+# blind steal would reinstate the race the marker exists to close.
+wl_marker_age() {
+    local m="${1:-}" mt now
+    mt="$(stat -c %Y "$m" 2>/dev/null || date -r "$m" +%s 2>/dev/null || true)"
+    now="$(date +%s 2>/dev/null || true)"
+    case "$mt"  in ''|*[!0-9]*) return 1 ;; esac
+    case "$now" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$(( now - mt ))"
+}
+
+# wl_claim <store> <ask> — 0 when this fire may do the work, 1 when a
+# concurrent fire already owns this turn.
+#
+# `mkdir` is the whole mechanism: it is atomic on POSIX and fails when the
+# directory exists, so the check and the take are one syscall and cannot be
+# interleaved. Everything else here is about telling the three ways it can fail
+# apart.
+#
+# NO KEY, NO CLAIM. An empty ask means the uuid did not resolve — the same
+# condition under which wl_seen refuses to key. Claiming on a shared "empty"
+# marker would let one degraded turn suppress the next, so those turns proceed
+# unclaimed, exactly as they do today.
+wl_claim() {
+    local store="${1:-}" ask="${2:-}" marker age
+    marker="$(wl_marker "$store" "$ask")" || return 0
+    [ -n "$marker" ] || return 0
+    mkdir -p "${marker%/*}" 2>/dev/null || return 0   # environmental => fail OPEN
+    if mkdir "$marker" 2>/dev/null; then WL_MARKER="$marker"; return 0; fi
+    # mkdir failed and the marker is NOT there: the failure was environmental
+    # (unwritable directory, ENOSPC), not a competing fire. Fail OPEN — a
+    # possible duplicate row beats a dropped turn.
+    [ -d "$marker" ] || return 0
+    # Held. Steal only once no live fire could still be inside it.
+    age="$(wl_marker_age "$marker")" || return 1
+    [ -n "$age" ] || return 1
+    [ "$age" -gt "$WORKLOG_CLAIM_TTL_SECS" ] 2>/dev/null || return 1
+    rmdir "$marker" 2>/dev/null || return 1
+    mkdir "$marker" 2>/dev/null || return 1
+    WL_MARKER="$marker"
+    return 0
+}
+
+# wl_unclaim — release this process's marker, if it took one.
+# Called once the row is durable (wl_seen covers every later fire from then on)
+# and on the failure paths after a claim, so a fire that could not write does
+# not hold its turn hostage for the whole TTL.
+wl_unclaim() {
+    [ -n "$WL_MARKER" ] || return 0
+    rmdir "$WL_MARKER" 2>/dev/null || true
+    WL_MARKER=""
+}
+
+# wl_norm <text> — one line, single-spaced, trimmed. The comparison form for
+# quote verification: the candidate bodies the model was shown were already
+# whitespace-collapsed by the slicer's flat(), so both sides must be.
+wl_norm() {
+    printf '%s' "${1:-}" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//'
+}
+
+# wl_quote_verified <candidates> <quote> — prints the matching run of a
+# candidate body and returns 0 when the quote is traceable to a line the model
+# was actually shown; prints nothing and returns 1 when it is not.
+#
+# EVERY OTHER POINTER IN THE ROW IS VERIFIED — flag_uuids against the candidate
+# set, ask_uuid/end_uuid against the transcript — and flag_quote is asked for as
+# "a short verbatim quote", so it is checked too rather than trusted. A quote
+# that cannot be traced is worse than a null one: it reads as evidence.
+#
+# IT RETURNS THE TEXT rather than a bare verdict so the caller stores characters
+# SLICED FROM THE CANDIDATE BODY, never the model's re-typing of them. That
+# gives flag_quote the same provenance as flag_uuids (intersected with the
+# candidate set) and ask_uuid/end_uuid (re-read from the transcript): the stored
+# value is transcript-derived by construction, so it cannot drift from the value
+# that was verified if this matcher is ever loosened.
+#
+# Substring, not equality: the model is asked for a SHORT quote FROM a line, so
+# it is expected to be a fragment of one. The bodies are truncated to 200 chars
+# by flat(), so a genuine quote taken past that point fails to match and the
+# field is blanked — a false negative, and the direction to fail in.
+wl_quote_verified() {
+    local cands="${1:-}" quote="${2:-}" norm line body pre
+    norm="$(wl_norm "$quote")"
+    [ -n "$norm" ] || return 1
+    # Per line, never over the whole blob: joining the candidate lines would let
+    # a "quote" spanning two unrelated records match.
+    while IFS= read -r line; do
+        body="${line#*$'\t'}"; body="${body#*$'\t'}"; body="${body#*$'\t'}"
+        body="$(wl_norm "$body")"
+        [ -n "$body" ] || continue
+        case "$body" in
+            *"$norm"*)
+                # Quoted in the trim as in the case pattern, so a quote holding
+                # glob characters is matched and sliced literally, not expanded.
+                pre="${body%%"$norm"*}"
+                printf '%s' "${body:${#pre}:${#norm}}"
+                return 0 ;;
+        esac
+    done <<< "$cands"
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -616,10 +780,10 @@ wl_run() {
     printf '%s\n' "$present" | grep -Fxq -- "$end" 2>/dev/null || end=""
 
     # --- store, and the one-row-per-turn key ------------------------------
-    # Resolved BEFORE the judgment, not after, so a second Stop for a turn
-    # already on the record costs nothing. The model call is the expensive part
-    # of this hook; paying for it and then discarding the answer would make the
-    # dedup a correctness fix that doubles the bill on the common path.
+    # Both halves of the key are settled BEFORE the judgment, never after. The
+    # model call is the expensive part of this hook, and it is also the window
+    # the two Stop fires overlap in: a check made afterwards would buy a second
+    # answer on every double-Stop turn and then throw it away.
     local store; store="$(wl_store "$tx")"
     wl_store_ok "$store" "$tx" || gate_failopen worklog-record store-unwritable "$sid"
     case "$store" in
@@ -629,8 +793,13 @@ wl_run() {
                 || gate_failopen worklog-record store-unwritable "$sid" ;;
     esac
     # Already logged => a legitimate decline, and NOT a fail-open: the hook did
-    # its job the first time Stop fired.
+    # its job the first time Stop fired. The DURABLE half of the key.
     wl_seen "$store" "$ask" && exit 0
+    # ...and the CONCURRENCY half. The row above is only on disk once fire 1
+    # has finished; both fires are in flight together, so the turn is claimed
+    # atomically here, before anything expensive, and a fire that loses the
+    # claim declines. Also a legitimate decline: another fire IS recording it.
+    wl_claim "$store" "$ask" || exit 0
 
     # --- judgment -------------------------------------------------------
     local raw="" did="" flag="" quote="" fuuids="[]" judged=1
@@ -672,6 +841,16 @@ wl_run() {
     # Schema coherence: an unflagged row carries no anchors and no quote, so a
     # reader never has to ask what a quote with no flag meant.
     if [ "$flag" != "mistake" ]; then fuuids="[]"; quote=""; fi
+    # `did` is stored as the model wrote it; the quote is NOT, because unlike
+    # `did` it is a POINTER sold to the reader as verbatim. So the model's
+    # string is used only to LOCATE a candidate body the model was shown, and
+    # what gets stored is the matching run sliced out of that body — blanked
+    # when it locates nothing. Same treatment as flag_uuids, which are the
+    # candidate set's own uuids and not the model's retyping of them. Checked
+    # only on the flagged path; everywhere else the field is already empty.
+    if [ "$flag" = "mistake" ] && [ -n "$quote" ]; then
+        quote="$(wl_quote_verified "$cands" "$quote")" || quote=""
+    fi
 
     # --- write ----------------------------------------------------------
     # Built with `jq -n --arg`, never an echoed brace literal — the hard rule
@@ -697,9 +876,16 @@ wl_run() {
           flag:     (if $flag  == "" then null else $flag  end),
           flag_uuids: $fuuids,
           flag_quote: (if $quote == "" then null else $quote end)}' 2>/dev/null || true)"
-    [ -n "$row" ] || gate_failopen worklog-record store-unwritable "$sid"
+    # The claim is released on BOTH exits from here. A fire that could not write
+    # must not hold its turn for the whole TTL: the next Stop fire is the only
+    # chance that turn has left, and it should find the turn free.
+    [ -n "$row" ] || { wl_unclaim; gate_failopen worklog-record store-unwritable "$sid"; }
     printf '%s\n' "$row" >> "$store" 2>/dev/null \
-        || gate_failopen worklog-record store-unwritable "$sid"
+        || { wl_unclaim; gate_failopen worklog-record store-unwritable "$sid"; }
+    # Durable now, so wl_seen covers every later fire and the marker is spent.
+    # Released rather than kept, so one directory per turn does not accumulate
+    # beside the store forever.
+    wl_unclaim
 
     # Recorded LAST, and only after the mechanical row is safely on disk: the
     # machine-settled half of the turn is the durable part, and losing it to a
@@ -739,5 +925,8 @@ if [ "${WORKLOG_SYNC:-0}" = "1" ]; then
     wl_run
     exit 0
 fi
-wl_detach || gate_failopen worklog-record store-unwritable "$(wl_sid)"
+# NOT store-unwritable. wl_detach fails when `mktemp` fails or $TMPDIR is
+# unwritable — the store is never touched on this path, and naming it here
+# sends whoever reads the log to the wrong directory.
+wl_detach || gate_failopen worklog-record detach-failed "$(wl_sid)"
 exit 0

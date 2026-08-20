@@ -28,6 +28,10 @@
 # model-judged half wrote the mechanical half but could not obtain the
 # judgment. The row exists and is short a field; the record says why, so a
 # model outage is not read later as a turn where nothing happened.
+# detach-failed — a caller that hands its work to a detached child could not
+# launch one (no temp file for the payload, an unwritable $TMPDIR). Kept
+# distinct from store-unwritable: the store is not touched on that path, and
+# naming it points whoever reads the log at the wrong directory.
 # non-object-payload — stdin parsed, but the top-level value is not an envelope
 # (a bare string, an array, a number). Kept distinct from malformed-payload:
 # that one says the transport is broken, this one says something is plumbing
@@ -98,7 +102,7 @@ gate_failopen() {
         no-jq|reset-hook-never-ran|activity-undetermined|lib-unreadable:*) ;;
         store-unwritable|payload-shape-unrecognized|malformed-payload) ;;
         non-object-payload|skill-unresolvable) ;;
-        transcript-unreadable|judgment-unavailable) ;;
+        transcript-unreadable|judgment-unavailable|detach-failed) ;;
         *) why="unrecognized:${why}" ;;
     esac
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \
