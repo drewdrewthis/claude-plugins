@@ -105,6 +105,22 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   to `GATE_FAILOPEN_LOG` under gate `digest-record` — group by gate before
   computing any fail-open rate, since this one is a writer, not a gate.
 
+- **Turn worklog:** `hooks/worklog-record.sh` appends one JSONL line per turn
+  to a `worklog.jsonl` sibling of the session transcript, so a later pass can
+  see what happened without trawling raw transcripts. The record is split down
+  the middle: the mechanical half (`session`, `ask_uuid`, `end_uuid`,
+  `changed[]`) is derived from the transcript by the script, and the judged
+  half (`did`, `flag`, `flag_quote`, `flag_uuids`) comes from a cheap model
+  reading the turn cold. The model never types a uuid — it selects from a
+  candidate list, and every uuid it returns is intersected with that list
+  before the row is written, because a dead pointer is worse than a null one.
+  `flag` is `"mistake"` or null with no severity or category; it never writes
+  `mistakes.jsonl`, which feeds the failure-mode promotion path. Fires
+  detached so it cannot serialize a finishing worker or interfere with the
+  blocking `am-i-done-gate.sh` that shares the `Stop` array. Like
+  `digest-record`, it records blind failures under its own name — a writer,
+  not a gate.
+
 - **Fork-path agent prompt:** a `context: fork` skill takes its `agent:` as
   identity only — the agent file's prompt body and its `tools:` allowlist are
   NOT loaded into the fork. The
