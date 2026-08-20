@@ -134,6 +134,49 @@ PY
   echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["removed"]==1, d; assert d["total"]==1, d'
 }
 
+@test "a deleted then restored transcript is pruned and then re-indexed, not left stale" {
+  # #73: the full lifecycle — index it, delete it (prune must drop the row),
+  # recreate the identical content (must re-index, not silently stay pruned).
+  # The trap this is written to catch: the restored file can land on the same
+  # (mtime, size) the pruned row USED to carry. That pair alone must not be
+  # enough to skip it, because the row itself is gone — `existing` no longer
+  # has an entry for this file_path once prune deletes it, so the incremental
+  # check at the top of build (`existing.get(f) == (mtime, size)`) reads None
+  # and always misses for a just-restored file.
+  #
+  # A second, unrelated survivor session is required, not optional set-dressing:
+  # deleting the ONLY transcript makes `files` empty while `existing` still
+  # holds a row, which trips the deliberate empty-scan safeguard a few lines
+  # above the prune loop (`if not files and existing: raise ...`) — build then
+  # returns a JSON error, not the counters dict, and every assertion below
+  # would KeyError. The survivor keeps `files` non-empty through the whole
+  # lifecycle so the safeguard never fires and the prune path under test
+  # actually runs.
+  local f="$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl"
+  write_session "-home-me-proj" "aaa" "" "the quokka migration notes are distinctive"
+  write_session "-home-me-other" "survivor" "" "unrelated durable content about capybaras"
+  python3 "$SCRIPT" build >/dev/null
+
+  run python3 "$SCRIPT" search "quokka"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1, "not indexed before delete"'
+
+  local content
+  content="$(cat "$f")"
+  rm "$f"
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["removed"]==1, d; assert d["total"]==1, d'
+
+  run python3 "$SCRIPT" search "quokka"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==0, "prune left a stale hit"'
+
+  printf '%s' "$content" >"$f"
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["indexed"]==1, d; assert d["total"]==2, d'
+
+  run python3 "$SCRIPT" search "quokka"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1, "restored file was not re-indexed"'
+}
+
 @test "one unreadable transcript does not abort the build" {
   # A dangling symlink stands in for the real trigger: a transcript pruned
   # between the glob and the stat. Aborting discarded every session already
