@@ -9,4 +9,4 @@
 # session end would surface an error the user cannot act on (ADR-001: hooks fail
 # open). The index is rebuilt on demand by /recall anyway, so a miss here costs
 # latency, never correctness.
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-index.py" build >/dev/null 2>&1 &
+setsid python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-index.py" build >/dev/null 2>&1 &
