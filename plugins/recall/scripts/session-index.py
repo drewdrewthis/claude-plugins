@@ -6,15 +6,24 @@ Builds and queries a SQLite FTS5 index over all session JSONL files.
 Supports incremental updates (only re-parses changed files).
 
 Usage:
-    session-index.py build                            # Build/update the index
-    session-index.py search <query> [--limit N]       # Search sessions, output JSON
-    session-index.py context <path.jsonl> [--tail N]  # Recent messages from a session
+    session-index.py build                              # Build/update the index
+    session-index.py search <query> [--limit N]
+    session-index.py context <path.jsonl> --tail N      # Last N turns
+    session-index.py context <path.jsonl> --around L    # Turns around line L
+    session-index.py context <path.jsonl> --match Q     # Turns around the best
+                                                        # window for query Q
+
+Search hits are WINDOWS, not whole sessions: each carries a `line_offset` that
+`context --around` takes verbatim, so an excerpt is centred on the match rather
+than on the end of the file.
 """
 
 import argparse
+import collections
 import glob
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -44,13 +53,41 @@ PROJECTS_DIR = os.path.expanduser(
 NOISE_PREFIXES = ("Base directory for this skill:", "<local-command")
 MIN_TEXT_LEN = 10
 
+# ── Windowing ────────────────────────────────────────────────────────────────
+# The index stores one FTS5 row per WINDOW of a session, not one row per
+# session. Two defects fall out of the one-row-per-session shape, and this
+# fixes both:
+#
+#  1. A hit had no position. `search` could say "this session mentions X" but
+#     not WHERE, so the reader could only take the tail of the file and hope.
+#     A window row carries the line offset of its first message, so a hit
+#     points at its own passage (`context --around <line_offset>`).
+#
+#  2. Ranking was dominated by length. FTS5's bm25 normalises a row's score by
+#     that row's TOTAL token count across ALL columns, so per-column weights
+#     are a no-op — measured: weights 1.0/0.5/0.1 produced identical ordering.
+#     A whole session is thousands of tokens, and a session whose only content
+#     is one short prompt therefore outranked a long, substantive answer every
+#     time. Windows of COMPARABLE size make that normaliser near-constant
+#     across rows, so the term statistics decide the order instead of the
+#     document length. Each window is additionally tagged with its role
+#     composition (`roles`), which is what a follow-up composite ORDER BY would
+#     need if windowing alone proves insufficient — see
+#     scripts/tests/measure-ranking.py, which reproduces the measurement.
+#
+# A single message longer than WINDOW_CHARS is split across several windows, on
+# a whitespace boundary: otherwise one 4k-token assistant reply would remain a
+# single outsized row and reintroduce exactly the normalisation skew above.
+WINDOW_MESSAGES = 6
+WINDOW_CHARS = 1200
+
 # Bump whenever the table shape changes; a mismatch drops and rebuilds.
 #
 # ⚠ Bump it for a change in what gets EXTRACTED too, not only for a column. The
 # incremental path keys on (mtime, size), and a finished session's transcript
 # never changes again — so without a bump every already-indexed file is skipped
 # forever and the new content is only ever captured for sessions yet to happen.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _schema_version(db):
@@ -157,6 +194,8 @@ def _migrate(db):
 
 # Ordinals of the two prose columns in sessions_fts, named once here because
 # snippet() in search() addresses them positionally and has no way to check.
+# line_offset and roles are appended AFTER them, and UNINDEXED, precisely so
+# these two ordinals did not have to move.
 # Kept immediately above the CREATE VIRTUAL TABLE in get_db() — the only other
 # place the order is written down.
 USER_TEXT_COL = 3
@@ -208,6 +247,8 @@ def get_db():
                 project,
                 user_text,
                 assistant_text,
+                line_offset UNINDEXED,
+                roles UNINDEXED,
                 tokenize='porter unicode61'
             )
         """)
@@ -221,16 +262,30 @@ def get_db():
     return db
 
 
-def iter_messages(jsonl_path, roles):
-    """Yield (role, text) for real conversation turns, skipping harness noise.
+def iter_messages(jsonl_path, roles, start_line=1, stop_line=None):
+    """Yield (line_no, role, text) for real turns, skipping harness noise.
 
     One filter policy for both the indexer and the reader — they drifted apart
     upstream, so a change landed in one and not the other.
+
+    `line_no` is 1-based and counts EVERY line of the file, noise included, so
+    it is a stable address into the transcript that survives any later change
+    to the noise filter. It is what a search hit reports as `line_offset` and
+    what `context --around` takes back.
+
+    `start_line`/`stop_line` bound the read: the reader only ever wants a slice
+    of a transcript, and streaming the whole of a multi-megabyte file to return
+    ten turns is the read this replaces. `stop_line` is inclusive; the loop
+    breaks at it rather than consuming the rest of the file.
     """
     # Transcripts routinely contain non-ASCII; under LC_ALL=C the locale default
     # raises UnicodeDecodeError and the whole file is silently dropped.
     with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
-        for line in fh:
+        for line_no, line in enumerate(fh, 1):
+            if line_no < start_line:
+                continue
+            if stop_line is not None and line_no > stop_line:
+                break
             line = line.strip()
             if not line:
                 continue
@@ -261,7 +316,62 @@ def iter_messages(jsonl_path, roles):
             text = text.strip()
             if len(text) < MIN_TEXT_LEN or text.startswith(NOISE_PREFIXES):
                 continue
-            yield role, text
+            yield line_no, role, text
+
+
+def _chunk_text(text, size=WINDOW_CHARS):
+    """Split an oversized message on whitespace into <=size pieces.
+
+    Character-exact splitting would cut a word in half and hand FTS5 two
+    tokens that appear nowhere in the transcript, so the break moves back to
+    the last whitespace in the piece when there is one.
+    """
+    if len(text) <= size:
+        return [text]
+    pieces, rest = [], text
+    while len(rest) > size:
+        cut = rest.rfind(" ", 0, size)
+        if cut <= 0:
+            cut = size
+        pieces.append(rest[:cut].strip())
+        rest = rest[cut:].lstrip()
+    if rest:
+        pieces.append(rest)
+    return [p for p in pieces if p]
+
+
+def iter_windows(messages):
+    """Group (line_no, role, text) triples into bounded, comparable windows.
+
+    Yields a list of triples per window. A window closes at WINDOW_MESSAGES
+    messages or WINDOW_CHARS characters, whichever comes first; a single
+    message above WINDOW_CHARS is split by _chunk_text and its pieces carry
+    the SAME line_no, because they all live on that one transcript line.
+    """
+    current, chars = [], 0
+    for line_no, role, text in messages:
+        for piece in _chunk_text(text):
+            current.append((line_no, role, piece))
+            chars += len(piece)
+            if len(current) >= WINDOW_MESSAGES or chars >= WINDOW_CHARS:
+                yield current
+                current, chars = [], 0
+    if current:
+        yield current
+
+
+def window_roles(window):
+    """The role composition of a window: 'user', 'assistant' or 'user+assistant'.
+
+    Carried on the row (UNINDEXED) so a ranking change can discriminate on who
+    was speaking without re-reading the transcript.
+    """
+    roles = {role for _, role, _ in window}
+    if roles == {"user"}:
+        return "user"
+    if roles == {"assistant"}:
+        return "assistant"
+    return "user+assistant"
 
 
 def read_cwd(jsonl_path):
@@ -348,9 +458,11 @@ def build_index():
             # for the other role would roughly double it. read_cwd() below does
             # reopen the file, but it returns on the first record carrying a
             # cwd, which in a real transcript is line 1.
-            prompts, replies = [], []
-            for role, text in iter_messages(f, {"user", "assistant"}):
+            prompts, replies, turns = [], [], []
+            for line_no, role, text in iter_messages(f, {"user", "assistant"}):
                 (replies if role == "assistant" else prompts).append(text)
+                turns.append((line_no, role, text))
+            windows = list(iter_windows(turns))
             cwd = read_cwd(f)
         except Exception:
             # Deliberately broad: the failures that actually occur are shape
@@ -381,12 +493,20 @@ def build_index():
         """, (f, session_id, project, cwd, mtime, size,
               len(prompts), first_prompt, last_prompt))
 
+        # One row per WINDOW. Re-inserting a file means deleting all of its
+        # rows first — a shorter transcript would otherwise leave orphaned
+        # windows behind, pointing at line offsets that no longer exist.
         db.execute("DELETE FROM sessions_fts WHERE file_path = ?", (f,))
-        db.execute(
-            "INSERT INTO sessions_fts"
-            " (file_path, session_id, project, user_text, assistant_text)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (f, session_id, project, "\n".join(prompts), "\n".join(replies)))
+        for window in windows:
+            db.execute(
+                "INSERT INTO sessions_fts"
+                " (file_path, session_id, project, user_text, assistant_text,"
+                "  line_offset, roles)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (f, session_id, project,
+                 "\n".join(t for _, r, t in window if r != "assistant"),
+                 "\n".join(t for _, r, t in window if r == "assistant"),
+                 window[0][0], window_roles(window)))
 
         indexed += 1
         # Batched rather than per-file: committing every file made a cold build
@@ -467,6 +587,7 @@ def search(query, limit=10):
             SELECT
                 s.session_id, s.project, s.cwd, s.file_path, s.mtime,
                 s.message_count, s.first_prompt, s.last_prompt,
+                f.line_offset as line_offset, f.roles as roles,
                 snippet(sessions_fts, {USER_TEXT_COL}, '>>>', '<<<', '...', 24)
                     as snippet,
                 snippet(sessions_fts, {ASSISTANT_TEXT_COL}, '>>>', '<<<', '...', 24)
@@ -489,6 +610,10 @@ def search(query, limit=10):
         "project": row["project"],
         "cwd": display_cwd(row["cwd"]),
         "file_path": row["file_path"],
+        # The address of THIS hit inside the transcript. Hand it straight to
+        # `context --around` — that is the whole point of per-window rows.
+        "line_offset": int(row["line_offset"]),
+        "roles": row["roles"],
         "mtime": row["mtime"],
         "message_count": row["message_count"],
         "first_prompt": row["first_prompt"],
@@ -501,8 +626,20 @@ def search(query, limit=10):
     } for row in rows]
 
 
-def context(jsonl_path, tail=10):
-    """Recent user/assistant turns from one session."""
+# How far back of a requested offset `context --around` starts reading. The
+# point of --around is that a hit no longer costs a whole-file read; opening at
+# line 1 would give that back. 400 lines is far more transcript than the ten or
+# so turns a caller asks for, so the preceding half of the excerpt is never
+# short in practice, and the cost is bounded regardless of file size.
+AROUND_LOOKBACK_LINES = 400
+
+# Words FTS5 reads as syntax rather than as something to look for. --match does
+# its own scoring over the raw text, so it has to drop them itself.
+_QUERY_OPERATORS = {"and", "or", "not", "near"}
+
+
+def _resolve_transcript(jsonl_path):
+    """The real path of an indexed transcript, or a JSON-able error."""
     real = os.path.realpath(jsonl_path)
     projects = os.path.realpath(PROJECTS_DIR)
     # The contract is "reads indexed transcripts"; without this the subcommand
@@ -511,22 +648,141 @@ def context(jsonl_path, tail=10):
         raise IndexError_(f"{jsonl_path} is not under the transcripts directory")
     if not os.path.isfile(real):
         raise IndexError_(f"{jsonl_path} is not a file")
+    return real
 
-    messages = []
+
+def _present(line_no, role, text):
+    """One turn as the reader sees it, or None if nothing survives the strip."""
+    idx = text.find("<system-reminder>")
+    # A message that BEGINS with a reminder has idx == 0, which is the
+    # shape that actually occurs; `> 0` let all of them through.
+    if idx >= 0:
+        text = text[:idx].strip()
+    if not text:
+        return None
+    return {"role": role, "line": line_no, "text": text[:400]}
+
+
+def query_terms(query):
+    """The searchable words of a query, lowercased, operators removed."""
+    words = re.findall(r"\w+", (query or "").lower())
+    return [w for w in words if w not in _QUERY_OPERATORS and len(w) > 1]
+
+
+def _score_window(window, terms):
+    """How well one window answers `terms`.
+
+    Distinct terms present dominate, occurrences break ties — a window naming
+    every word of the query once beats one that repeats a single word. The
+    prefix fallback stands in for the porter stemmer the index uses and this
+    pass does not have: `shard` must still find "sharding".
+    """
+    blob = " ".join(t for _, _, t in window).lower()
+    distinct = occurrences = 0
+    for term in terms:
+        stem = term[:5] if len(term) > 5 else term
+        n = blob.count(stem)
+        if n:
+            distinct += 1
+            occurrences += n
+    return (distinct, occurrences)
+
+
+def best_window_offset(real, query):
+    """The line offset of the window that best answers `query`, or None.
+
+    Deliberately a re-scan of the transcript rather than an index lookup: it
+    must work for a file whose index row is stale, and `context` is documented
+    as reading transcripts, not the index. Memory stays bounded — only the
+    best window seen so far is held.
+    """
+    terms = query_terms(query)
+    if not terms:
+        raise IndexError_(f"query {query!r} has no searchable terms")
+    best_score, best_offset = (0, 0), None
+    for window in iter_windows(iter_messages(real, {"user", "assistant"})):
+        score = _score_window(window, terms)
+        if score[0] and score > best_score:
+            best_score, best_offset = score, window[0][0]
+    return best_offset
+
+
+def context(jsonl_path, tail=10, around=None, match=None):
+    """Turns from one session: the tail, or an excerpt centred on a position.
+
+    Three ways in, one shape out:
+      --tail N          the last N turns (the original behaviour, unchanged)
+      --around L        N turns centred on transcript line L, which is exactly
+                        what a search hit reports as `line_offset`
+      --match Q         the same, at the line the best-matching window starts
+
+    --around exists because one FTS row per session could only ever say "the
+    match is somewhere in here", so the reader took the END of the file and
+    frequently quoted something unrelated to why the session matched.
+    """
+    real = _resolve_transcript(jsonl_path)
+    if tail < 1:
+        raise IndexError_("--tail must be at least 1")
+
     try:
-        for role, text in iter_messages(real, {"user", "assistant"}):
-            idx = text.find("<system-reminder>")
-            # A message that BEGINS with a reminder has idx == 0, which is the
-            # shape that actually occurs; `> 0` let all of them through.
-            if idx >= 0:
-                text = text[:idx].strip()
-            if not text:
-                continue
-            messages.append({"role": role, "text": text[:400]})
+        if match is not None:
+            around = best_window_offset(real, match)
+            if around is None:
+                # Nothing matched. The tail is still a truthful answer to
+                # "show me this session", and is what the caller had before.
+                around = None
+        if around is not None:
+            return _context_around(real, around, tail)
+        return _context_tail(real, tail)
     except OSError as exc:
         raise IndexError_(f"could not read {jsonl_path}: {exc}") from exc
 
-    return messages[-tail:]
+
+def _context_tail(real, tail):
+    """The last `tail` turns, holding only that many in memory.
+
+    A deque rather than a full list sliced at the end: a long transcript is
+    megabytes of prose and the caller wants ten turns of it.
+    """
+    keep = collections.deque(maxlen=tail)
+    for line_no, role, text in iter_messages(real, {"user", "assistant"}):
+        item = _present(line_no, role, text)
+        if item:
+            keep.append(item)
+    return list(keep)
+
+
+def _context_around(real, around, tail):
+    """`tail` turns anchored on transcript line `around`.
+
+    ⚠ Anchored, not centred on the midpoint. A `line_offset` is the FIRST line
+    of the matching window, so the match itself lies at or AFTER it — a
+    half-before/half-after split walks backwards past the hit and returns an
+    excerpt that does not contain it. Measured: offset 79 with --tail 4 gave
+    lines 77-80 while the matched text sat on line 81. So most of the budget
+    goes forward, with a short lead-in for the question the passage answers.
+
+    Bounded at BOTH ends: the read starts AROUND_LOOKBACK_LINES before the
+    offset and stops as soon as the trailing budget is full, so the cost does
+    not grow with the size of the transcript.
+    """
+    before = collections.deque(maxlen=min(max(tail // 5, 1), 3))
+    after = []
+    start = max(1, around - AROUND_LOOKBACK_LINES)
+    for line_no, role, text in iter_messages(real, {"user", "assistant"}, start_line=start):
+        item = _present(line_no, role, text)
+        if not item:
+            continue
+        if line_no < around:
+            before.append(item)
+            continue
+        after.append(item)
+        # Stop as soon as enough follows the hit. `before` may be short (an
+        # offset near the top of the file), and taking the shortfall here
+        # keeps the excerpt `tail` long instead of silently truncating it.
+        if len(after) >= tail - len(before):
+            break
+    return (list(before) + after)[:tail]
 
 
 def main():
@@ -536,9 +792,20 @@ def main():
     p_search = sub.add_parser("search", help="search indexed sessions")
     p_search.add_argument("query")
     p_search.add_argument("--limit", type=int, default=10)
-    p_context = sub.add_parser("context", help="recent messages from one session")
+    p_context = sub.add_parser("context", help="messages from one session")
     p_context.add_argument("path")
-    p_context.add_argument("--tail", type=int, default=10)
+    p_context.add_argument(
+        "--tail", type=int, default=10,
+        help="how many turns to return (the last N, unless --around/--match)")
+    # Mutually exclusive: they name the same thing two ways, and passing both
+    # would silently honour one.
+    where = p_context.add_mutually_exclusive_group()
+    where.add_argument(
+        "--around", type=int, default=None,
+        help="centre the excerpt on this transcript line (a hit's line_offset)")
+    where.add_argument(
+        "--match", default=None,
+        help="centre the excerpt on the window that best matches this query")
     args = parser.parse_args()
 
     try:
@@ -547,7 +814,7 @@ def main():
         elif args.command == "search":
             result = search(args.query, args.limit)
         else:
-            result = context(args.path, args.tail)
+            result = context(args.path, args.tail, args.around, args.match)
     except IndexError_ as exc:
         fail(str(exc))
     except sqlite3.OperationalError as exc:

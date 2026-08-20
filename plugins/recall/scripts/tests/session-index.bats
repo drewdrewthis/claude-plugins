@@ -850,3 +850,149 @@ r = json.load(sys.stdin)
 assert r[0]["cwd"] is None, r[0]["cwd"]
 assert r[0]["project"] == "-home-me-my-project", r[0]["project"]'
 }
+
+# ─── per-window rows, positioned hits (#66) ─────────────────────────────────
+
+# write_long_session <project-dir> <session-id> <needle>
+#
+# A session long enough that the needle CANNOT be reached by taking the tail:
+# 40 filler exchanges, the needle in the middle, 40 more after it. This is the
+# shape the whole-session-per-row index got wrong — the match was real, the
+# excerpt shown was the end of the file.
+write_long_session() {
+  local project="$1" sid="$2" needle="$3"
+  mkdir -p "$SESSION_INDEX_PROJECTS/$project"
+  python3 - "$SESSION_INDEX_PROJECTS/$project/$sid.jsonl" "$needle" <<'PY'
+import json, sys
+path, needle = sys.argv[1], sys.argv[2]
+def rec(role, text):
+    return json.dumps({"type": role, "message": {"content": text}}) + "\n"
+with open(path, "w") as fh:
+    for i in range(40):
+        fh.write(rec("user", "filler question number %d about ordinary matters" % i))
+        fh.write(rec("assistant", "filler answer number %d about ordinary matters" % i))
+    fh.write(rec("user", "and what about the %s question" % needle))
+    fh.write(rec("assistant", "the %s is settled: we cache it and move on" % needle))
+    for i in range(40):
+        fh.write(rec("user", "trailing question number %d about other matters" % i))
+        fh.write(rec("assistant", "trailing answer number %d about other matters" % i))
+PY
+}
+
+@test "one session produces several FTS windows, not one row" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 -c "
+import sqlite3
+db = sqlite3.connect('$SESSION_INDEX_DB')
+print(db.execute('select count(*) from sessions_fts').fetchone()[0])
+print(db.execute('select count(*) from sessions').fetchone()[0])"
+  [ "$status" -eq 0 ]
+  local windows sessions
+  windows="$(echo "$output" | sed -n 1p)"
+  sessions="$(echo "$output" | sed -n 2p)"
+  [ "$sessions" -eq 1 ]
+  [ "$windows" -gt 1 ] || { echo "the session was stored as $windows row(s)"; return 1; }
+}
+
+@test "a search hit carries the line offset of the window that matched" {
+  # Without this the reader knows a session matched but not WHERE, which is
+  # why it fell back to the tail of the file.
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "quokkatron"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+hits = json.load(sys.stdin)
+assert hits, "the needle window did not match at all"
+off = hits[0]["line_offset"]
+assert isinstance(off, int), repr(off)
+# The needle sits after 40 exchanges (80 lines) and before the trailing 80.
+assert 75 <= off <= 90, "offset %r does not point at the needle window" % (off,)
+assert hits[0]["roles"] in ("user", "assistant", "user+assistant"), hits[0]["roles"]'
+}
+
+@test "every window row of a rebuilt transcript is replaced, not appended" {
+  # A shorter rewrite must not leave windows behind pointing at line offsets
+  # that no longer exist.
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  write_session "-home-me-proj" "aaa" "" "a much shorter conversation about quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 -c "
+import sqlite3
+db = sqlite3.connect('$SESSION_INDEX_DB')
+print(max(r[0] for r in db.execute('select line_offset from sessions_fts')))"
+  [ "$status" -eq 0 ]
+  [ "$output" -le 4 ] || { echo "stale windows survived: max offset $output"; return 1; }
+}
+
+@test "context --around centres the excerpt on the offset" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  local offset
+  offset="$(python3 "$SCRIPT" search "quokkatron" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["line_offset"])')"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --around "$offset" --tail 6
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert len(m) == 6, m
+assert any("quokkatron" in x["text"] for x in m), [x["text"] for x in m]
+assert any("filler" in x["text"] for x in m), "nothing BEFORE the hit was included"
+assert not any("trailing question number 39" in x["text"] for x in m), "this is the tail, not the excerpt"'
+}
+
+@test "context --around near the top of a transcript still returns tail turns" {
+  # `before` is short here, and the shortfall must be taken from after rather
+  # than silently returning half an excerpt.
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --around 1 --tail 6
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert len(m) == 6, m
+assert m[0]["line"] == 1, m[0]'
+}
+
+@test "context --match finds the passage in a long session" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --match "quokkatron" --tail 6
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert any("quokkatron" in x["text"] for x in m), [x["text"] for x in m]'
+}
+
+@test "context --match with no hit falls back to the tail rather than erroring" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --match "zzzznothinghere" --tail 3
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert len(m) == 3, m
+assert "trailing" in m[-1]["text"], m[-1]'
+}
+
+@test "context --tail still returns the end of the session" {
+  # Backward compatibility: the flag the skill used before --around existed.
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --tail 2
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert len(m) == 2, m
+assert "trailing answer number 39" in m[-1]["text"], m[-1]'
+}
+
+@test "context rejects --around together with --match" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --around 5 --match "quokkatron"
+  [ "$status" -ne 0 ]
+}
+
