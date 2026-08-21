@@ -1,6 +1,8 @@
 {
   "name": "heartbeats",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cron-as-units: /heartbeats renders a directory of markdown unit files into one marker-delimited managed region of your crontab, and diffs, drift-checks, or installs it. Suspended units stay visible as commented lines; install never touches a line outside the markers and never runs without explicit approval.",
-  "author": { "name": "Drü" }
+  "author": {
+    "name": "Drü"
+  }
 }
