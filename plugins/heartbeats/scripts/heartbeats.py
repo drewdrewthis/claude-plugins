@@ -27,7 +27,9 @@ Failure is never guessed at. A crontab whose markers are unpaired or duplicated
 is an error on every operation, not a "no block yet"; and a `crontab -l` that
 fails for any reason other than "this user has no crontab" is an error, not an
 empty crontab. Both defaults would end in the same place: a crontab containing
-the managed block and nothing else.
+the managed block and nothing else. Every `crontab` child runs under a timeout
+for the same reason: a wedged spool has to make a scheduled drift-check FAIL,
+not hang until someone notices it never reported.
 
 Exit codes: 0 success; 1 error; 2 approval required; 3 drift detected.
 
@@ -48,19 +50,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from units import (  # noqa: E402  (path shim above must run first)
-    UNIT_PREFIX,
     CrontabError,
     UnitError,
+    header_name,
     load_units,
     region_units,
     render_block,
     split_region,
-    without_cr,
 )
 
 EXIT_ERROR = 1
 EXIT_APPROVAL_REQUIRED = 2
 EXIT_DRIFT = 3
+
+# Ceiling on every `crontab` child process. subprocess.run blocks until the
+# child exits, and `crontab` reads and writes shared state that can wedge -- an
+# unresponsive spool, a stuck network mount -- so with no ceiling a scheduled
+# drift-check hangs for as long as the machine stays wedged instead of
+# reporting. Generous enough that a merely loaded box is not called a failure.
+CRONTAB_TIMEOUT_SECONDS = 30
 
 # The one `crontab -l` failure that genuinely means "empty". Every other
 # non-zero exit -- no permission, cron not installed, transient failure -- is
@@ -147,7 +155,21 @@ def read_crontab(crontab_file):
         return _to_lines(_decode(raw, str(crontab_file)))
 
     try:
-        result = subprocess.run(["crontab", "-l"], capture_output=True, check=False)
+        result = subprocess.run(
+            ["crontab", "-l"],
+            capture_output=True,
+            check=False,
+            timeout=CRONTAB_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # Same refusal as a non-zero exit, for the same reason: a read that did
+        # not finish tells us nothing about what the crontab holds, and the
+        # empty-crontab default would install over every unmanaged job.
+        raise CrontabError(
+            "`crontab -l` did not finish within %d seconds -- refusing to "
+            "treat this as an empty crontab, because installing over it would "
+            "delete every unmanaged job" % CRONTAB_TIMEOUT_SECONDS
+        )
     except OSError as error:
         raise CrontabError("cannot run `crontab -l`: %s" % error)
 
@@ -175,10 +197,17 @@ def write_crontab(crontab_file, lines):
         # Write-then-rename, not write_bytes. write_bytes opens with O_TRUNC,
         # so a failure part way through -- ENOSPC, a kill -- leaves a TRUNCATED
         # crontab: the same data loss this plugin exists to prevent, reached by
-        # a different road. os.replace within one directory is atomic, so the
-        # target holds either the old bytes or the new ones and never a prefix
-        # of either. The `crontab -` branch below needs no equivalent; cron
-        # swaps its own spool file atomically.
+        # a different road. os.replace within one directory is atomic, so a
+        # reader of the target sees either the old bytes or the new ones and
+        # never a prefix of either.
+        #
+        # That covers a crash of THIS process. Surviving a crash of the machine
+        # takes two more steps, done below: fsync the temp file before the
+        # rename, and fsync the directory after it. Without them the rename can
+        # be durable while the data behind it is still only in the page cache,
+        # which recovers to a crontab that is present and truncated -- the same
+        # loss, one layer down. The `crontab -` branch below needs no
+        # equivalent; cron swaps its own spool file.
         try:
             crontab_file.parent.mkdir(parents=True, exist_ok=True)
             descriptor, temp_name = tempfile.mkstemp(
@@ -189,6 +218,11 @@ def write_crontab(crontab_file, lines):
         try:
             with os.fdopen(descriptor, "wb") as stream:
                 stream.write(payload)
+                # flush moves the bytes out of Python's buffer; fsync moves
+                # them out of the kernel's. Both before the rename, so the name
+                # can never become durable ahead of the content it points at.
+                stream.flush()
+                os.fsync(stream.fileno())
             # mkstemp creates 0600; carry the existing file's mode across so a
             # rename is not also a silent permission change.
             if crontab_file.exists():
@@ -201,10 +235,51 @@ def write_crontab(crontab_file, lines):
             except OSError:
                 pass
             raise CrontabError("cannot write %s: %s" % (crontab_file, error))
+
+        # The rename has landed; only its DURABILITY is still open, and the
+        # directory entry itself needs an fsync of the DIRECTORY to survive a
+        # power loss. Reported separately from the block above and never as
+        # "cannot write", which would be false here -- the next reader of this
+        # crontab already sees the new bytes. The descriptor is closed in a
+        # finally so no failure below can leak it.
+        try:
+            directory = os.open(str(crontab_file.parent), os.O_RDONLY)
+        except OSError as error:
+            raise CrontabError(
+                "wrote %s, but could not open %s to flush the rename to disk: "
+                "%s -- the new crontab IS in place; a power loss before the "
+                "next sync could still lose it"
+                % (crontab_file, crontab_file.parent, error)
+            )
+        try:
+            os.fsync(directory)
+        except OSError as error:
+            raise CrontabError(
+                "wrote %s, but could not flush the rename to disk: %s -- the "
+                "new crontab IS in place; a power loss before the next sync "
+                "could still lose it" % (crontab_file, error)
+            )
+        finally:
+            os.close(directory)
         return
     try:
         result = subprocess.run(
-            ["crontab", "-"], input=payload, capture_output=True, check=False
+            ["crontab", "-"],
+            input=payload,
+            capture_output=True,
+            check=False,
+            timeout=CRONTAB_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # Deliberately NOT phrased as "nothing was written". The child was
+        # killed mid-flight after being handed the whole payload, so the spool
+        # may hold the old crontab, the new one, or neither -- unlike the read
+        # path, where a timeout costs nothing. Saying "nothing was written"
+        # would send the operator away from the one file that needs checking.
+        raise CrontabError(
+            "`crontab -` did not finish within %d seconds and was killed -- "
+            "the crontab MAY OR MAY NOT have been written; check it with "
+            "`crontab -l` before re-running" % CRONTAB_TIMEOUT_SECONDS
         )
     except OSError as error:
         raise CrontabError("cannot run `crontab -`: %s" % error)
@@ -288,17 +363,20 @@ def _build_parser():
 def _unit_header_names(lines):
     """Unit names on the per-unit header lines of a rendered region.
 
-    A suspended unit's header carries `[SUSPENDED] <reason>` after the name, so
-    only the first whitespace-separated token is the name.
+    Which lines are headers, and which token on one is the name, is the block's
+    wire format -- `units.header_name` owns it, and this asks rather than
+    re-deriving. Two copies of that rule drift apart, and the two readers here
+    are the drift reporter and the removed-unit count, which have to agree.
+
+    A header carrying no name yields nothing: `region_units` treats it as an
+    anomaly rather than a unit, so counting it as a removed one here would
+    report a removal that never happened.
     """
     names = []
     for line in lines:
-        bare = without_cr(line)
-        if not bare.startswith(UNIT_PREFIX):
-            continue
-        tokens = bare[len(UNIT_PREFIX) :].split()
-        if tokens:
-            names.append(tokens[0])
+        name = header_name(line)
+        if name:
+            names.append(name)
     return names
 
 

@@ -30,6 +30,10 @@
 # Requires bats >= 1.4 for $BATS_TEST_TMPDIR (guarded in setup). Deliberately
 # avoids bats >= 1.5 features such as `run --separate-stderr`.
 #
+# Assumes GNU coreutils and GNU sed on Linux, which is what CI runs. Several
+# tests use `sed -i` with no backup suffix; BSD and macOS sed reject that form,
+# so on those platforms the suite needs `gsed` on PATH as `sed`.
+#
 # Run: cd plugins/heartbeats && bats scripts/tests
 
 setup() {
@@ -298,6 +302,39 @@ BOMPY
   grep -q "bom-unit.md" "$ERRFILE"
   grep -q "BOM" "$ERRFILE"
   ! grep -q "Traceback" "$ERRFILE"
+}
+
+@test "c14: a *.md symlink whose target is missing is a named error, not a silent skip" {
+  local dir="$BATS_TEST_TMPDIR/dangling-units"
+  mkdir -p "$dir"
+  cp "$BASIC"/*.md "$dir/"
+  # `is_file()` follows the link, so this entry answers "not a file" exactly as
+  # a directory does -- and the quiet skip that answer used to earn would drop
+  # a unit out of the rendered block with nothing said anywhere.
+  ln -s "$dir/target-that-does-not-exist.md" "$dir/broken.md"
+
+  hb render --units-dir "$dir"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  grep -q "broken.md" "$ERRFILE"
+  ! grep -q "Traceback" "$ERRFILE"
+}
+
+@test "c15: a non-.md file and a directory named like a unit are both still ignored" {
+  local dir="$BATS_TEST_TMPDIR/mixed-units"
+  mkdir -p "$dir"
+  cp "$BASIC"/*.md "$dir/"
+  printf 'Notes about these units, for a human.\n' >"$dir/README.txt"
+  # The other half of c14. A directory gives the same `is_file()` answer as the
+  # broken symlink there, so the two are told apart on purpose: only the entry
+  # that cannot be resolved is fatal, or a directory beside the units would be.
+  mkdir -p "$dir/archive.md"
+
+  hb render --units-dir "$dir"
+  [ "$status" -eq 0 ]
+  [ ! -s "$ERRFILE" ]
+  [[ "$output" == *"example-daily-report"* ]]
+  [[ "$output" == *"example-weekly-sweep"* ]]
 }
 
 # --- (d) suspended units stay visible --------------------------------------
@@ -789,6 +826,34 @@ PY
   [ -z "$output" ]
 }
 
+# --- (w) the write path's failure branches -----------------------------------
+
+@test "w1: a crontab that cannot be written is a named error leaving no temp file" {
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "root ignores permission bits"
+  fi
+  local locked="$BATS_TEST_TMPDIR/locked-dir"
+  mkdir -p "$locked"
+  # Readable and searchable but not writable, so the READ side still answers
+  # "no crontab yet" and the run gets all the way to the write before failing.
+  chmod 500 "$locked"
+
+  hb install --approve --units-dir "$BASIC" --crontab-file "$locked/crontab.txt"
+  local seen="$status"
+  # Restored BEFORE the assertions, so a failing assertion still leaves bats
+  # able to clean up its own temp dir.
+  chmod 755 "$locked"
+
+  [ "$seen" -eq 1 ]
+  [ -z "$output" ]
+  grep -q "cannot write" "$ERRFILE"
+  ! grep -q "Traceback" "$ERRFILE"
+  # -A because the temp files are dotfiles. A failed write that leaves its
+  # partial `.heartbeats-*` behind is its own bug: the next run would find a
+  # directory filling with debris nobody named.
+  [ -z "$(ls -A "$locked")" ]
+}
+
 # --- (x) configuration resolution -------------------------------------------
 
 @test "x1: the crontab path can come from HEARTBEATS_CRONTAB_FILE instead of the flag" {
@@ -863,7 +928,13 @@ PY
 
 @test "z1: drift-check reports a unit header inside the block that carries no name" {
   python3 "$SCRIPT" render --units-dir "$BASIC" >"$CRONTAB"
+  # The trailing space in the replacement is load-bearing: UNIT_PREFIX ends in
+  # one, so without it the line stops being a unit header at all and the block
+  # drifts for a different reason. The grep pins that precondition where it can
+  # be read, rather than leaving the outcome assertion to fail three steps
+  # later with nothing pointing at the space.
   sed -i 's|^# heartbeats-unit: example-daily-report$|# heartbeats-unit: |' "$CRONTAB"
+  grep -q '^# heartbeats-unit: $' "$CRONTAB"
 
   hb drift-check --units-dir "$BASIC" --crontab-file "$CRONTAB"
   [ "$status" -eq 3 ]

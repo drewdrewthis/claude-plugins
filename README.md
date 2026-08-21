@@ -275,7 +275,7 @@ recurring job (`name`, `cron`, `command`, `log`, `enabled`, plus a required
 them into a single marker-delimited block and can `render`, `diff`,
 `drift-check`, or `install` it.
 
-What it guarantees, and why the guarantees are the feature:
+Guarantees:
 
 - **Only the managed block is ever rewritten.** Lines outside the markers come
   back byte for byte, CR bytes and all — absent a concurrent writer, since cron
@@ -286,7 +286,10 @@ What it guarantees, and why the guarantees are the feature:
   those lines are outside the managed block, so they are faithfully written
   back and can accumulate across installs through no fault of this tool.
 - **No auto-install.** `install` without `--approve` is a dry run that exits 2
-  having written nothing, and does not so much as compute the new crontab body.
+  having written nothing. It renders the block and diffs it against the live
+  managed region — that much it has to do to show you anything — and stops
+  there: the spliced crontab body is not computed until the approval gate has
+  been passed, so there is no dry-run path that builds one.
 - **It fails closed, loudly.** One unreadable unit renders nothing rather than
   a partial block; a crontab with unpaired or duplicated markers is an error on
   every operation rather than a "no block yet"; a `crontab -l` that fails for
@@ -303,7 +306,7 @@ exists so the tests never touch one.
 
 Tests:
 
-```
+```bash
 cd plugins/heartbeats && bats scripts/tests
 ```
 

@@ -127,6 +127,30 @@ def without_cr(line):
     return line[:-1] if line.endswith("\r") else line
 
 
+def header_name(line):
+    """Return the unit name carried by a per-unit header line.
+
+    Three answers, all distinct: `None` when `line` is not a header at all, the
+    EMPTY STRING when it is a header carrying no name, and the name otherwise.
+    A nameless header is drift rather than a unit, and a caller that cannot
+    tell it apart from an ordinary line cannot report it.
+
+    Only the first whitespace-separated token is the name -- a suspended unit's
+    header carries `[SUSPENDED] <reason>` after it. A trailing CR is tolerated
+    so a CRLF crontab's block reads exactly as an LF one does.
+
+    The single owner of that rule. `region_units` below and the removed-unit
+    count in `heartbeats.py` both come through here, because two copies of one
+    wire format drift apart and the drift is silent: each side keeps answering
+    confidently, about slightly different blocks.
+    """
+    bare = without_cr(line)
+    if not bare.startswith(UNIT_PREFIX):
+        return None
+    tokens = bare[len(UNIT_PREFIX) :].split()
+    return tokens[0] if tokens else ""
+
+
 def _split_frontmatter(text, filename):
     lines = text.split("\n")
     if not lines or lines[0].strip() != DELIMITER:
@@ -261,8 +285,10 @@ def parse_unit(text, filename):
 def load_units(units_dir):
     """Read every `*.md` in `units_dir` as a unit, sorted by name.
 
-    Non-`.md` files are ignored so a README can live beside the units. An empty
-    directory is valid and yields no units.
+    Non-`.md` files and directories are ignored so a README can live beside the
+    units. An empty directory is valid and yields no units. A `*.md` entry that
+    IS in the listing but resolves to nothing readable is the one shape that is
+    an error rather than one more skip -- see the guard below.
     """
     if not units_dir.is_dir():
         raise UnitError("units directory does not exist: %s" % units_dir)
@@ -278,8 +304,24 @@ def load_units(units_dir):
     units = []
     seen = {}
     for path in entries:
-        if not path.is_file() or path.suffix != ".md":
+        if path.suffix != ".md":
             continue
+        if path.is_dir():
+            # A directory whose name ends in `.md` is not a unit. Skipped as
+            # silently as a non-`.md` file, which is what it is.
+            continue
+        if not path.is_file():
+            # `is_file()` follows the link, so a `*.md` symlink whose target is
+            # gone answers False exactly as a directory does -- and skipping it
+            # would drop a job from the block with nothing said, in a module
+            # whose whole contract is that it fails closed and names the file.
+            # The entry is in the listing, so something is there to name.
+            raise UnitError(
+                "%s: is a *.md entry that cannot be resolved to a readable "
+                "file (a dangling symlink, or an entry that went away during "
+                "the scan) -- refusing to skip it, because a skipped unit "
+                "vanishes from the rendered block without a word" % path.name
+            )
         try:
             # Bytes, then a STRICT decode. `read_text` would do two harmful
             # things at once: universal-newline translation turns an interior
@@ -398,12 +440,10 @@ def region_units(region):
     current = None
 
     for raw in region:
-        line = without_cr(raw)
-        if line in (BEGIN_MARKER, END_MARKER):
+        if without_cr(raw) in (BEGIN_MARKER, END_MARKER):
             continue
-        if line.startswith(UNIT_PREFIX):
-            remainder = line[len(UNIT_PREFIX) :].split()
-            name = remainder[0] if remainder else ""
+        name = header_name(raw)
+        if name is not None:
             if not name:
                 anomalies.append("a unit header in the block carries no unit name")
                 current = None
