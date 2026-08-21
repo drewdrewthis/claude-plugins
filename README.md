@@ -15,6 +15,7 @@ design record.
 /plugin install about-my-person@drewdrewthis
 /plugin install take-note@drewdrewthis
 /plugin install recall@drewdrewthis
+/plugin install heartbeats@drewdrewthis
 ```
 
 ## Plugins
@@ -264,6 +265,49 @@ Tests:
 
 ```
 cd plugins/recall && bats scripts/tests hooks/tests
+```
+
+### heartbeats (0.1.0)
+
+`/heartbeats` — the crontab as generated output. One markdown unit file per
+recurring job (`name`, `cron`, `command`, `log`, `enabled`, plus a required
+`suspension_reason` + `restore_condition` when disabled); the script renders
+them into a single marker-delimited block and can `render`, `diff`,
+`drift-check`, or `install` it.
+
+Guarantees:
+
+- **Only the managed block is ever rewritten.** Lines outside the markers come
+  back byte for byte, CR bytes and all — absent a concurrent writer, since cron
+  exposes no lock and read-modify-write over a crontab is inherently racy. The
+  one normalisation is that a crontab whose last line lacks a newline gets one
+  on the next install that actually writes. Note that some cron builds
+  (Debian-family) prepend their own generated preamble to `crontab -l` output;
+  those lines are outside the managed block, so they are faithfully written
+  back and can accumulate across installs through no fault of this tool.
+- **No auto-install.** `install` without `--approve` is a dry run that exits 2
+  having written nothing. It renders the block and diffs it against the live
+  managed region — that much it has to do to show you anything — and stops
+  there: the spliced crontab body is not computed until the approval gate has
+  been passed, so there is no dry-run path that builds one.
+- **It fails closed, loudly.** One unreadable unit renders nothing rather than
+  a partial block; a crontab with unpaired or duplicated markers is an error on
+  every operation rather than a "no block yet"; a `crontab -l` that fails for
+  any reason other than "no crontab for this user" is an error rather than an
+  empty crontab. Each of those defaults would end with a crontab containing the
+  managed block and nothing else.
+- **Suspended jobs stay visible**, rendered as a commented line carrying the
+  reason and the restore condition, rather than vanishing from the file.
+
+Requires `python3` (stdlib only). Config: `HEARTBEATS_UNITS_DIR`, else
+`CODEX_ROOT` (default `~/.claude`) giving `<root>/heartbeats/units`.
+`HEARTBEATS_CRONTAB_FILE` substitutes a plain file for the real crontab and
+exists so the tests never touch one.
+
+Tests:
+
+```bash
+cd plugins/heartbeats && bats scripts/tests
 ```
 
 ## docs/
