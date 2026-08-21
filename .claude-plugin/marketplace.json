@@ -34,6 +34,11 @@
       "name": "just-recipes",
       "source": "./plugins/just-recipes",
       "description": "Teaches Claude to prefer named just recipes over ad hoc shell, using just's native discovery/introspection features."
+    },
+    {
+      "name": "heartbeats",
+      "source": "./plugins/heartbeats",
+      "description": "Cron jobs as unit files: /heartbeats renders a directory of markdown units into one marker-delimited managed block of the crontab, and diffs, drift-checks, or installs it behind an explicit approval flag."
     }
   ]
 }
