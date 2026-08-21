@@ -692,7 +692,6 @@ PY
 # actually matters is the one FORBIDDING inference from tone.
 # ---------------------------------------------------------------------------
 wl_prompt() {
-    local cands="$1"
     cat <<EOF
 You are reading one turn of an agent transcript and writing a single worklog row.
 
@@ -726,6 +725,24 @@ that block verbatim will be discarded.
 "flag_quote" — null when flag is null. Otherwise a short verbatim quote, at
 most 200 characters, from the line that carries the correction.
 
+CANDIDATES (uuid, where, kind, text) follow as the user message.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# wl_candidates — the DATA half, sent as the user message.
+#
+# Split from wl_prompt deliberately. Piping brief and data together as one
+# stdin blob makes the CLI read the whole thing as USER content, so the brief
+# arrives as something to react to rather than as standing instructions.
+# Measured on this repo's own transcript, n=6 per arm, same model and same
+# candidates: delivering the brief on stdin caught the correction in the window
+# 0/6 times and emitted 0 flags; delivering it via --system-prompt caught it 5/6
+# times. The wording never changed — only which channel carried it.
+# ---------------------------------------------------------------------------
+wl_candidates() {
+    local cands="$1"
+    cat <<EOF
 CANDIDATES (uuid, where, kind, text):
 $cands
 EOF
@@ -804,9 +821,10 @@ wl_run() {
     # --- judgment -------------------------------------------------------
     local raw="" did="" flag="" quote="" fuuids="[]" judged=1
     if command -v claude >/dev/null 2>&1; then
-        raw="$(wl_prompt "$cands" \
+        raw="$(wl_candidates "$cands" \
             | WORKLOG_DISABLE=1 timeout "$WORKLOG_MODEL_TIMEOUT" \
               claude -p --model "$WORKLOG_MODEL" --output-format text \
+                     --system-prompt "$(wl_prompt)" \
                      --allowed-tools '' 2>/dev/null || true)"
     fi
     # Take the outermost brace span: a ```json fence or a stray sentence around

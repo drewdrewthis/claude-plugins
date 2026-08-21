@@ -74,9 +74,15 @@ setup() {
   # judgment it is testing against inline.
   STUB="$SCRATCH/bin"
   mkdir -p "$STUB"
+  # CLAUDE_ARGV_LOG / CLAUDE_STDIN_LOG capture HOW the hook called the model,
+  # not just that it did. Without them the stub is blind to which channel
+  # carried the brief, and the delivery-channel regression below cannot fail.
+  export CLAUDE_ARGV_LOG="$SCRATCH/claude-argv.txt"
+  export CLAUDE_STDIN_LOG="$SCRATCH/claude-stdin.txt"
   cat > "$STUB/claude" <<'SH'
 #!/usr/bin/env bash
-cat >/dev/null
+[ -n "${CLAUDE_ARGV_LOG:-}" ] && printf '%s\0' "$@" >>"$CLAUDE_ARGV_LOG"
+if [ -n "${CLAUDE_STDIN_LOG:-}" ]; then cat >>"$CLAUDE_STDIN_LOG"; else cat >/dev/null; fi
 printf '%s' "${CLAUDE_STUB:-}"
 SH
   chmod +x "$STUB/claude"
@@ -1082,4 +1088,35 @@ SH
   [ "$output" -eq 2 ]
   run bash -c "while IFS= read -r l; do printf '%s' \"\$l\" | jq -e . >/dev/null || exit 1; done < '$WORKLOG_JSONL'"
   [ "$status" -eq 0 ]
+}
+
+# --- how the brief reaches the model -------------------------------------
+#
+# These two pin the DELIVERY CHANNEL, which every other test in this file is
+# blind to: the stub returns CLAUDE_STUB no matter how it was invoked, so the
+# whole suite passed while the brief was arriving as user content. Measured on
+# a real transcript, n=6 per arm, that difference was 0/6 vs 5/6 on catching
+# the correction in the window. A behaviour worth 0-vs-5 needs a test that
+# fails when it regresses.
+
+@test "the judgment brief is delivered as a system prompt, not as user content" {
+  fixture_full
+  drive "$CLEAN"
+  # argv is NUL-delimited, so a brief containing newlines stays one field.
+  run bash -c "tr '\0' '\n' < '$CLAUDE_ARGV_LOG' | grep -Fxq -- '--system-prompt'"
+  [ "$status" -eq 0 ]
+  # The brief itself must be the value, not a path or a placeholder.
+  run bash -c "tr '\0' '\n' < '$CLAUDE_ARGV_LOG' | grep -q 'writing a single worklog row'"
+  [ "$status" -eq 0 ]
+}
+
+@test "the candidates go on stdin and the brief does not" {
+  fixture_full
+  drive "$CLEAN"
+  run bash -c "grep -q 'CANDIDATES' '$CLAUDE_STDIN_LOG'"
+  [ "$status" -eq 0 ]
+  # The instruction text belongs to the system channel only. If it shows up on
+  # stdin too, the split silently regressed back to one blob.
+  run bash -c "grep -q 'writing a single worklog row' '$CLAUDE_STDIN_LOG'"
+  [ "$status" -ne 0 ]
 }
