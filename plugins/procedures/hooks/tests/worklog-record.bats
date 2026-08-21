@@ -200,7 +200,13 @@ why()      { jq -r '.why' "$GATE_FAILOPEN_LOG" 2>/dev/null; }
 no_log()   { [ ! -s "$GATE_FAILOPEN_LOG" ]; }
 no_row()   { [ ! -s "$WORKLOG_JSONL" ]; }
 
-CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
+# The default model response. Its quote is VERBATIM from $U1's body ("do the
+# thing") because an entry whose quote cannot be located in the candidate it
+# cites is dropped — a fixture with an invented quote would silently produce
+# empty arrays and every assertion built on it would pass for the wrong reason.
+CLEAN="$(jq -nc --arg u "11111111-1111-4111-8111-11111111aaa1" \
+  '{requests:[{text:"asked for the thing",quote:"do the thing",uuid:$u}],
+    outcomes:[],mistakes:[]}')"
 
 # ==========================================================================
 # 1. the mechanical half
@@ -218,7 +224,14 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
   fixture_full
   drive "$CLEAN"
   run bash -c "jq -r 'keys|sort|join(\",\")' '$WORKLOG_JSONL'"
-  [ "$output" = "ask_uuid,changed,did,end_uuid,flag,flag_quote,flag_uuids,session,ts" ]
+  [ "$output" = "ask_uuid,end_uuid,mistakes,outcomes,requests,session,ts" ]
+}
+
+@test "every entry carries text, quote and a uuid pointer — never a bare claim" {
+  fixture_full
+  drive "$CLEAN"
+  run bash -c "jq -r '.requests[0]|keys|sort|join(\",\")' '$WORKLOG_JSONL'"
+  [ "$output" = "quote,text,uuid" ]
 }
 
 @test "ask_uuid is the LAST genuine user prompt, not the first in the file" {
@@ -243,18 +256,37 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
   done
 }
 
+# `changed` was dropped FROM THE ROW — it overlapped `outcomes` — but the
+# slicer still computes it and the path detection is still worth protecting
+# from regression. So these assert against wl_slice's own output rather than
+# against a row field that no longer exists. Deleting them instead would have
+# silently discarded the detection coverage along with the field.
+# The hook cannot be sourced as a library: its top-level dispatch reads stdin
+# and exits. So the function is lifted out by text and run on its own. Lifting
+# the DEFINITION rather than re-implementing it is what keeps this a test of
+# production code instead of a test of a copy.
+slice_changed() {
+  python3 - "$HOOK" > "$SCRATCH/slice.fn" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+i = src.index('wl_slice() {')
+j = src.index('\nPY\n}\n', i) + len('\nPY\n}\n')
+sys.stdout.write(src[i:j])
+PY
+  bash -c "source '$SCRATCH/slice.fn'; wl_slice '$TX' 60" 2>/dev/null \
+    | jq -r '.changed|join(",")'
+}
+
 @test "changed is pulled from Write and Edit tool calls" {
   fixture_full
-  drive "$CLEAN"
-  run bash -c "jq -r '.changed|join(\",\")' '$WORKLOG_JSONL'"
+  run slice_changed
   [[ "$output" == *"/repo/a.md"* ]]
   [[ "$output" == *"/repo/b.md"* ]]
 }
 
 @test "changed picks up a Bash redirect target and a sed -i target" {
   fixture_full
-  drive "$CLEAN"
-  run bash -c "jq -r '.changed|join(\",\")' '$WORKLOG_JSONL'"
+  run slice_changed
   [[ "$output" == *"/repo/c.txt"* ]]
   [[ "$output" == *"/repo/d.md"* ]]
 }
@@ -270,8 +302,7 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
     tool_line "$U3" Bash '{"command":"sed -i -e s/a/b/ /repo/two.md"}'
     text_line "$U6" "edited"
   } > "$TX"
-  drive "$CLEAN"
-  run bash -c "jq -r '.changed|join(\",\")' '$WORKLOG_JSONL'"
+  run slice_changed
   [[ "$output" != *"s/x/y/"* ]]
   [[ "$output" != *"s/a/b/"* ]]
   [[ "$output" == *"/repo/one.md"* ]]
@@ -285,23 +316,92 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
     tool_line "$U3" Bash '{"command":"grep -rn foo /repo > /dev/null"}'
     text_line "$U6" "looked"
   } > "$TX"
-  drive "$CLEAN"
-  [ "$(field '.changed|length')" -eq 0 ]
+  run slice_changed
+  [ -z "$output" ]
 }
 
-@test "changed comes from the transcript, NEVER from the model" {
-  # THE LOAD-BEARING TEST. The stub names a file that was never touched and
-  # omits the two that were. The record must ignore it entirely.
+@test "a key the schema does not name cannot enter the record" {
+  # THE LOAD-BEARING TEST. The stub returns extra top-level keys, including the
+  # dropped `changed`. The row is BUILT from a fixed jq template rather than
+  # merged from the model's object, so none of them can appear.
   fixture_full
-  drive '{"did":"x","changed":["/fabricated/by-the-model.md"],"flag":null,"flag_uuids":[],"flag_quote":null}'
-  run bash -c "jq -r '.changed|join(\",\")' '$WORKLOG_JSONL'"
+  drive '{"requests":[],"outcomes":[],"mistakes":[],"changed":["/fabricated/by-the-model.md"],"severity":"high","did":"x"}'
+  run bash -c "jq -r 'keys|sort|join(\",\")' '$WORKLOG_JSONL'"
+  [ "$output" = "ask_uuid,end_uuid,mistakes,outcomes,requests,session,ts" ]
+  run bash -c "cat '$WORKLOG_JSONL'"
   [[ "$output" != *"fabricated"* ]]
-  [[ "$output" == *"/repo/a.md"* ]]
+}
+
+@test "a quote the model invented is dropped, not written as evidence" {
+  # The whole point of the quote field. The stub cites a real uuid but a quote
+  # that appears in NO candidate body; the entry must not survive, because a
+  # summary carrying an unverifiable quote reads as evidence.
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"claims a thing",quote:"words nobody in this transcript said",uuid:$u}],
+      outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 0 ]
+}
+
+@test "a quote cited to the WRONG line is dropped even though the text is real" {
+  # Verbatim from $U0's body, but attributed to $U1. Matching the quote against
+  # the whole blob would accept this; matching it against the body of the line
+  # it CITES is what makes the uuid a real pointer rather than decoration.
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"misaddressed",quote:"an earlier prompt",uuid:$u}],
+      outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 0 ]
+}
+
+@test "a uuid outside the candidate set is dropped" {
+  fixture_full
+  drive '{"requests":[{"text":"bad pointer","quote":"do the thing","uuid":"99999999-9999-4999-8999-99999999zzzz"}],"outcomes":[],"mistakes":[]}'
+  [ "$(field '.requests|length')" -eq 0 ]
+}
+
+@test "a mistake needs BOTH the offense and the correction to be recorded" {
+  # One uuid names a moment, not a correction. Without the pair there is
+  # nothing for a reader to compare, so the entry is dropped.
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[],outcomes:[],
+      mistakes:[{text:"only one anchor",quote:"do the thing",uuids:[$u]}]}')"
+  [ "$(field '.mistakes|length')" -eq 0 ]
+}
+
+@test "a mistake pair spanning two turns is kept, and keeps both uuids" {
+  fixture_full
+  drive "$(jq -nc --arg a "$U0" --arg b "$U1" \
+    '{requests:[],outcomes:[],
+      mistakes:[{text:"offense then correction",quote:"do the thing",uuids:[$a,$b]}]}')"
+  [ "$(field '.mistakes|length')" -eq 1 ]
+  [ "$(field '.mistakes[0].uuids|length')" -eq 2 ]
+}
+
+@test "an over-long text is truncated to the documented cap, not dropped" {
+  fixture_full
+  local long
+  long="$(python3 -c 'print("x"*400)')"
+  drive "$(jq -nc --arg u "$U1" --arg t "$long" \
+    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests[0].text|length')" -eq 100 ]
+}
+
+@test "the stored quote is SLICED from the transcript, not the model's retyping" {
+  # The model sends the quote with mangled spacing. What lands must be the run
+  # as it appears in the candidate body, so the field cannot drift from what
+  # was actually verified.
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"spacing mangled",quote:"do   the    thing",uuid:$u}],
+      outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests[0].quote')" = "do the thing" ]
 }
 
 @test "the model cannot overwrite session, ts, ask_uuid or end_uuid either" {
   fixture_full
-  drive '{"did":"x","session":"evil","ts":"1999-01-01T00:00:00Z","ask_uuid":"nope","end_uuid":"nope","flag":null,"flag_uuids":[],"flag_quote":null}'
+  drive '{"requests":[],"outcomes":[],"mistakes":[],"session":"evil","ts":"1999-01-01T00:00:00Z","ask_uuid":"nope","end_uuid":"nope"}'
   [ "$(field .session)" = "$SID" ]
   [ "$(field .ask_uuid)" = "$U1" ]
   [ "$(field .end_uuid)" = "$U5" ]
@@ -313,104 +413,96 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
 # 2. uuid discipline
 # ==========================================================================
 
-@test "a flag_uuid that is not in the candidate set is dropped" {
+@test "a mistake uuid that is not in the candidate set is dropped" {
+  # The bad uuid is removed and the entry survives on the remaining pair.
   fixture_full
-  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a,"deadbeef-0000-4000-8000-000000000000"],flag_quote:"no"}')"
-  run bash -c "jq -r '.flag_uuids|join(\",\")' '$WORKLOG_JSONL'"
-  [ "$output" = "$U1" ]
+  drive "$(jq -nc --arg a "$U0" --arg b "$U1" \
+    '{requests:[],outcomes:[],
+      mistakes:[{text:"x",quote:"do the thing",
+                 uuids:[$a,$b,"deadbeef-0000-4000-8000-000000000000"]}]}')"
+  run bash -c "jq -r '.mistakes[0].uuids|join(\",\")' '$WORKLOG_JSONL'"
+  [ "$output" = "$U0,$U1" ]
 }
 
 @test "a transposed uuid resolves to nothing and is dropped, not written" {
   # 11111111-...-aaa1 with two characters swapped. Valid-looking, points nowhere.
+  # With only the transposed uuid left the pair is incomplete, so the whole
+  # entry goes — a mistake anchored to one line cannot be audited.
   fixture_full
-  drive "$(jq -nc '{did:"x",flag:"mistake",flag_uuids:["11111111-1111-4111-8111-11111111aa1a"],flag_quote:"no"}')"
-  [ "$(field '.flag_uuids|length')" -eq 0 ]
+  drive "$(jq -nc --arg a "$U0" \
+    '{requests:[],outcomes:[],
+      mistakes:[{text:"x",quote:"an earlier prompt",
+                 uuids:[$a,"11111111-1111-4111-8111-11111111aa1a"]}]}')"
+  [ "$(field '.mistakes|length')" -eq 0 ]
 }
 
-@test "flag_uuids spanning two turns are both kept — a mistake needs an offense and a correction" {
+@test "a non-string in a uuid list cannot reach the record" {
   fixture_full
-  drive "$(jq -nc --arg a "$U0" --arg b "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a,$b],flag_quote:"do the thing"}')"
-  run bash -c "jq -r '.flag_uuids|join(\",\")' '$WORKLOG_JSONL'"
+  drive "$(jq -nc --arg a "$U0" --arg b "$U1" \
+    '{requests:[],outcomes:[],
+      mistakes:[{text:"x",quote:"do the thing",uuids:[$a,7,null,{},$b]}]}')"
+  run bash -c "jq -r '.mistakes[0].uuids|join(\",\")' '$WORKLOG_JSONL'"
   [ "$output" = "$U0,$U1" ]
 }
 
-@test "a non-string in flag_uuids cannot reach the record" {
-  fixture_full
-  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a,7,null,{}],flag_quote:"q"}')"
-  run bash -c "jq -r '.flag_uuids|join(\",\")' '$WORKLOG_JSONL'"
-  [ "$output" = "$U1" ]
-}
-
 # ==========================================================================
-# 3. the flag is inert and narrow
+# 3. the mistakes array is inert and narrow
 # ==========================================================================
 
-@test "flag is null on an ordinary turn" {
+@test "mistakes is empty on an ordinary turn" {
   fixture_full
   drive "$CLEAN"
-  [ "$(field .flag)" = "null" ]
+  [ "$(field '.mistakes|length')" -eq 0 ]
 }
 
-@test "any flag value other than the exact string mistake becomes null" {
+@test "an entry with no text is dropped even when its quote verifies" {
+  # text is the claim; a quote with nothing claimed about it is not a record.
   fixture_full
-  drive '{"did":"x","flag":"severe","flag_uuids":[],"flag_quote":null}'
-  [ "$(field .flag)" = "null" ]
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"",quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 0 ]
 }
 
-@test "an unflagged row carries no anchors and no quote" {
-  # Schema coherence: a reader must never have to ask what a quote with no
-  # flag was supposed to mean.
+@test "a quote copied from a candidate line survives verification" {
+  # POSITIVE CONTROL for the dropping tests: verification must be capable of
+  # PASSING, or "the array was empty" proves nothing about the check.
   fixture_full
-  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:null,flag_uuids:[$a],flag_quote:"stray"}')"
-  [ "$(field '.flag_uuids|length')" -eq 0 ]
-  [ "$(field .flag_quote)" = "null" ]
+  drive "$CLEAN"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [ "$(field '.requests[0].quote')" = "do the thing" ]
 }
 
-@test "a flag_quote copied from a candidate line survives verification" {
-  # POSITIVE CONTROL for the two blanking tests below: verification must be
-  # capable of PASSING, or "the field was null" proves nothing about the check.
-  # "do the thing" is $U1's own text, so it is in the candidate bodies verbatim.
+@test "one bad entry is dropped without taking the good ones with it" {
+  # Per-entry verification, not all-or-nothing: a single unverifiable quote
+  # must not cost the reader the rest of the row.
   fixture_full
-  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a],flag_quote:"do the thing"}')"
-  [ "$(field .flag_quote)" = "do the thing" ]
+  drive "$(jq -nc --arg u "$U1" --arg e "$U0" \
+    '{requests:[{text:"good",quote:"do the thing",uuid:$u},
+                {text:"bad",quote:"never said anywhere",uuid:$e}],
+      outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [ "$(field '.requests[0].text')" = "good" ]
 }
 
-@test "a flag_quote traceable to no candidate line is blanked, not written" {
-  # flag_quote is a POINTER sold to the reader as verbatim, and it is the only
-  # one the model was ever trusted on: flag_uuids are intersected with the
-  # candidate set, ask_uuid/end_uuid are re-checked against the transcript. An
-  # untraceable quote reads as evidence, so it is checked the same way.
-  fixture_full
-  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a],flag_quote:"a sentence nobody in this transcript ever said"}')"
-  [ "$(field .flag_quote)" = "null" ]
-  # ...and blanking the quote does not discard the rest of the flag.
-  [ "$(field .flag)" = "mistake" ]
-  [ "$(field '.flag_uuids|length')" -eq 1 ]
-}
-
-@test "flag_quote verification ignores whitespace, not words" {
-  # Candidate bodies reach the model whitespace-collapsed by the slicer's
-  # flat(), so a quote re-typed with different spacing is the same quote and
-  # must survive. Both sides are normalized identically.
-  fixture_full
-  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a],flag_quote:"do   the\n thing"}')"
-  [ "$(field .flag_quote)" = "do the thing" ]
-}
-
-@test "a flag_quote cannot be stitched together from two different candidates" {
+@test "a quote cannot be stitched together from two different candidates" {
   # "an earlier answer" and "do the thing" are separate records. Matching over
   # the joined candidate blob rather than per line would accept a span crossing
   # them, which points at a line that does not exist.
   fixture_full
-  drive "$(jq -nc --arg a "$U1" '{did:"x",flag:"mistake",flag_uuids:[$a],flag_quote:"an earlier answer do the thing"}')"
-  [ "$(field .flag_quote)" = "null" ]
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"stitched",quote:"an earlier answer do the thing",uuid:$u}],
+      outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 0 ]
 }
 
-@test "no severity, category or failure-mode key can enter the record" {
+@test "no severity, category or failure-mode key can enter an entry" {
   fixture_full
-  drive '{"did":"x","flag":"mistake","flag_uuids":[],"flag_quote":"q","severity":"high","category":"process","pattern":"some-fm"}'
-  run bash -c "jq -r 'keys|sort|join(\",\")' '$WORKLOG_JSONL'"
-  [ "$output" = "ask_uuid,changed,did,end_uuid,flag,flag_quote,flag_uuids,session,ts" ]
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"x",quote:"do the thing",uuid:$u,
+                 severity:"high",category:"process",pattern:"some-fm"}],
+      outcomes:[],mistakes:[]}')"
+  run bash -c "jq -r '.requests[0]|keys|sort|join(\",\")' '$WORKLOG_JSONL'"
+  [ "$output" = "quote,text,uuid" ]
 }
 
 # ==========================================================================
@@ -632,22 +724,26 @@ CLEAN='{"did":"did a thing","flag":null,"flag_uuids":[],"flag_quote":null}'
 
 @test "BLIND: the mechanical row is still written when the judgment is unavailable" {
   # A model outage must not lose the turn. The machine-settled half is the
-  # durable part; the row lands, `did` is null, and the reason is on the record
-  # so a later reader does not mistake it for a turn where nothing happened.
+  # durable part; the row lands with three EMPTY arrays — never a missing key,
+  # so a reader can tell "nothing was judged" from "the field is absent" — and
+  # the reason is on the record so a later reader does not mistake it for a
+  # turn where nothing happened.
   fixture_full
   drive ""
   [ -s "$WORKLOG_JSONL" ]
-  [ "$(field .did)" = "null" ]
+  [ "$(field '.requests|length')" -eq 0 ]
+  [ "$(field '.outcomes|length')" -eq 0 ]
+  [ "$(field '.mistakes|length')" -eq 0 ]
+  run bash -c "jq -r 'keys|sort|join(\",\")' '$WORKLOG_JSONL'"
+  [ "$output" = "ask_uuid,end_uuid,mistakes,outcomes,requests,session,ts" ]
   [ "$(field .ask_uuid)" = "$U1" ]
-  run bash -c "jq -r '.changed|join(\",\")' '$WORKLOG_JSONL'"
-  [[ "$output" == *"/repo/a.md"* ]]
   [ "$(why)" = "judgment-unavailable" ]
 }
 
 @test "BLIND: an unparseable judgment is treated as unavailable, not as content" {
   fixture_full
   drive 'I could not comply with that request.'
-  [ "$(field .did)" = "null" ]
+  [ "$(field '.requests|length')" -eq 0 ]
   [ "$(why)" = "judgment-unavailable" ]
 }
 
@@ -801,7 +897,7 @@ SH
     sleep 0.25
   done
   [ -s "$WORKLOG_JSONL" ]
-  [ "$(field .did)" = "did a thing" ]
+  [ "$(field '.requests[0].text')" = "asked for the thing" ]
   # The child is done before teardown removes $SCRATCH out from under it.
 }
 
@@ -809,37 +905,58 @@ SH
 # 7. record integrity
 # ==========================================================================
 
-@test "an apostrophe in did survives — the jq -n rule, not an echoed brace literal" {
+@test "an apostrophe in text survives — the jq -n rule, not an echoed brace literal" {
   # scripts/log-record.sh's hard rule. An inline single-quoted JSON literal is
   # truncated by an apostrophe, and apostrophes in a one-line summary are the
   # common case, not the edge one.
   fixture_full
-  drive "$(jq -nc '{did:"didn'"'"'t finish the agent'"'"'s edit",flag:null,flag_uuids:[],flag_quote:null}')"
-  [ "$(field .did)" = "didn't finish the agent's edit" ]
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"didn'"'"'t finish the agent'"'"'s edit",quote:"do the thing",uuid:$u}],
+      outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests[0].text')" = "didn't finish the agent's edit" ]
 }
 
-@test "a newline in did cannot split one record across two lines" {
+@test "a newline in text cannot split one record across two lines" {
   fixture_full
-  drive "$(jq -nc '{did:"line one\nline two",flag:null,flag_uuids:[],flag_quote:null}')"
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"line one\nline two",quote:"do the thing",uuid:$u}],
+      outcomes:[],mistakes:[]}')"
   run bash -c "wc -l < '$WORKLOG_JSONL'"
   [ "$output" -eq 1 ]
   run bash -c "jq -e . '$WORKLOG_JSONL'"
   [ "$status" -eq 0 ]
 }
 
-@test "an over-long did is truncated rather than dropped" {
+@test "an over-long text is truncated rather than the entry dropped" {
   fixture_full
   long="$(printf 'x%.0s' $(seq 1 900))"
-  drive "$(jq -nc --arg d "$long" '{did:$d,flag:null,flag_uuids:[],flag_quote:null}')"
-  run bash -c "jq -r '.did|length' '$WORKLOG_JSONL'"
-  [ "$output" -le 200 ]
-  [ "$output" -gt 0 ]
+  drive "$(jq -nc --arg u "$U1" --arg d "$long" \
+    '{requests:[{text:$d,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  run bash -c "jq -r '.requests[0].text|length' '$WORKLOG_JSONL'"
+  [ "$output" -eq 100 ]
+}
+
+@test "an over-long quote is truncated rather than the entry dropped" {
+  # The candidate bodies are themselves capped at 200 by the slicer's flat(),
+  # so the reachable ceiling here is that cap; what matters is that a long
+  # verified quote is trimmed to the documented bound and kept.
+  fixture_full
+  {
+    user_line "$U1" "$(printf 'y%.0s' $(seq 1 190))"
+    text_line "$U6" "ok"
+  } > "$TX"
+  drive "$(jq -nc --arg u "$U1" --arg q "$(printf 'y%.0s' $(seq 1 190))" \
+    '{requests:[{text:"long quote",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  run bash -c "jq -r '.requests[0].quote|length' '$WORKLOG_JSONL'"
+  [ "$output" -eq 120 ]
 }
 
 @test "a judgment wrapped in a markdown fence is still read" {
   fixture_full
   drive "$(printf '```json\n%s\n```' "$CLEAN")"
-  [ "$(field .did)" = "did a thing" ]
+  [ "$(field '.requests[0].text')" = "asked for the thing" ]
   no_log
 }
 
@@ -1083,7 +1200,7 @@ SH
   # ask_uuid, so re-driving the same transcript would leave this test asserting
   # over a single line while still passing.
   fixture_next_turn
-  drive "$(jq -nc --arg a "$U1" '{did:"second",flag:"mistake",flag_uuids:[$a],flag_quote:"do the thing"}')"
+  drive "$(jq -nc --arg a "$U7" '{requests:[{text:"second",quote:"do another thing",uuid:$a}],outcomes:[],mistakes:[]}')"
   run bash -c "wc -l < '$WORKLOG_JSONL'"
   [ "$output" -eq 2 ]
   run bash -c "while IFS= read -r l; do printf '%s' \"\$l\" | jq -e . >/dev/null || exit 1; done < '$WORKLOG_JSONL'"
