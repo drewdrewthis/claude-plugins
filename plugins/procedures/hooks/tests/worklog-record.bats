@@ -439,8 +439,16 @@ PY
   [ "$(field '.requests|length')" -eq 0 ]
 
   # And the brief must not instruct the form that always fails.
-  run grep -c 'Cut the middle with' "$HOOK"
-  [ "$output" -eq 0 ]
+  #
+  # Newline-insensitive on purpose: the wording this guards against was
+  # line-wrapped in the source ('Cut the middle' / newline+indent / 'with "..."'),
+  # so a line-oriented grep cannot see it. Squash newlines to spaces first.
+  #
+  # Assert on STATUS, not on "$output": `grep -c` prints 0 AND exits 1 when it
+  # finds nothing, so `[ "$output" -eq 0 ]` passes on the not-found path no
+  # matter what the file says.
+  run bash -c "tr '\n' ' ' < '$HOOK' | grep -q 'Cut the middle'"
+  [ "$status" -ne 0 ]
 }
 
 @test "the stored quote is SLICED from the transcript, not the model's retyping" {
