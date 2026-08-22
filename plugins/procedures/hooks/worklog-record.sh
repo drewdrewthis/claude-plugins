@@ -440,7 +440,7 @@ except Exception:
 if not isinstance(obj, dict):
     sys.exit(1)
 
-# Bodies keyed by uuid, normalised the same way wl_norm does it: collapse all
+# Bodies keyed by uuid, normalised the same way norm() does it: collapse all
 # whitespace runs to one space and strip. A quote is matched against the body
 # it is claimed to come from, never against the whole blob — joining the lines
 # would let a "quote" spanning two unrelated records match.
@@ -769,7 +769,7 @@ PY
 # with no uuid cannot be located. A missing quote is also the one thing that
 # cannot be backfilled later, because the judgment that selected it is gone.
 #
-# THE MODEL DOES NOT AUTHOR quote. It names a span; wl_quote_verified locates
+# THE MODEL DOES NOT AUTHOR quote. It names a span; verified_quote() locates
 # that span in a candidate body and the row stores the characters SLICED FROM
 # THE BODY. So quote has the same provenance as the uuids: transcript-derived
 # by construction. An entry whose quote cannot be located is DROPPED, not
@@ -792,9 +792,13 @@ Every entry in all three arrays has the same two evidence fields:
   "text"  — YOUR OWN words. What happened. At most 100 characters. Plain past
             tense. No ellipsis, no quotation marks: this is a summary you write,
             not something you copy.
-  "quote" — VERBATIM characters from ONE candidate line. At most 120. Copy, do
-            not paraphrase, do not fix spelling or punctuation. Cut the middle
-            with "..." if it is too long: "...the part that matters...".
+  "quote" — VERBATIM characters from ONE candidate line. Copy, do not
+            paraphrase, do not fix spelling or punctuation. It must be one
+            CONTIGUOUS run: never join two parts with "...", and never add
+            leading or trailing "...". A quote that is not a literal substring
+            of the line is discarded. If the run you want is long, quote the
+            first stretch that carries the point and stop — the code truncates
+            for you.
 
 The pair is the point. "text" is your claim; "quote" is the evidence a reader
 checks it against. Never write a "text" that the "quote" does not support.
@@ -846,11 +850,17 @@ EOF
 #
 # Split from wl_prompt deliberately. Piping brief and data together as one
 # stdin blob makes the CLI read the whole thing as USER content, so the brief
-# arrives as something to react to rather than as standing instructions.
-# Measured on this repo's own transcript, n=6 per arm, same model and same
-# candidates: delivering the brief on stdin caught the correction in the window
-# 0/6 times and emitted 0 flags; delivering it via --system-prompt caught it 5/6
-# times. The wording never changed — only which channel carried it.
+# arrives as something to react to rather than as standing instructions;
+# --system-prompt makes it standing instructions. That is the reason for the
+# split, and it stands on the mechanism, not on a measurement.
+#
+# NO MEASUREMENT SUPPORTS A CHANNEL EFFECT SIZE HERE. An earlier version of
+# this comment cited 0/6 on stdin vs 5/6 via --system-prompt. That number came
+# from a scratch brief measured against a schema that was never deployed, so it
+# is evidence about the stand-in, not about this code. Against the real brief
+# both channels scored flat 0/6. Do not re-cite the old figure. Issue #51
+# (ground-truth-labelled window set) is what would let anyone measure this
+# honestly.
 # ---------------------------------------------------------------------------
 wl_candidates() {
     local cands="$1"

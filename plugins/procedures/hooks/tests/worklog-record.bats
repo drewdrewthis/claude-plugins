@@ -388,6 +388,45 @@ PY
   [ "$(field '.requests[0].text|length')" -eq 100 ]
 }
 
+@test "CAPS bounds how many entries one row can carry" {
+  # CAPS is the only limit on array size in an append-only store, and until
+  # this test it killed ZERO mutants: {6,6,4} -> {99,99,99} changed nothing
+  # observable. Ask for more than the cap in every array at once.
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:  [range(10)|{text:"r",quote:"do the thing",uuid:$u}],
+      outcomes:  [range(10)|{text:"o",quote:"do the thing",uuid:$u}],
+      mistakes:  []}')"
+  [ "$(field '.requests|length')" -eq 6 ]
+  [ "$(field '.outcomes|length')" -eq 6 ]
+}
+
+@test "the mistakes cap is 4, not the 6 the other two arrays use" {
+  # Distinct constant; a single shared cap would pass the test above while
+  # silently widening mistakes.
+  fixture_full
+  drive "$(jq -nc --arg a "$U0" --arg b "$U1" \
+    '{requests:[],outcomes:[],
+      mistakes:[range(10)|{text:"m",quote:"do the thing",uuids:[$a,$b]}]}')"
+  [ "$(field '.mistakes|length')" -eq 4 ]
+}
+
+@test "an elided quote is rejected, and the brief never asks for one" {
+  # The brief used to say: Cut the middle with "..." if it is too long.
+  # verified_quote does an exact body.find(), so an elided quote is never a
+  # substring and always drops — the instruction steered the model into the
+  # one form the verifier always rejects, firing on exactly the long quotes
+  # it targeted. The code behaviour is correct; the BRIEF was the defect.
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"x",quote:"do...thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 0 ]
+
+  # And the brief must not instruct the form that always fails.
+  run grep -c 'Cut the middle with' "$HOOK"
+  [ "$output" -eq 0 ]
+}
+
 @test "the stored quote is SLICED from the transcript, not the model's retyping" {
   # The model sends the quote with mangled spacing. What lands must be the run
   # as it appears in the candidate body, so the field cannot drift from what
