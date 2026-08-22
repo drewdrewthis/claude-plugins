@@ -476,18 +476,27 @@ def entries(key, uuid_field):
         # the model's, which for mistakes is asked to be chronological.
         raw_u = e.get(uuid_field)
         if uuid_field == "uuids":
-            us = [u for u in (raw_u or []) if isinstance(u, str) and u in ok]
+            named = [u for u in (raw_u or []) if isinstance(u, str)]
+            us = [u for u in named if u in ok]
             # A mistake needs the offense AND the correction; one uuid is an
             # unlocatable pair, so the entry cannot be audited.
             if len(us) < 2:
+                continue
+            # The anchor is the CORRECTION — the last uuid the model NAMED,
+            # not merely the last one that survived the candidate filter.
+            # Those differ when an interior uuid is dropped: [offense, mid,
+            # correction] with the correction outside the window still leaves
+            # a length-2 list whose tail is `mid`, a line that never was the
+            # correction. Anchoring to the survivor would quietly audit the
+            # wrong line, so a pair that lost its correction is dropped.
+            anchor = named[-1]
+            if anchor not in ok:
                 continue
         else:
             us = [raw_u] if isinstance(raw_u, str) and raw_u in ok else []
             if not us:
                 continue
-        # The quote belongs to the line that carries it: for a mistake that is
-        # the CORRECTION, the last uuid, not the first.
-        anchor = us[-1] if uuid_field == "uuids" else us[0]
+            anchor = us[0]
         q = verified_quote(e.get("quote"), anchor)
         if q is None:
             continue

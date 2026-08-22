@@ -413,13 +413,15 @@ PY
 # 2. uuid discipline
 # ==========================================================================
 
-@test "a mistake uuid that is not in the candidate set is dropped" {
-  # The bad uuid is removed and the entry survives on the remaining pair.
+@test "an unknown uuid in the MIDDLE is dropped and the real pair survives" {
+  # The junk uuid sits between the offense and the correction, so the
+  # correction is still the model's last-named uuid and is still in the
+  # window. The bad uuid is filtered and the auditable pair is kept.
   fixture_full
   drive "$(jq -nc --arg a "$U0" --arg b "$U1" \
     '{requests:[],outcomes:[],
       mistakes:[{text:"x",quote:"do the thing",
-                 uuids:[$a,$b,"deadbeef-0000-4000-8000-000000000000"]}]}')"
+                 uuids:[$a,"deadbeef-0000-4000-8000-000000000000",$b]}]}')"
   run bash -c "jq -r '.mistakes[0].uuids|join(\",\")' '$WORKLOG_JSONL'"
   [ "$output" = "$U0,$U1" ]
 }
@@ -433,6 +435,19 @@ PY
     '{requests:[],outcomes:[],
       mistakes:[{text:"x",quote:"an earlier prompt",
                  uuids:[$a,"11111111-1111-4111-8111-11111111aa1a"]}]}')"
+  [ "$(field '.mistakes|length')" -eq 0 ]
+}
+
+@test "a mistake whose CORRECTION uuid is outside the window is dropped whole" {
+  # [offense, mid, correction] where the correction fell out of the window.
+  # Two uuids still survive, so the length-2 guard passes; anchoring to the
+  # SURVIVING tail would audit `mid` — a line that was never the correction.
+  # The pair lost the thing it needs, so the entry must not be recorded.
+  fixture_full
+  drive "$(jq -nc --arg a "$U0" --arg b "$U1" \
+    '{requests:[],outcomes:[],
+      mistakes:[{text:"x",quote:"do the thing",
+                 uuids:[$a,$b,"deadbeef-0000-4000-8000-000000000000"]}]}')"
   [ "$(field '.mistakes|length')" -eq 0 ]
 }
 
