@@ -195,7 +195,23 @@ drive_with() {
 }
 
 row()      { jq -c . "$WORKLOG_JSONL"; }
-field()    { jq -r "$1" "$WORKLOG_JSONL"; }
+# field — project an expression out of the row, but refuse to let an ABSENT key
+# masquerade as an empty one. `jq '.requests|length'` yields 0 both when
+# requests is [] and when the key was never emitted, so a `-eq 0` assertion
+# cannot distinguish "the entry was dropped" (what the test means) from "the
+# array never existed" (a wrong-reason pass). That shape has produced a vacuous
+# pass six times in this branch's history, so the guard lives in the shared
+# helper rather than in each call site.
+field() {
+    local expr="$1" k
+    for k in $(printf '%s\n' "$expr" | grep -o '^\.[a-z_]\+' | tr -d '.'); do
+        if [ "$(jq -r "has(\"$k\")" "$WORKLOG_JSONL" 2>/dev/null)" != "true" ]; then
+            echo "field(): row has no key '$k' — an absent key is not an empty one (expr: $expr)" >&2
+            return 1
+        fi
+    done
+    jq -r "$expr" "$WORKLOG_JSONL"
+}
 why()      { jq -r '.why' "$GATE_FAILOPEN_LOG" 2>/dev/null; }
 no_log()   { [ ! -s "$GATE_FAILOPEN_LOG" ]; }
 no_row()   { [ ! -s "$WORKLOG_JSONL" ]; }
