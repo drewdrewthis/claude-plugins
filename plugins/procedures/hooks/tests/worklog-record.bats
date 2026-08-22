@@ -451,6 +451,23 @@ PY
   [ "$(field '.mistakes|length')" -eq 0 ]
 }
 
+@test "a lost correction cannot be back-filled by a quote that fits the survivor" {
+  # The misattribution case, not merely the dropped-entry case. U0 ("an
+  # earlier prompt") and U6 ("an earlier answer") share the run "an earlier".
+  # Model names [U0, U6, correction] with the correction outside the window.
+  # Anchoring to the SURVIVING tail picks U6, where "an earlier" verifies —
+  # so the old rule stored the entry with evidence pinned to a line that was
+  # never the correction. Verifying against the wrong line is not a weaker
+  # failure than dropping: it is the misattribution this schema exists to
+  # prevent. The pair must go.
+  fixture_full
+  drive "$(jq -nc --arg a "$U0" --arg b "$U6" \
+    '{requests:[],outcomes:[],
+      mistakes:[{text:"x",quote:"an earlier",
+                 uuids:[$a,$b,"deadbeef-0000-4000-8000-000000000000"]}]}')"
+  [ "$(field '.mistakes|length')" -eq 0 ]
+}
+
 @test "a non-string in a uuid list cannot reach the record" {
   fixture_full
   drive "$(jq -nc --arg a "$U0" --arg b "$U1" \
