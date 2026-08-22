@@ -6,15 +6,30 @@
 # about the turn, and it never blocks one.
 #
 # THE LINE:
-#   {"ts","session","ask_uuid","end_uuid","did","changed",
-#    "flag","flag_uuids","flag_quote"}
+#   {"ts","session","ask_uuid","end_uuid",
+#    "requests":[{"text","quote","uuid"}],
+#    "outcomes":[{"text","quote","uuid"}],
+#    "mistakes":[{"text","quote","uuids"}]}
+#
+# THE STORY THE ROW TELLS: what was asked, what came of it, and what went
+# wrong. Three arrays rather than three scalars because one turn routinely
+# carries several asks and several results, and collapsing them to one line
+# each forces the model to choose which to drop.
+#
+# EVERY ENTRY CARRIES ITS OWN EVIDENCE — `text` is the model's summary, `quote`
+# is the span it rests on, and the uuid says where that span lives. A claim
+# with no checkable evidence is the failure this shape exists to prevent, so an
+# entry whose quote cannot be located in a candidate body is DROPPED WHOLE
+# rather than stored with the quote blanked.
 #
 # MECHANICAL / JUDGMENT SPLIT, the same one scripts/log-record.sh draws. This
 # script owns every field a machine can settle — ts, session, ask_uuid,
-# end_uuid, changed. A Haiku read of the transcript owns only `did` and the
-# flag triple. Nothing crosses that line: `changed` is read out of the turn's
-# Write/Edit/NotebookEdit/Bash tool_use blocks and is NEVER taken from the
-# model, so a summary that misremembers a path cannot enter the record.
+# end_uuid — and it owns the VERIFICATION of everything the model returns. The
+# model owns only the `text` summaries and the SELECTION of quotes and uuids.
+# It never authors a quote: it names a span, and what is stored is the run
+# SLICED OUT of the candidate body it was shown (wl_entries). So `quote` has
+# exactly the provenance the uuids do — transcript-derived by construction, and
+# unable to drift from what was verified.
 #
 # THE MODEL NEVER TYPES A UUID. It is handed a CANDIDATES block the slicer
 # built, and may only copy from it. Every uuid it returns is then re-checked
@@ -30,8 +45,8 @@
 #   * It never writes $HOME/.claude/mistakes.jsonl. That file feeds the
 #     promotion path into references/failure-modes/ and thence into the
 #     @-imported common-mistakes.md, where one bad row becomes a fleet-wide
-#     rule. `flag` here is deliberately INERT: a marker for a later human or
-#     analysis pass, carrying no severity, no category and no failure-mode
+#     rule. `mistakes` here is deliberately INERT: a marker for a later human
+#     or analysis pass, carrying no severity, no category and no failure-mode
 #     name, because each of those is a corpus-relative join this hook has no
 #     standing to make.
 #   * It never writes the harness-owned session transcript. The worklog is a
@@ -140,7 +155,8 @@ SELF="$SCRIPT_DIR/${BASH_SOURCE[0]##*/}"
 WORKLOG_SETTLE_SECS="${WORKLOG_SETTLE_SECS:-3}"
 # Prior conversation records offered to the model as uuid candidates. Must
 # exceed one turn: a mistake anchors to an offense AND a correction, and those
-# routinely sit in different turns, which is why flag_uuids is an array.
+# routinely sit in different turns, which is why a mistake carries a uuid ARRAY
+# and needs at least two entries to be recorded at all.
 WORKLOG_WINDOW="${WORKLOG_WINDOW:-60}"
 # Hard ceiling on the judgment call. A hung child must not linger.
 WORKLOG_MODEL_TIMEOUT="${WORKLOG_MODEL_TIMEOUT:-120}"
@@ -392,53 +408,109 @@ wl_unclaim() {
     WL_MARKER=""
 }
 
-# wl_norm <text> — one line, single-spaced, trimmed. The comparison form for
-# quote verification: the candidate bodies the model was shown were already
-# whitespace-collapsed by the slicer's flat(), so both sides must be.
-wl_norm() {
-    printf '%s' "${1:-}" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//'
-}
+# wl_entries <candidates> <uuids-json> <raw-json> — prints the three verified
+# entry arrays as one JSON object {requests, outcomes, mistakes}, or nothing.
+#
+# THE VERIFICATION LOOP FOR THE ARRAY SHAPE. Same three rules the scalar row
+# applied, now per entry: every uuid is intersected with the candidate set,
+# every quote is SLICED FROM the candidate body rather than stored as the
+# model typed it, and text is truncated to the cap the brief asks for.
+#
+# AN ENTRY THAT FAILS ANY RULE IS DROPPED WHOLE. Storing it with a blanked
+# quote would leave a claim wearing the shape of evidence — the exact thing
+# the quote field exists to prevent. Dropping is also the safe direction: a
+# missing entry is visibly missing, a hollow one is not.
+#
+# python3 rather than jq+bash for the same reason wl_slice uses it: this is a
+# per-entry loop over a substring match against a second data set, and jq
+# cannot see the candidate bodies to slice from.
+wl_entries() {
+    python3 - "$1" "$2" "$3" <<'PY' 2>/dev/null || true
+import json, re, sys
 
-# wl_quote_verified <candidates> <quote> — prints the matching run of a
-# candidate body and returns 0 when the quote is traceable to a line the model
-# was actually shown; prints nothing and returns 1 when it is not.
-#
-# EVERY OTHER POINTER IN THE ROW IS VERIFIED — flag_uuids against the candidate
-# set, ask_uuid/end_uuid against the transcript — and flag_quote is asked for as
-# "a short verbatim quote", so it is checked too rather than trusted. A quote
-# that cannot be traced is worse than a null one: it reads as evidence.
-#
-# IT RETURNS THE TEXT rather than a bare verdict so the caller stores characters
-# SLICED FROM THE CANDIDATE BODY, never the model's re-typing of them. That
-# gives flag_quote the same provenance as flag_uuids (intersected with the
-# candidate set) and ask_uuid/end_uuid (re-read from the transcript): the stored
-# value is transcript-derived by construction, so it cannot drift from the value
-# that was verified if this matcher is ever loosened.
-#
-# Substring, not equality: the model is asked for a SHORT quote FROM a line, so
-# it is expected to be a fragment of one. The bodies are truncated to 200 chars
-# by flat(), so a genuine quote taken past that point fails to match and the
-# field is blanked — a false negative, and the direction to fail in.
-wl_quote_verified() {
-    local cands="${1:-}" quote="${2:-}" norm line body pre
-    norm="$(wl_norm "$quote")"
-    [ -n "$norm" ] || return 1
-    # Per line, never over the whole blob: joining the candidate lines would let
-    # a "quote" spanning two unrelated records match.
-    while IFS= read -r line; do
-        body="${line#*$'\t'}"; body="${body#*$'\t'}"; body="${body#*$'\t'}"
-        body="$(wl_norm "$body")"
-        [ -n "$body" ] || continue
-        case "$body" in
-            *"$norm"*)
-                # Quoted in the trim as in the case pattern, so a quote holding
-                # glob characters is matched and sliced literally, not expanded.
-                pre="${body%%"$norm"*}"
-                printf '%s' "${body:${#pre}:${#norm}}"
-                return 0 ;;
-        esac
-    done <<< "$cands"
-    return 1
+cands, uuids_json, raw = sys.argv[1], sys.argv[2], sys.argv[3]
+MAXTEXT, MAXQUOTE = 100, 120
+CAPS = {"requests": 6, "outcomes": 6, "mistakes": 4}
+
+try:
+    obj = json.loads(raw)
+    ok = set(json.loads(uuids_json))
+except Exception:
+    sys.exit(1)
+if not isinstance(obj, dict):
+    sys.exit(1)
+
+# Bodies keyed by uuid, normalised the same way norm() does it: collapse all
+# whitespace runs to one space and strip. A quote is matched against the body
+# it is claimed to come from, never against the whole blob — joining the lines
+# would let a "quote" spanning two unrelated records match.
+def norm(s):
+    return re.sub(r"\s+", " ", s or "").strip()
+
+bodies = {}
+for line in cands.split("\n"):
+    parts = line.split("\t", 3)
+    if len(parts) == 4:
+        bodies[parts[0]] = norm(parts[3])
+
+def verified_quote(quote, uuid):
+    """Return the run SLICED FROM the candidate body, or None."""
+    q = norm(quote)
+    if not q or uuid not in bodies:
+        return None
+    body = bodies[uuid]
+    i = body.find(q)
+    if i < 0:
+        return None
+    return body[i:i + len(q)][:MAXQUOTE]
+
+def entries(key, uuid_field):
+    out = []
+    for e in (obj.get(key) or [])[:CAPS[key]]:
+        if not isinstance(e, dict):
+            continue
+        text = e.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        # uuids: model-supplied, intersected with the candidate set. Order is
+        # the model's, which for mistakes is asked to be chronological.
+        raw_u = e.get(uuid_field)
+        if uuid_field == "uuids":
+            named = [u for u in (raw_u or []) if isinstance(u, str)]
+            us = [u for u in named if u in ok]
+            # A mistake needs the offense AND the correction; one uuid is an
+            # unlocatable pair, so the entry cannot be audited.
+            if len(us) < 2:
+                continue
+            # The anchor is the CORRECTION — the last uuid the model NAMED,
+            # not merely the last one that survived the candidate filter.
+            # Those differ when an interior uuid is dropped: [offense, mid,
+            # correction] with the correction outside the window still leaves
+            # a length-2 list whose tail is `mid`, a line that never was the
+            # correction. Anchoring to the survivor would quietly audit the
+            # wrong line, so a pair that lost its correction is dropped.
+            anchor = named[-1]
+            if anchor not in ok:
+                continue
+        else:
+            us = [raw_u] if isinstance(raw_u, str) and raw_u in ok else []
+            if not us:
+                continue
+            anchor = us[0]
+        q = verified_quote(e.get("quote"), anchor)
+        if q is None:
+            continue
+        ent = {"text": text.strip()[:MAXTEXT], "quote": q}
+        ent["uuids" if uuid_field == "uuids" else "uuid"] = us if uuid_field == "uuids" else us[0]
+        out.append(ent)
+    return out
+
+print(json.dumps({
+    "requests": entries("requests", "uuid"),
+    "outcomes": entries("outcomes", "uuid"),
+    "mistakes": entries("mistakes", "uuids"),
+}, ensure_ascii=False))
+PY
 }
 
 # ---------------------------------------------------------------------------
@@ -684,48 +756,115 @@ PY
 # ---------------------------------------------------------------------------
 # wl_prompt — the judgment brief. Deliberately narrow.
 #
-# SHALLOW AND LEXICAL BY DESIGN. It asks for a summary and an explicit
-# correction signal, and for nothing else. No severity, no category, no
-# failure-mode name: each of those is a judgment relative to a corpus this
-# reader has never seen, and a confident wrong one is worse than a blank.
-# Over-flagging is tolerable — the flag is inert — so the instruction that
-# actually matters is the one FORBIDDING inference from tone.
+# SHALLOW AND LEXICAL BY DESIGN. It asks what was asked, what came of it, and
+# for an explicit correction signal, and for nothing else. No severity, no
+# category, no failure-mode name: each of those is a judgment relative to a
+# corpus this reader has never seen, and a confident wrong one is worse than a
+# blank. Over-flagging is tolerable — the flag is inert — so the instruction
+# that actually matters is the one FORBIDDING inference from tone.
+#
+# EVERY ENTRY CARRIES ITS OWN EVIDENCE. text says what happened; quote is the
+# span that made the reader believe it; uuid says where that span lives. The
+# pair is the point: a summary with no quote cannot be audited, and a quote
+# with no uuid cannot be located. A missing quote is also the one thing that
+# cannot be backfilled later, because the judgment that selected it is gone.
+#
+# THE MODEL DOES NOT AUTHOR quote. It names a span; verified_quote() locates
+# that span in a candidate body and the row stores the characters SLICED FROM
+# THE BODY. So quote has the same provenance as the uuids: transcript-derived
+# by construction. An entry whose quote cannot be located is DROPPED, not
+# stored quote-less — an unevidenced entry reads as evidence.
+#
+# CAPS 100/120 are asked for here and enforced at the row site. They are a
+# readability bound, not a measured one; documented as unratified so a later
+# reader does not mistake them for a finding.
 # ---------------------------------------------------------------------------
 wl_prompt() {
-    local cands="$1"
     cat <<EOF
 You are reading one turn of an agent transcript and writing a single worklog row.
 
 Reply with ONE JSON object and nothing else. No prose, no markdown fence.
 
-{"did": "<one line>", "flag": null, "flag_uuids": [], "flag_quote": null}
+{"requests": [], "outcomes": [], "mistakes": []}
 
-Fields:
+Every entry in all three arrays has the same two evidence fields:
 
-"did" — one line, at most 200 characters, plain past tense, describing what the
-agent DID in the lines marked THIS-TURN. Concrete over vague: name the thing
-acted on. Do not evaluate the work.
+  "text"  — YOUR OWN words. What happened. At most 100 characters. Plain past
+            tense. No ellipsis, no quotation marks: this is a summary you write,
+            not something you copy.
+  "quote" — VERBATIM characters from ONE candidate line. Copy, do not
+            paraphrase, do not fix spelling or punctuation. It must be one
+            CONTIGUOUS run: never join two parts with "...", and never add
+            leading or trailing "...". A quote that is not a literal substring
+            of the line is discarded. If the run you want is long, quote the
+            first stretch that carries the point and stop — the code truncates
+            for you.
 
-"flag" — null, or the exact string "mistake".
-Set it to "mistake" ONLY on an EXPLICIT correction signal:
+The pair is the point. "text" is your claim; "quote" is the evidence a reader
+checks it against. Never write a "text" that the "quote" does not support.
+
+An entry whose quote cannot be found verbatim in a candidate line is DISCARDED
+in full. A confident entry with unusable evidence is worse than no entry, so
+copy the quote exactly.
+
+"requests" — [{"text","quote","uuid"}]. What the USER asked for. One entry per
+distinct ask; a turn with several asks gets several entries. The quote comes
+from the user's own line. Do not include what the agent decided to do on its
+own — that is not a request.
+
+"outcomes" — [{"text","quote","uuid"}]. What CHANGED IN THE WORLD because of
+this turn. The test: if the transcript were deleted, would anything remain? A
+file written, a command run, a PR opened, a message sent, a decision recorded.
+Talking about a plan is not an outcome. Analysis, discussion, agreement,
+explanation and proposals are NOT outcomes. [] is a correct and common answer
+for a turn that was only conversation.
+
+"mistakes" — [{"text","quote","uuids"}]. Note "uuids", an ARRAY.
+Add an entry ONLY on an EXPLICIT correction signal:
   - the user says the agent was wrong, told it to stop, to not do that, to
     revert or undo, or that this is not what was asked; or
-  - the agent itself states it was wrong and visibly reverses course.
+  - the agent states it had ALREADY ACTED WRONGLY and reverses course.
 NEVER infer a mistake from tone, terseness, impatience, a short reply, a
 follow-up question, or a change of subject. If the correction is not stated in
-words, "flag" is null.
+words, there is no mistake.
+VIGILANCE IS NOT ERROR. An agent checking its work, noticing a risk, flagging
+uncertainty, or deciding not to do something is working correctly, not making a
+mistake. A mistake needs a WRONG ACT that already happened.
+A correction is STILL a mistake when the agent then fixed it.
+"uuids" needs at least two, chronological: the line where the offense happened
+and the line where it was corrected. These are often in DIFFERENT turns, so
+earlier lines are fair to cite. The quote comes from the CORRECTION line.
 
-"flag_uuids" — [] when flag is null. Otherwise the uuids of the lines the flag
-rests on, chronological. A mistake needs at least two: the line where the
-offense happened and the line where it was corrected. These are often in
-DIFFERENT turns, so earlier lines are fair to cite.
-COPY each uuid CHARACTER-FOR-CHARACTER from the CANDIDATES block below. Never
-retype one from memory, never edit one, never invent one. A uuid that is not in
-that block verbatim will be discarded.
+"uuid" / "uuids" — COPY CHARACTER-FOR-CHARACTER from the CANDIDATES block.
+Never retype one from memory, never edit one, never invent one. A uuid that is
+not in that block verbatim will be discarded.
 
-"flag_quote" — null when flag is null. Otherwise a short verbatim quote, at
-most 200 characters, from the line that carries the correction.
+At most 6 requests, 6 outcomes, 4 mistakes. Empty arrays are valid answers.
 
+CANDIDATES (uuid, where, kind, text) follow as the user message.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# wl_candidates — the DATA half, sent as the user message.
+#
+# Split from wl_prompt deliberately. Piping brief and data together as one
+# stdin blob makes the CLI read the whole thing as USER content, so the brief
+# arrives as something to react to rather than as standing instructions;
+# --system-prompt makes it standing instructions. That is the reason for the
+# split, and it stands on the mechanism, not on a measurement.
+#
+# NO MEASUREMENT SUPPORTS A CHANNEL EFFECT SIZE HERE. An earlier version of
+# this comment cited 0/6 on stdin vs 5/6 via --system-prompt. That number came
+# from a scratch brief measured against a schema that was never deployed, so it
+# is evidence about the stand-in, not about this code. Against the real brief
+# both channels scored flat 0/6. Do not re-cite the old figure. Issue #51
+# (ground-truth-labelled window set) is what would let anyone measure this
+# honestly.
+# ---------------------------------------------------------------------------
+wl_candidates() {
+    local cands="$1"
+    cat <<EOF
 CANDIDATES (uuid, where, kind, text):
 $cands
 EOF
@@ -756,10 +895,16 @@ wl_run() {
         || gate_failopen worklog-record transcript-unreadable "$sid"
     printf '%s' "$slice" | jq -e 'has("decline") | not' >/dev/null 2>&1 || exit 0
 
-    local ask end changed uuids cands
+    # `changed` is still computed by the slicer and deliberately NOT read here.
+    # It was dropped from the row because it overlapped `outcomes`: a file
+    # written is an outcome, and carrying it twice invites the two to disagree.
+    # The cost is named rather than hidden — it was the one field no model
+    # touched, so the row is now entirely model-authored apart from the
+    # timestamps and uuids, and `outcomes` inherits the burden of naming the
+    # artifact that changed.
+    local ask end uuids cands
     ask="$(printf '%s' "$slice" | jq -r '.ask_uuid // empty')"
     end="$(printf '%s' "$slice" | jq -r '.end_uuid // empty')"
-    changed="$(printf '%s' "$slice" | jq -c '.changed // []')"
     uuids="$(printf '%s' "$slice" | jq -c '.uuids // []')"
     cands="$(printf '%s' "$slice" | jq -r '.candidates // ""')"
 
@@ -802,11 +947,12 @@ wl_run() {
     wl_claim "$store" "$ask" || exit 0
 
     # --- judgment -------------------------------------------------------
-    local raw="" did="" flag="" quote="" fuuids="[]" judged=1
+    local raw="" entries="" judged=1
     if command -v claude >/dev/null 2>&1; then
-        raw="$(wl_prompt "$cands" \
+        raw="$(wl_candidates "$cands" \
             | WORKLOG_DISABLE=1 timeout "$WORKLOG_MODEL_TIMEOUT" \
               claude -p --model "$WORKLOG_MODEL" --output-format text \
+                     --system-prompt "$(wl_prompt)" \
                      --allowed-tools '' 2>/dev/null || true)"
     fi
     # Take the outermost brace span: a ```json fence or a stray sentence around
@@ -819,42 +965,22 @@ wl_run() {
     raw="${raw%"${raw##*\}}"}"   # drop everything after the last }
 
     if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type == "object"' >/dev/null 2>&1; then
-        judged=0
-        did="$(printf '%s' "$raw" | jq -r '(.did // "") | if type == "string" then .[0:200] else "" end' 2>/dev/null || true)"
-        flag="$(printf '%s' "$raw" | jq -r 'if .flag == "mistake" then "mistake" else "" end' 2>/dev/null || true)"
-        # 200 for both, matching what wl_prompt ASKS for character-for-
-        # character. The truncation is the backstop for a model that ignores
-        # the limit, not a second, looser limit of its own: a documented bound
-        # the code does not enforce teaches a reader the wrong contract, and
-        # the enforced-but-undocumented one is what they discover later.
-        quote="$(printf '%s' "$raw" | jq -r '(.flag_quote // "") | if type == "string" then .[0:200] else "" end' 2>/dev/null || true)"
-        # EVERY returned uuid is intersected with the candidate set the slicer
-        # built. This is the check the header promises; without it a
-        # transposed character writes a pointer that resolves to nothing and
-        # nobody ever learns.
-        fuuids="$(printf '%s' "$raw" | jq -c --argjson ok "$uuids" \
-            '[(.flag_uuids // []) | if type == "array" then .[] else empty end
-              | select(type == "string") | select(. as $u | $ok | index($u))]' \
-            2>/dev/null || printf '[]')"
-        [ -n "$fuuids" ] || fuuids="[]"
+        # Every per-entry rule — uuid intersected with the candidate set, quote
+        # sliced from the candidate body, text truncated, unverifiable entry
+        # dropped whole — lives in wl_entries. It returns nothing when the
+        # object is unusable, and the row is then written unjudged.
+        entries="$(wl_entries "$cands" "$uuids" "$raw")"
+        if [ -n "$entries" ] && printf '%s' "$entries" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            judged=0
+        else
+            entries=""
+        fi
     fi
-    # Schema coherence: an unflagged row carries no anchors and no quote, so a
-    # reader never has to ask what a quote with no flag meant.
-    if [ "$flag" != "mistake" ]; then fuuids="[]"; quote=""; fi
-    # `did` is stored as the model wrote it; the quote is NOT, because unlike
-    # `did` it is a POINTER sold to the reader as verbatim. So the model's
-    # string is used only to LOCATE a candidate body the model was shown, and
-    # what gets stored is the matching run sliced out of that body — blanked
-    # when it locates nothing. Same treatment as flag_uuids, which are the
-    # candidate set's own uuids and not the model's retyping of them. Checked
-    # only on the flagged path; everywhere else the field is already empty.
-    if [ "$flag" = "mistake" ] && [ -n "$quote" ]; then
-        quote="$(wl_quote_verified "$cands" "$quote")" || quote=""
-    fi
+    [ -n "$entries" ] || entries='{"requests":[],"outcomes":[],"mistakes":[]}'
 
     # --- write ----------------------------------------------------------
     # Built with `jq -n --arg`, never an echoed brace literal — the hard rule
-    # in scripts/log-record.sh. An apostrophe in `did` or `flag_quote` is not
+    # in scripts/log-record.sh. An apostrophe in a `text` or a `quote` is not
     # hypothetical here; it is the common case.
     local row
     row="$(jq -nc \
@@ -862,20 +988,14 @@ wl_run() {
         --arg session "$sid" \
         --arg ask "$ask" \
         --arg end "$end" \
-        --arg did "$did" \
-        --arg flag "$flag" \
-        --arg quote "$quote" \
-        --argjson changed "$changed" \
-        --argjson fuuids "$fuuids" \
+        --argjson entries "$entries" \
         '{ts: $ts,
           session: $session,
           ask_uuid: (if $ask   == "" then null else $ask   end),
           end_uuid: (if $end   == "" then null else $end   end),
-          did:      (if $did   == "" then null else $did   end),
-          changed: $changed,
-          flag:     (if $flag  == "" then null else $flag  end),
-          flag_uuids: $fuuids,
-          flag_quote: (if $quote == "" then null else $quote end)}' 2>/dev/null || true)"
+          requests: $entries.requests,
+          outcomes: $entries.outcomes,
+          mistakes: $entries.mistakes}' 2>/dev/null || true)"
     # The claim is released on BOTH exits from here. A fire that could not write
     # must not hold its turn for the whole TTL: the next Stop fire is the only
     # chance that turn has left, and it should find the turn free.
