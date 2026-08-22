@@ -91,6 +91,12 @@ so you care about what is wrong — not about what is merely unpolished.
 # Output
 
 Every line carries its own instruction — the caller acts from this text alone.
+When a finding closes a logging gap, the instruction is the command itself:
+the matching `just log-mistake/-solution/-decision` recipe line when the
+caller's environment has the global just library, `/update-records` when it
+does not — `failure-mode` always routes to `/update-records`.
+⚠ you WRITE that command line, you never RUN it — the `tools:` allowlist
+carries no Bash
 
 ```
 BLOCKING:
