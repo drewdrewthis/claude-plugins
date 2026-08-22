@@ -3,5 +3,6 @@
   "plugins/delegation": "0.1.0",
   "plugins/about-my-person": "0.1.0",
   "plugins/take-note": "0.1.0",
-  "plugins/heartbeats": "0.2.0"
+  "plugins/heartbeats": "0.2.0",
+  "plugins/just-recipes": "0.2.0"
 }
