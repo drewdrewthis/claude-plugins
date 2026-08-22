@@ -5,7 +5,7 @@
 
 deny() {
   cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw bash is funneled through just here. Run 'just --list' to find a recipe, or use the escape hatch: just wrap \"<your command>\". To add a recipe: see the just-recipes skill."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw bash is funneled through just here. Run 'just --list' to find a recipe. Escape hatch that always resolves: just --justfile \"$HOME/.claude/just/justfile\" -d . wrap \"<your command>\". Bare 'just wrap' needs one-time project wiring (mod global '~/.claude/just/justfile' + set fallback) and is then invoked as just global::wrap \"<your command>\". To add a recipe: see the just-recipes skill."}}
 JSON
   exit 0
 }
@@ -26,17 +26,97 @@ command -v jq >/dev/null 2>&1 || exit 0
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
 [ -n "$cmd" ] || exit 0
 
-# Already a just invocation (word boundary)
-case "$cmd" in
-  just|just\ *|just$'\t'*) exit 0 ;;
-esac
+# Trim leading/trailing IFS whitespace so indented commands match at byte 0
+cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+cmd="${cmd%"${cmd##*[![:space:]]}"}"
+[ -n "$cmd" ] || exit 0
 
-# Tiny read-only allowlist to avoid nuisance denials
-if printf '%s' "$cmd" | grep -Eq '^[[:space:]]*(cd|pwd|echo|ls|cat|command -v|which)([[:space:]]|$)'; then
+# Segment the command on shell control operators so EVERY segment is checked,
+# honoring quote state (a quoted '|' or '&&' inside a string does not split).
+# Also flags command substitution ($(...) or backticks) outside single quotes.
+segments=()
+subshell=0   # $( or ` seen outside single quotes -> raw execution by another name
+cur=""
+pc=""        # last char appended to cur; detects >& &> >| redirection dups
+in_s=0       # inside single quotes
+in_d=0       # inside double quotes
+esc=0        # next char is backslash-escaped (outside single quotes)
+
+flush_seg() {
+  local s="${cur#"${cur%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  [ -n "$s" ] && segments+=("$s")
+  return 0
+}
+
+nl=$'\n'
+cr=$'\r'
+len=${#cmd}
+i=0
+while [ "$i" -lt "$len" ]; do
+  c=${cmd:i:1}
+  if [ "$in_s" -eq 1 ]; then
+    # single-quoted: everything literal, operators and substitution syntax included
+    [ "$c" = "'" ] && in_s=0
+    cur="$cur$c"; pc="$c"
+  elif [ "$esc" -eq 1 ]; then
+    esc=0; cur="$cur$c"; pc="$c"
+  elif [ "$c" = '\' ]; then
+    esc=1; cur="$cur$c"; pc="$c"
+  else
+    # unquoted, or inside double quotes (where $( and ` still execute)
+    if [ "$c" = '`' ] || { [ "$c" = '$' ] && [ "${cmd:i+1:1}" = '(' ]; }; then
+      subshell=1
+      break
+    fi
+    if [ "$c" = '"' ]; then
+      in_d=$((1 - in_d)); cur="$cur$c"; pc="$c"
+    elif [ "$in_d" -eq 1 ]; then
+      # inside double quotes operators (and single quotes) are literal
+      cur="$cur$c"; pc="$c"
+    elif [ "$c" = "'" ]; then
+      in_s=1; cur="$cur$c"; pc="$c"
+    elif [ "$c" = "&" ] || [ "$c" = "|" ]; then
+      nxt=${cmd:i+1:1}
+      if [ "$pc" = ">" ] || [ "$pc" = "<" ] || [ "$nxt" = ">" ] || [ "$nxt" = "<" ]; then
+        cur="$cur$c"; pc="$c"   # >& &> 2>&1 >| : fd duplication, not a separator
+      else
+        flush_seg; cur=""; pc=""
+        [ "$nxt" = "$c" ] && i=$((i + 1))   # consume doubled partner of && ||
+      fi
+    elif [ "$c" = ";" ] || [ "$c" = "$nl" ] || [ "$c" = "$cr" ]; then
+      flush_seg; cur=""; pc=""
+    else
+      cur="$cur$c"; pc="$c"
+    fi
+  fi
+  i=$((i + 1))
+done
+flush_seg
+
+# Allowlist: every segment independently evaluated.
+# Lone segment: first word is `just` or a read-only verb.
+# Composite (2+ segments): every segment must be a just invocation — chained
+# read-only verbs still funnel (e.g. newline-splitting 'just x\ncat y' denies).
+all_ok=1
+n=${#segments[@]}
+if [ "$n" -eq 1 ]; then
+  printf '%s' "${segments[0]}" | grep -Eq '^(just|cd|pwd|echo|ls|cat|command[[:space:]]+-v|which)([[:space:]]|$)' || all_ok=0
+elif [ "$n" -gt 1 ]; then
+  for s in "${segments[@]}"; do
+    case $s in
+      just|just\ *|just$'\t'*) ;;
+      *) all_ok=0; break ;;
+    esac
+  done
+fi
+
+# Fully allowed -> allow early, whether or not a justfile resolves
+if [ "$all_ok" -eq 1 ] && [ "$subshell" -eq 0 ]; then
   exit 0
 fi
 
-# No justfile resolvable from the project dir (or cwd) -> passthrough
+# Enforcement applies only where a justfile resolves from the project dir (or cwd)
 dir="${CLAUDE_PROJECT_DIR:-$PWD}"
 ( cd "$dir" 2>/dev/null && just --summary >/dev/null 2>&1 ) || exit 0
 

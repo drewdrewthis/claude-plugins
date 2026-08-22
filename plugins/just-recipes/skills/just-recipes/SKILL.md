@@ -8,7 +8,16 @@ description: Use when running project commands/tasks in a repo that has a justfi
 ## Enforcement model
 
 - A PreToolUse hook denies raw Bash wherever a justfile resolves from the project dir. Discover recipes with `just --list`; escape hatch: `just wrap "<cmd>"` — runs the command under timeout/output-cap guardrails and logs it to `$CODEX_ROOT/state/wrap.log`.
-- Kill switch: `JUST_RECIPES_ENFORCE=off` (or `0`) disables enforcement. Commands starting with `just`, a tiny read-only allowlist (`cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`), repos without a justfile, and machines without `just` all pass through.
+  ⚠ fm.just-wrap-unwired — bare `just wrap` errors ("no such recipe") in any project whose own justfile lacks `wrap`: mounted module recipes stay namespaced and `set fallback` walks parent directories, not modules (verified on just 1.58.0). Always-resolving form: `just --justfile ~/.claude/just/justfile -d . wrap "<cmd>"` (`-d .` pins execution to the current dir). After the wiring below, `just global::wrap "<cmd>"` also works.
+- One-time project wiring — add to the project justfile to expose every global recipe as `global::<recipe>`:
+
+  ```just
+  mod global '~/.claude/just/justfile'
+  set fallback
+  ```
+
+- Parsing: commands are trimmed of surrounding whitespace, then segmented on shell control operators (`&&`, `||`, `;;`, `;`, `|`, newlines — quoted or backslash-escaped operators don't split). A lone segment passes when its first word is `just` or a read-only verb (`cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`); a multi-segment command passes only when EVERY segment is a `just` invocation. Command substitution (`$(...)`, backticks) is denied wherever the hook enforces.
+- Kill switch: `JUST_RECIPES_ENFORCE=off` (or `0`) disables enforcement. Repos without a resolvable justfile and machines without `just` pass everything through.
 
 ## Habit loop
 
