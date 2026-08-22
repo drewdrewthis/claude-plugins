@@ -82,6 +82,9 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
   # Fences are indented inside the numbered steps, so the pattern must not be
   # anchored hard to column 0 — anchoring it there is how this assertion passes
   # while reading nothing.
+  # Sole exemption: lines invoking `just --dump` (the step-4c project-justfile
+  # probe). It reads recipes, not records, and its licence lives in an explicit
+  # Boundaries carve-out that "the just-dump exemption stays anchored" pins.
   local offenders blocks
   # `|| true`: bats runs test bodies under errexit and grep exits 1 on no
   # match, so without this the assignment aborts the test BEFORE the vacuity
@@ -91,7 +94,7 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
   offenders="$(awk '
     /^[[:space:]]*```bash/ { inblock=1; next }
     /^[[:space:]]*```/     { inblock=0; next }
-    inblock && $0 ~ /[^[:space:]]/ && $0 !~ /query-records\.sh/ && $0 !~ /^[[:space:]]*#/ { print FILENAME ":" FNR ": " $0 }
+    inblock && $0 ~ /[^[:space:]]/ && $0 !~ /query-records\.sh/ && $0 !~ /just --dump/ && $0 !~ /^[[:space:]]*#/ { print FILENAME ":" FNR ": " $0 }
   ' "$AGENT")"
   [ -z "$offenders" ] || { echo "non-query-records command in the scout prompt:"; echo "$offenders"; false; }
 }
@@ -438,5 +441,80 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
       || { echo "$(basename "$f"): the 3-4 Bash call budget block was lost"; false; }
     grep -qiE 'guidance, not a cap' "$f" \
       || { echo "$(basename "$f"): the not-a-cap caveat was lost"; false; }
+  done
+}
+
+# ---------- the project-justfile probe (procedures x just integration) ----------
+#
+# Step 4c lets the scout surface runnable recipes from the repo's own justfile
+# alongside record-store retrieval. It is an ADDITION, not a second retrieval
+# surface: soft-degrading, carve-out-scoped, and budgeted.
+
+@test "both prompts probe the project justfile between the bug-report step and the return" {
+  local f b j v c
+  for f in "$SKILL" "$AGENT"; do
+    b="$(grep -n '^4b\.' "$f" | head -1 | cut -d: -f1)"
+    j="$(awk '/^[[:space:]]*```bash/{bl=1;next} /^[[:space:]]*```/{bl=0;next}
+              bl && /--dump/ { print NR; exit }' "$f")"
+    v="$(grep -n '^5\. ' "$f" | head -1 | cut -d: -f1)"
+    c="$(awk '/^[[:space:]]*```bash/{bl=1;next} /^[[:space:]]*```/{bl=0;next}
+              bl && /--cat/ { print NR; exit }' "$f")"
+    [ -n "$b" ] || { echo "$(basename "$f"): no 4b step to anchor against"; false; }
+    [ -n "$j" ] || { echo "$(basename "$f"): the justfile dump is never issued as a command"; false; }
+    [ -n "$v" ] || { echo "$(basename "$f"): no return step to anchor against"; false; }
+    { [ "$b" -lt "$j" ] && [ "$j" -lt "$v" ]; } \
+      || { echo "$(basename "$f"): the justfile probe (line $j) is not between 4b (line $b) and the return (line $v)"; false; }
+    { [ -n "$c" ] && [ "$c" -lt "$j" ]; } \
+      || { echo "$(basename "$f"): the justfile probe precedes the --cat batch read"; false; }
+  done
+}
+
+@test "both prompts soft-degrade the justfile probe and never report its absence as a miss" {
+  # A missing just(1) or justfile is a normal environment, not a gap: if the
+  # degrade were reported, every non-just repo would grow a phantom UNREACHABLE.
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'skip it silently|soft-degrade' "$f" \
+      || { echo "$(basename "$f"): the justfile probe does not soft-degrade"; false; }
+    grep -qE 'not a retrieval miss' "$f" \
+      || { echo "$(basename "$f"): a skipped probe is not kept distinct from a retrieval miss"; false; }
+  done
+}
+
+@test "both prompts put matched recipes under RECIPES, preferred over raw commands" {
+  local f co re tr
+  for f in "$SKILL" "$AGENT"; do
+    grep -qF 'preferred over reciting equivalent raw commands' "$f" \
+      || { echo "$(basename "$f"): RECIPES carries no preference over raw commands"; false; }
+    co="$(grep -n 'COMMANDS (verbatim)' "$f" | head -1 | cut -d: -f1)"
+    re="$(grep -n '^RECIPES' "$f" | head -1 | cut -d: -f1)"
+    tr="$(grep -n '^TRAPS:' "$f" | head -1 | cut -d: -f1)"
+    [ -n "$co" ] && [ -n "$re" ] && [ -n "$tr" ] \
+      || { echo "$(basename "$f"): output-shape anchors missing"; false; }
+    { [ "$co" -lt "$re" ] && [ "$re" -lt "$tr" ]; } \
+      || { echo "$(basename "$f"): RECIPES is not adjacent to COMMANDS (before TRAPS:)"; false; }
+  done
+}
+
+@test "the just-dump exemption stays anchored to a written carve-out in both boundaries" {
+  # The every-command-block test exempts lines invoking `just --dump`. Without
+  # this companion, deleting the boundary clause that licenses the exemption
+  # would leave it free-floating — an unanchored exception is how a second
+  # retrieval surface grows back. One clause per boundary, so two per file.
+  local f n
+  for f in "$SKILL" "$AGENT"; do
+    n="$(grep -cF 'cwd-resolving justfile' "$f")"
+    [ "$n" -ge 2 ] \
+      || { echo "$(basename "$f"): $n carve-out clause(s); expected one per boundary"; false; }
+  done
+}
+
+@test "the justfile probe states its cost against the call budget" {
+  # The 3-4 headline is pinned by the #48 test above; the +1 must be stated in
+  # the same breath, or the probe reads as free.
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qF '(+1 when the step 4c justfile probe applies)' "$f" \
+      || { echo "$(basename "$f"): the +1 probe cost is not stated on the budget line"; false; }
   done
 }

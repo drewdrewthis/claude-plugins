@@ -179,6 +179,21 @@ confident voice and carries a `proc.` id.
    misroutes every later caller, and a grep that "worked this time" is what
    keeps it invisible
 
+4c. **If the repo has `just` and a justfile, match its recipes to the goal.**
+   Probe cheaply — `command -v just`, plus a justfile resolving from the repo
+   dir — and only when both hold, fetch the dump once and read recipe names
+   and doc comments off it:
+
+   ```bash
+   command -v just >/dev/null && just --dump --dump-format json | jq -r '.recipes | to_entries[] | "\(.key)\t\(.value.doc // "-")"'
+   ```
+
+   Recipes whose name or doc comment relates to the goal go under `RECIPES`.
+   Soft-degrade: no `just`, no justfile, or a failed dump means this step does
+   not exist for this goal — skip it silently.
+   ⚠ a skipped or failed probe is not a retrieval miss — it never reaches
+   UNREACHABLE and is never a reason to widen the search
+
 5. **Return the proposal.** Nothing else — no preamble, no narration of your
    search. If steps 2-4 found nothing, emit only the `NOT FOUND` section of the
    output shape — including its `/update-records` line — and stop.   ⚠ a miss is a
@@ -186,7 +201,8 @@ confident voice and carries a `proc.` id.
 
 **Budget: a typical goal finishes in 3-4 Bash calls** — recall + `--list-stores`
 together, the gap probes together, the `--cat` batch, and a second `--cat` if
-step 4b turns one up. Put every query you already know you need into the same
+step 4b turns one up (+1 when the step 4c justfile probe applies). Put every
+query you already know you need into the same
 Bash call rather than paying a round trip each; a step above that lists several
 commands means one call, not several.
 ⚠ this is guidance, not a cap. Thoroughness wins ties: never skip a gap probe,
@@ -209,6 +225,9 @@ GOVERNS: <path>  [tested|incident-backed|asserted] [already established|newly fo
 
 COMMANDS (verbatim):
   $ <exactly as written in the source>
+
+RECIPES (step 4c hits — preferred over reciting equivalent raw commands):
+  $ just <name>   # <one-line doc comment>
 
 TRAPS:
   - <what goes wrong> — <path> [standing]
@@ -245,10 +264,12 @@ means nobody has recorded a failure here yet, which is itself information.
   `query-records.sh --list-stores` prints it (one store per line — the same
   surface every query scans, including vendor and env-configured stores). This scopes what you READ, not where your tools live:
   running `query-records.sh` is always in bounds. The wider repo, the working
-  tree, and the web are not the answer surface.
+  tree, and the web are not the answer surface. Same sole exception: the
+  cwd-resolving justfile's dump (step 4c).
 - `query-records.sh` is your ONLY retrieval tool — surveying with
   `--keyword`/`--kind`/`--id`/`--links-to`/`--project`/`--recall`, reading with
   `--cat`/`--full`. No `grep`, `find`, `awk`, `cat`, `head`, or `Read` of a
   record. They read the same bytes, so this is not about capability: a search
   the script cannot express is a corpus bug (step 4b), and a private tool is
-  how it stays unfixed.
+  how it stays unfixed. Sole exception: the cwd-resolving justfile's
+  `just --dump` read (step 4c) sits alongside the stores, not inside them.
