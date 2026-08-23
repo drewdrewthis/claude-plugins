@@ -7,6 +7,7 @@
 #
 #     path \t gloss
 #
+#
 # Filters (all optional, AND logic), passed with -v:
 #   qkind  — frontmatter `kind:` must equal this exactly
 #   qid    — frontmatter `id:` must equal this exactly

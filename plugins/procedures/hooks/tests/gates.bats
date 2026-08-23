@@ -141,7 +141,12 @@ assistant_tool() {
   # argues with the invariant instead of clearing it. Pin the reason, not just
   # the instruction, or a later trim quietly restores the bare version.
   [[ "$output" == *"does not carry over"* ]]
-  [[ "$output" == *"bounded"* ]]
+  # The bounded-retrieval clause, post one-query redesign: the old "pass is
+  # bounded — 3-4 Bash calls" wording contradicted the guard's one-call budget,
+  # so the message now states the tighter bound directly ("exactly one query",
+  # which scout-retrieval.bats also pins on this gate). Same semantic, pinned
+  # where it now lives.
+  [[ "$output" == *"there is exactly one query"* ]]
 }
 
 @test "how-do-i-gate: a skill run in an EARLIER turn does not release this one" {

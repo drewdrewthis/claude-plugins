@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# stores.sh — single source of truth for the ten codex record stores.
+# stores.sh — single source of truth for the eleven codex record stores.
 #
 # The store set is one store per GRC artifact class: risk register
 # (failure-modes), governance choices (decisions), control patterns (solutions),
 # control implementations (procedures), evidence (research), roadmap (plans),
-# judgment rules (principles), absolute constraints (invariants), standing
-# authority (policies), and control objectives (standards).
+# judgment rules (principles), architecture decision records (adrs), absolute
+# constraints (invariants), standing authority (policies), and control
+# objectives (standards).
 #
 # Source this file from any script that needs the store list:
 #   source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/stores.sh"   # from hooks/
 #   source "$(dirname "${BASH_SOURCE[0]}")/lib/stores.sh"                  # from scripts/
 #
 # Exports:
-#   STORES           — bash array of the ten store paths (relative to repo root)
+#   STORES           — bash array of the eleven store paths (relative to repo root)
 #   STORES_ALT       — pipe-separated alternation for grep -E / sed -E patterns
 #                      e.g. "references/failure-modes|references/decisions|..."
 #
@@ -27,6 +28,7 @@ STORES=(
     references/research
     plans
     references/principles
+    references/adrs
     references/invariants
     references/policies
     references/standards

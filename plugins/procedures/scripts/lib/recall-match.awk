@@ -24,15 +24,25 @@ BEGIN {
     # "type.slot" never matches a lone "type". Whole-word + phrase matching is
     # the precision fix over substring OR-union, which matched most of the
     # file on common words.
+    # The term's alphanumeric PARTS ride along as a cheap prefilter: a line
+    # that does not contain every part (lowercased) cannot match the term's
+    # regex anywhere — its values are substrings of the line — so the field
+    # extraction and regex pass are skipped for it entirely.
     while ((getline t < tokfile) > 0) {
         if (t == "") continue
         nparts = split(t, PARTS, /[^a-z0-9]+/)
-        re = ""
+        re = ""; np = 0
         for (p = 1; p <= nparts; p++) {
             if (PARTS[p] == "") continue
+            np++
+            TKPART[ntok + 1, np] = PARTS[p]
             re = (re == "") ? PARTS[p] : re "[^a-z0-9\n]+" PARTS[p]
         }
-        if (re != "") RE[++ntok] = "(^|[^a-z0-9])" re "($|[^a-z0-9])"
+        if (re != "") {
+            ntok++
+            TPARTS[ntok] = np
+            RE[ntok] = "(^|[^a-z0-9])" re "($|[^a-z0-9])"
+        }
     }
     close(tokfile)
 }
@@ -40,27 +50,33 @@ BEGIN {
 # Value of "key":"..." in line, JSON-escape-aware (stops at the first
 # unescaped quote). Tolerates whitespace around the colon — the file mixes
 # `"k":"v"` and `"k": "v"` records. Returns "" when the key is absent or
-# non-string.
-function fieldval(line, key,    rest, len, i, c, out, esc) {
+# non-string. One anchored ERE ("([^"\\]|\\.)*") replaces the per-character
+# scan this used to be — that loop was the recall sweep's hot spot.
+function fieldval(line, key,    rest) {
     if (!match(line, "\"" key "\"[ \t]*:[ \t]*\"")) return ""
     rest = substr(line, RSTART + RLENGTH)
-    len = length(rest); out = ""; esc = 0
-    for (i = 1; i <= len; i++) {
-        c = substr(rest, i, 1)
-        if (esc) { out = out c; esc = 0; continue }
-        if (c == "\\") { esc = 1; continue }
-        if (c == "\"") return out
-        out = out c
-    }
-    return out
+    if (!match(rest, /^([^"\\]|\\.)*/)) return ""
+    return substr(rest, 1, RLENGTH)
 }
 
 {
+    # prefilter: keep only terms whose parts all occur somewhere in the line.
+    ncand = 0
+    low = tolower($0)
+    for (t = 1; t <= ntok; t++) {
+        ok = 1
+        for (p = 1; p <= TPARTS[t]; p++) {
+            if (!index(low, TKPART[t, p])) { ok = 0; break }
+        }
+        if (ok) CAND[++ncand] = t
+    }
+    if (ncand == 0) next
+
     # Fields are joined with \n and phrase joints match [^a-z0-9\n]+, so a
     # phrase cannot match across a field boundary (pattern ending "check" +
     # description starting "run" must not satisfy "check-run").
     hay = ""
     for (f = 1; f <= nfields; f++) hay = hay "\n" fieldval($0, FIELDS[f])
     hay = tolower(hay)
-    for (t = 1; t <= ntok; t++) if (match(hay, RE[t])) { print; next }
+    for (c = 1; c <= ncand; c++) if (match(hay, RE[CAND[c]])) { print; break }
 }
