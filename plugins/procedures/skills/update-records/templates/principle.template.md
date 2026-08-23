@@ -2,13 +2,13 @@
 id: prin.<slug>
 kind: principle
 date: YYYY-MM-DD
-keywords: [<grep surface — never empty>]
+keywords: [<named entities only — tools, commands, repos this principle governs — never empty>]
 links: { principles: [], procedures: [], decisions: [] }
 enforced_by: <path to the hook / lint / reviewer that makes this real, or `none-aspirational`>
 mitigates: [<fm.id of any failure-mode this rule treats — omit if none>]
 status: active
+description: <One line, ~120 chars: what this principle decides, stated so the reader knows if it applies to them.>
 title: <Title Case Name>
-purpose: <One line: what this principle decides, stated so the reader knows if it applies to them.>
 ---
 
 # <Title>

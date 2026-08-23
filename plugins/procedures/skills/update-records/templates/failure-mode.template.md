@@ -5,9 +5,10 @@
 id: fm.<kebab-name>
 kind: failure-mode
 date: YYYY-MM-DD
-keywords: [<symptom words + tool names — what recurrence would grep>]
+keywords: [<named entities — tools, commands, repos involved — what recurrence would grep>]
 links: { procedures: [] }
 status: active
+description: <One line, ~120 chars: the failure and its trigger — what the agent does wrong and when it fires, not "bug in X".>
 project: <owner/repo this failure-mode is scoped to — delete if corpus-wide>
 ---
 

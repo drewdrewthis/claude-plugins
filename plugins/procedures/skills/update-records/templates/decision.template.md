@@ -18,9 +18,10 @@
 id: dec.<YYYY-MM-DD>-<slug>
 kind: decision
 date: <YYYY-MM-DD>
-keywords: [<lowercase — domain, options considered, key actors>]
+keywords: [<named entities only — projects, tools, commands, repos involved — never empty>]
 links: {}
 status: active
+description: <One line, ~120 chars: what was decided — the concrete choice and the reasoning that makes it stick, not "decision about X".>
 project: <owner/repo this decision is scoped to — delete if corpus-wide>
 ---
 

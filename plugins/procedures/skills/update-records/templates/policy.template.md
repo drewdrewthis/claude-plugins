@@ -2,13 +2,13 @@
 id: pol.<slug>
 kind: policy
 date: YYYY-MM-DD
-keywords: [<grep surface — never empty>]
+keywords: [<named entities only — tools, commands, repos this policy governs — never empty>]
 links: { policies: [], principles: [], procedures: [], decisions: [] }
 enforced_by: <path to the skill / reviewer / hook that applies this authority, or `none-aspirational`>
 mitigates: [<fm.id of any failure-mode this authority treats — omit if none>]
 status: active
+description: <One line, ~120 chars: what authority this grants or withholds, and over what scope.>
 title: <Title Case Name>
-purpose: <One line: what authority this grants or withholds, and over what scope.>
 ---
 
 # <Title>

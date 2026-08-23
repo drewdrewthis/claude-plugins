@@ -2,9 +2,10 @@
 id: proc.<category>.<name>.evolution
 kind: procedure
 date: YYYY-MM-DD
-keywords: [<same domain words as the procedure, plus: evolution>]
+keywords: [<named entities from the procedure's own keywords, plus: evolution>]
 links: { procedures: [proc.<category>.<name>] }
 status: active
+description: <One line, ~120 chars: the throughline across this procedure's changes — what kept failing and what fixed it, not a topic label.>
 ---
 
 # Evolution — <name>
