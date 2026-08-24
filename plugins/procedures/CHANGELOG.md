@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.8.1...procedures-v0.9.0) (2026-08-24)
+
+
+### Features
+
+* **procedures:** cut how-do-i over to the index pipeline; drop query-records ([#124](https://github.com/drewdrewthis/claude-plugins/issues/124)) ([6ef760c](https://github.com/drewdrewthis/claude-plugins/commit/6ef760c0d661c84e57cd32174e48191a0987aebe))
+
 ## [0.8.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.8.0...procedures-v0.8.1) (2026-08-24)
 
 
