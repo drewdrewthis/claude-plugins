@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.8.0...procedures-v0.8.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **procedures:** how-do-i gateway compat + harness token cut ([#122](https://github.com/drewdrewthis/claude-plugins/issues/122)) ([2f85dde](https://github.com/drewdrewthis/claude-plugins/commit/2f85dde1848bc3a68ae5d08cdf6f89dd92300cd8))
+* **procedures:** how-do-i works through gateways and cuts harness token cost ([2f85dde](https://github.com/drewdrewthis/claude-plugins/commit/2f85dde1848bc3a68ae5d08cdf6f89dd92300cd8))
+
 ## [0.8.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.7.1...procedures-v0.8.0) (2026-08-24)
 
 
