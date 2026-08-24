@@ -27,10 +27,10 @@ orchard-codex `develop-sweatshop`):
 
 | piece | what |
 |---|---|
-| `/how-do-i` | the gateway to everything the codex knows — forks the `procedure-scout` agent, which searches the record stores via `scripts/query-records.sh` and returns the governing procedure, verbatim commands, traps, and a standing label per source. `query-records.sh` is its SOLE retrieval surface (survey with `--keyword`/`--kind`/`--links-to`/`--recall`, batch-read with `--cat`); a record it can reach but not query is reported as a matcher/`keywords` bug rather than worked around |
+| `/how-do-i` | the gateway to everything the codex knows — runs the two-stage retrieval pipeline (`scripts/how-do-i.sh`): stage 1 (`record-selector`, fast model) picks relevant records from a numbered index built by `build-record-index.sh` over every store, `compile-records.sh` assembles their full text, stage 2 (`how-do-i-answerer`, strong model) writes the answer — governing procedure, verbatim commands, traps, cited to source paths. One pipeline run per invocation; a record it should have surfaced is reported as a selection gap rather than worked around |
 | `digest-record` (PostToolUse:Skill) | stores the digest each `/how-do-i` fork returns, one file per digest under `$TURN_STATE_DIR/digests`, so the next `/how-do-i` in the session starts warm and can separate "already established" from "newly found". Read-only replay via `scripts/session-digest-read.sh --read`; it changes what the fork STARTS WITH, never whether the gate fires |
 | `/update-records` | THE single entry point for every knowledge artifact — there is no separate create command. Script-backed via `scripts/log-record.sh`: mistake / decision / solution / failure-mode. Written by hand from `skills/update-records/templates/`: procedure, evolution, and the four rule shapes — principle, invariant, policy, standard. Written by following the longhand procedures in `skills/update-records/references/`: procedure, reference, skill. Carries the test for choosing among the rule kinds |
-| record stores | ten, one per GRC artifact class: `failure-modes` (risk register), `decisions` (governance choices), `solutions` (control patterns), `procedures` (control implementations), `research` (evidence), `plans` (roadmap), `principles` (judgment rules), `invariants` (absolute constraints), `policies` (standing authority), `standards` (control objectives). Defined once in `scripts/lib/stores.sh`; discover at runtime with `query-records.sh --list-stores`, never by enumerating them in prose |
+| record stores | ten, one per GRC artifact class: `failure-modes` (risk register), `decisions` (governance choices), `solutions` (control patterns), `procedures` (control implementations), `research` (evidence), `plans` (roadmap), `principles` (judgment rules), `invariants` (absolute constraints), `policies` (standing authority), `standards` (control objectives). Defined once in `scripts/lib/stores.sh`; `build-record-index.sh` discovers them at runtime, never by enumerating them in prose |
 | `/am-i-done` | cold-read review of an am-i-done report (incl. the "Procedures followed" evolution table) by the `work-reviewer` agent before calling work done |
 | `/evolve-procedure` | patch an EXISTING procedure from a correction, incident, or friction — deviation, missing step, or stale/broken ref; procedures only, every material patch appends a dated line to that procedure dir's `EVOLUTION.md` |
 | `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded; off-switch `enable_how_do_i_gate` |
@@ -40,9 +40,10 @@ orchard-codex `develop-sweatshop`):
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (`evolution.template.md` in `skills/update-records/templates/`) — one dated line per material change, newest first; `/update-records` explains it |
 
 The machinery is vendored from orchard-codex `develop-sweatshop` (skills,
-procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
-`log-record.sh` + shared awk matcher, linter, templates) with deliberate adaptation, marked
-`PLUGIN ADAPTATION` in the source where it touches code:
+procedure-scout/work-reviewer agents, gate hooks + lib, the two-stage
+retrieval pipeline — `how-do-i.sh`, `build-record-index.sh`,
+`compile-records.sh` — plus `log-record.sh`, linter, templates) with deliberate
+adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
 
 - **Data-root defaults:** every script's record-store root defaults to
   `~/.claude` (the host codex) instead of the script's own parent dir —
@@ -78,16 +79,16 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   that with `context: fork`, a SKILL's `model:` "sets the forked subagent's
   model instead". The skill-level pin is therefore the only control surface on
   this path, and re-declaring it per fork skill is the intended usage rather
-  than a workaround. `hooks/tests/scout-retrieval.bats` sweeps every agent
+  than a workaround. `hooks/tests/gate-skill-model.bats` sweeps every agent
   declaring `model:` across every plugin and requires the fork skill that
   dispatches it to pin the same tier.
 
-- **No upstream counterpart (query-records is now sourced here):**
-  orchard-codex#268 phase 1 removed these scripts from the codex, so this
-  plugin is the source of truth for `query-records.sh`. Machinery added since
-  — `--recall` over `mistakes.jsonl`, and `--cat` for batch full-record
-  retrieval — has nothing upstream to stay byte-close to. Each is marked at
-  its point of divergence.
+- **No upstream counterpart (the retrieval pipeline is sourced here):**
+  orchard-codex#268 removed its query machinery from the codex, and this
+  plugin's own `query-records.sh` matcher was dropped in favour of the
+  two-stage index pipeline (`how-do-i.sh` + `build-record-index.sh` +
+  `compile-records.sh` + the `record-selector`/`how-do-i-answerer` agents) —
+  all plugin-local, nothing upstream to stay byte-close to.
 
 - **Fork-path session state:** `hooks/digest-record.sh` +
   `hooks/lib/session-digest.sh` + `scripts/session-digest-read.sh` carry a
@@ -118,9 +119,9 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   shape, and the sole-retrieval-surface Boundaries — lives in
   `skills/how-do-i/SKILL.md`, the file that actually binds.
   `agents/procedure-scout.md` keeps the same contract because it still governs a
-  direct `Agent(subagent_type:)` spawn, and `hooks/tests/scout-retrieval.bats`
-  pins the load-bearing clauses in each file independently so the two cannot
-  silently split. Same class as the model pin above: the fork path reads the
+  direct `Agent(subagent_type:)` spawn. Since the pipeline cutover the agent
+  file is a deprecated-in-place pointer at `scripts/how-do-i.sh`; the live
+  contract is this SKILL.md alone. Same class as the model pin above: the fork path reads the
   SKILL, never the agent. There is no confirmed skill-level tool restriction for
   forks — `disallowed-tools` is declared on the skill as a best-effort second
   layer, but the docs do not say it reaches a fork, so the prose prohibition is
@@ -160,9 +161,9 @@ the plugin's own `procedure-scout`.
 
 ### Tests
 
-The upstream bats suites for everything shipped here (gates + libs +
-fail-open, linter, `query-records.sh` + ranking) are
-vendored under `plugins/procedures/{hooks,scripts}/tests/`. Run:
+The bats suites for everything shipped here (gates + libs + fail-open,
+linter, the retrieval pipeline) live under `plugins/procedures/hooks/tests/`.
+Run:
 
 ```
 cd plugins/procedures && bats hooks/tests

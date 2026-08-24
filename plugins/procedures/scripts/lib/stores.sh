@@ -25,7 +25,7 @@
 #                      plus the fixed rule stores and top-level "plans" (see
 #                      REQUIRED_STORES below). Assumes CWD is already the
 #                      corpus root — callers `cd "$ROOT"` before sourcing
-#                      this (see lint-frontmatter.sh / query-records.sh).
+#                      this (see lint-frontmatter.sh / build-record-index.sh).
 #   STORES_ALT       — pipe-separated alternation for grep -E / sed -E patterns
 #                      e.g. "references/failure-modes|references/decisions|..."
 #
@@ -36,11 +36,11 @@
 RECORDS_ROOT="references"
 
 # Vendor stores (titw-managed, DECISIONS D23 in drewdrewthis/titw): queried by
-# query-records.sh but NOT linted/backfilled — vendored records are validated
+# build-record-index.sh but NOT linted/backfilled — vendored records are validated
 # by `titw check` at publish time, not by the consumer's lint. Excluded from
 # discovery below by basename, so a vendor directory landing under
 # RECORDS_ROOT is still never treated as a lintable store.
-# shellcheck disable=SC2034  # consumed by sourcing scripts (query-records.sh)
+# shellcheck disable=SC2034  # consumed by sourcing scripts (build-record-index.sh)
 VENDOR_STORES=(
     titw
 )
@@ -103,13 +103,13 @@ _stores_discover() {
 _stores_discover
 
 # QUERY_RECORDS_EXTRA_STORES — optional, space-separated, root-relative store
-# paths that query-records.sh appends to its scan list. A SEPARATE array from
+# paths a survey tool may append to its scan list. A SEPARATE array from
 # VENDOR_STORES: extras are runtime config, so they are neither linted nor part
 # of the drift-tested doc contract. Env-based on purpose: settings `env` maps
 # stack by scope (user -> project -> local), so a project can add a store
 # without a plugin release. Entries are literal relative paths — absolute
 # paths, `..`, and glob characters are rejected (loudly, on stderr).
-# shellcheck disable=SC2034  # consumed by sourcing scripts (query-records.sh)
+# shellcheck disable=SC2034  # consumed by sourcing scripts (build-record-index.sh)
 EXTRA_STORES=()
 if [ -n "${QUERY_RECORDS_EXTRA_STORES:-}" ]; then
     set -f

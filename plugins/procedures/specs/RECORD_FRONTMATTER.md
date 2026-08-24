@@ -2,7 +2,7 @@
 id: std.record-frontmatter
 kind: standard
 date: 2026-08-23
-keywords: [frontmatter, okf, lint-frontmatter, stores.sh, record-match]
+keywords: [frontmatter, okf, lint-frontmatter, stores.sh, build-record-index]
 links: { standards: [], principles: [], adrs: [] }
 status: active
 title: Record Frontmatter
@@ -97,7 +97,7 @@ don't use a decision, you're bound by it" — see Rejected alternatives).
 | Alternative | Why not |
 |---|---|
 | `when_to_use` field | Procedure-shaped — presumes the record is an action to invoke. Breaks for decision (154 records, measured this session — you're bound by a decision, not "using" it), research (62), adr (17), principle (22): none of these are invoked. Do not re-propose without a kind-conditional shape, which defeats a uniform schema. |
-| `keywords` as the retrieval/topic-match surface | Measured this session: 4002 keyword tokens, 2677 distinct, 2134 (80%) appear exactly once. The rarity gate (`--k-floor 2`) drops singletons, so 80% of authored keywords are structurally excluded from ranking. The frequent survivors are all proper nouns — `keywords` is a named-entity index, not a topic-match surface. `description` is the surface built for matching questions; `keywords` stays narrowed to what it actually does well. |
+| `keywords` as the retrieval/topic-match surface | Measured this session: 4002 keyword tokens, 2677 distinct, 2134 (80%) appear exactly once. The frequent tokens are all proper nouns — `keywords` is a named-entity index, not a topic-match surface. `description` is the surface built for matching questions (it is what `build-record-index.sh` indexes and stage 1 selects on); `keywords` stays narrowed to what it actually does well: exact-token grep. |
 | Hardcoded store list (status quo) | `~/.claude/scripts/lib/stores.sh` hardcodes 7 stores; `references/` already has 17 subdirectories (measured this session) and this repo's own `stores.sh` already lints 11. A store is any directory under the records root — no enumeration to keep in sync. |
 
 ## OKF mirror mapping

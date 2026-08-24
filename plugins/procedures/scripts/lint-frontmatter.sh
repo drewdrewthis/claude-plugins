@@ -86,9 +86,9 @@ if [ ${#REQUIRED_KEYS[@]} -eq 0 ]; then
     echo "frontmatter-lint: schema yielded zero required keys — aborting" >&2
     exit 1
 fi
-# `project:` is OPTIONAL — absent means the record is corpus-wide. When present
-# it is the column `query-records.sh --project` filters on, so a malformed value
-# is worse than an absent one: it looks scoped and is unreachable by any query.
+# `project:` is OPTIONAL — absent means the record is corpus-wide. A malformed
+# value is worse than an absent one: it looks scoped to a repo and matches
+# nothing.
 PROJECT_RE='^[a-z0-9._-]+(/[a-z0-9._-]+)?$'
 
 # ---- collect the full corpus (for id uniqueness + link resolution) ----
@@ -232,8 +232,7 @@ for f in "${TARGETS[@]:-}"; do
     fi
     block="$(frontmatter_block "$f")"
 
-    # Zero-fork, pipe-free membership haystack — same pattern as
-    # scripts/query-records.sh (002f95a). `printf '%s\n' "$block" | grep -q`
+    # Zero-fork, pipe-free membership haystack. `printf '%s\n' "$block" | grep -q`
     # looks equivalent and is not: grep exits on its first match, the still-
     # writing printf takes SIGPIPE, and `set -o pipefail` reports 141 for a
     # SUCCESSFUL match once the block outgrows the pipe buffer. Every present
@@ -270,10 +269,9 @@ for f in "${TARGETS[@]:-}"; do
     esac
 
     # (f) PROJECT — OPTIONAL key, shape-checked only when present.
-    # NORMALISED EXACTLY AS scripts/lib/record-scan.awk DOES (truncate at the
-    # first whitespace, then strip one outer quote pair, in that order): the
-    # lint must validate the value the MATCHER indexes, or a record can pass
-    # the lint and still be unreachable by --project.
+    # Normalised before comparing (truncate at the first whitespace, then
+    # strip one outer quote pair, in that order): a quoted scalar must lint
+    # clean against PROJECT_RE, not fail on its quotes.
     # Same haystack/case idiom as the required-key loop above, and for the same
     # SIGPIPE reason (#46) — never `printf | grep -q`.
     case "$fm_haystack" in

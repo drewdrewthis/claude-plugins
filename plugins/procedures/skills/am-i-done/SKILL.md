@@ -10,8 +10,9 @@ model: sonnet
 background: false
 argument-hint: "<the am-i-done report>"
 # PLUGIN ADAPTATION: the fork may inherit the parent toolset; this key is a
-# best-effort second layer. The reviewer needs only Bash (one --ask) and Agent
-# (one evolution dispatch); everything else is judgment over pasted text.
+# best-effort second layer. The reviewer needs only Bash (one pipeline run)
+# and Agent (one evolution dispatch); everything else is judgment over pasted
+# text.
 disallowed-tools: Read, Grep, Glob, Write, Edit, NotebookEdit
 ---
 
@@ -31,7 +32,7 @@ both budgets; see agents/work-reviewer.md for the full contract):
    says:
 
    ```bash
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --ask '<terms>'
+   bash "${CLAUDE_SKILL_DIR}/../../scripts/how-do-i.sh" --question '<the question the finding hinges on>'
    ```
 
 2. ONE dispatch of the evolution agent with the report + your findings + which

@@ -46,9 +46,9 @@ the safe subset, say what you skipped, and why — one line.
 # Boundaries
 
 - You touch ONLY the record stores under `${CODEX_ROOT:-$HOME/.claude}` (the
-  same surface `query-records.sh --list-stores` prints) and their sibling
-  `EVOLUTION.md` files. Never the caller's working tree, never the deliverable
-  the report describes, never code.
+  set `scripts/lib/stores.sh` discovers, which `build-record-index.sh`
+  scans) and their sibling `EVOLUTION.md` files. Never the caller's working
+  tree, never the deliverable the report describes, never code.
 - Never write a record whose content the report does not evidence. An
   improvisation the report admits never worked is drafted `status: draft`, or
   not at all.

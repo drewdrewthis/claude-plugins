@@ -23,7 +23,7 @@
 #                 (gated: >=3 occurrences of the pattern in mistakes.jsonl first)
 #
 # `--project <owner/repo>` is OPTIONAL on decision/solution/failure-mode and
-# writes the frontmatter `project:` key that query-records.sh --project filters
+# writes the frontmatter `project:` key marking a record as repo-scoped
 # on. Omitted when not passed — a record with no `project:` is corpus-wide, and
 # an EMPTY `project:` would be neither (unmatchable, and rejected by
 # lint-frontmatter.sh's shape check).

@@ -122,10 +122,6 @@ if [ ! -f "$LIB_DIR/stores.sh" ]; then
     echo "build-record-index: lib missing: $LIB_DIR/stores.sh" >&2
     exit 1
 fi
-if [ ! -f "$LIB_DIR/record-scan.awk" ]; then
-    echo "build-record-index: lib missing: $LIB_DIR/record-scan.awk" >&2
-    exit 1
-fi
 
 # Resolve --out to an absolute path from the CALLER's cwd, before this
 # script cd's into ROOT below (a relative --out would otherwise silently
@@ -170,20 +166,21 @@ UNPARSED=0
 RECS=""
 
 if [ -n "$ALL_FILES" ]; then
-    # Reuse stripq() from record-scan.awk (the SSOT for unquoting a
-    # frontmatter scalar) rather than reimplementing it. Extracted at
-    # runtime so this always tracks the live function, not a frozen copy.
-    STRIPQ_FILE="$(mktemp)"
     MAIN_AWK_FILE="$(mktemp)"
-    trap 'rm -f "$STRIPQ_FILE" "$MAIN_AWK_FILE"' EXIT
-
-    sed -n '/^function stripq(/,/^}/p' "$LIB_DIR/record-scan.awk" > "$STRIPQ_FILE"
-    if [ ! -s "$STRIPQ_FILE" ]; then
-        echo "build-record-index: could not extract stripq() from $LIB_DIR/record-scan.awk -- lib missing or reshaped" >&2
-        exit 1
-    fi
+    trap 'rm -f "$MAIN_AWK_FILE"' EXIT
 
     cat > "$MAIN_AWK_FILE" <<'AWKPROG'
+# Unquote one frontmatter scalar value: strips a single matching outer
+# quote pair (double or single). Values shorter than 2 chars cannot carry
+# a quote pair.
+function stripq(v,   n) {
+    n = length(v)
+    if (n < 2) return v
+    if (substr(v, 1, 1) == "\"" && substr(v, n, 1) == "\"") return substr(v, 2, n - 2)
+    if (substr(v, 1, 1) == "'"  && substr(v, n, 1) == "'")  return substr(v, 2, n - 2)
+    return v
+}
+
 FNR == 1 {
     if (NR > 1) finish()
     fpath = FILENAME
@@ -269,8 +266,8 @@ function normdesc(s) {
 }
 AWKPROG
 
-    if ! SCAN_OUT="$(printf '%s\n' "$ALL_FILES" | tr '\n' '\0' | xargs -0 awk -f "$STRIPQ_FILE" -f "$MAIN_AWK_FILE")"; then
-        echo "build-record-index: record scan failed (awk unusable or lib missing) -- NOT 'zero records'" >&2
+    if ! SCAN_OUT="$(printf '%s\n' "$ALL_FILES" | tr '\n' '\0' | xargs -0 awk -f "$MAIN_AWK_FILE")"; then
+        echo "build-record-index: record scan failed (awk unusable) -- NOT 'zero records'" >&2
         exit 1
     fi
 

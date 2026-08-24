@@ -3,9 +3,10 @@
 #
 # SINGLE RESPONSIBILITY: hold the two gate forks to their one-shot contracts.
 #   procedures:procedure-scout  — Bash only, and every segment of that Bash is
-#                                 the ONE sanctioned shape (--ask / digest
-#                                 replay / the documented justfile probe); ONE
-#                                 retrieval call per fork session.
+#                                 the ONE sanctioned shape (one how-do-i.sh
+#                                 pipeline run / digest replay / the documented
+#                                 justfile probe); ONE retrieval call per fork
+#                                 session.
 #   procedures:work-reviewer    — same Bash shape and budget; at most ONE Agent
 #                                 dispatch, targeting procedures:procedure-evolver.
 # Both forks lose Write/Edit/Read-class tools outright: a fork inherits the
@@ -92,7 +93,7 @@ case "$TOOL_NAME" in
     Bash) : ;;
     Agent)
         if [ "$REVIEWER" -eq 0 ]; then
-            qsg_deny "QUERY-SHAPE-GUARD: procedure-scout is read-only — no Agent dispatches. Retrieve with --ask, report findings."
+            qsg_deny "QUERY-SHAPE-GUARD: procedure-scout is read-only — no Agent dispatches. Run the pipeline once, report findings."
         fi
         N="$(qsg_count agent)"
         if [ "${N:-0}" -ge 1 ]; then
@@ -127,7 +128,7 @@ SCAN="${SCAN//>\/dev\/null/ }"
 
 # Constructs that hide a segment from this scan deny outright.
 case "$SCAN" in
-    *'$('*|*'`'*|*'<('*|*$'\n'*) qsg_deny "QUERY-SHAPE-GUARD: command substitution hides a segment from the shape check — run the digest read, --ask, and the justfile probe as plain segments." ;;
+    *'$('*|*'`'*|*'<('*|*$'\n'*) qsg_deny "QUERY-SHAPE-GUARD: command substitution hides a segment from the shape check — run the digest read, the pipeline, and the justfile probe as plain segments." ;;
 esac
 # Output redirection to a FILE is a write.
 case "$SCAN" in *'>'*) qsg_deny "QUERY-SHAPE-GUARD: file redirection is a write — the forks read." ;; esac
@@ -154,7 +155,7 @@ while IFS= read -r stmt; do
         if [ "$IN_JQ" -eq 1 ]; then continue; fi   # tail of the quoted jq program
         case "$seg" in
             *"session-digest-read.sh"*" --read "*) ;;
-            *"query-records.sh"*" --ask "*) ;;
+            *"how-do-i.sh"*" --question "*) ;;
             "command -v just"*) ;;
             "just "*) ;;
             "jq "*)
@@ -162,7 +163,7 @@ while IFS= read -r stmt; do
                     qsg_deny "QUERY-SHAPE-GUARD: jq is sanctioned only inside the justfile probe pipeline (just --dump | jq -r ...)."
                 fi ;;
             *)
-                qsg_deny "QUERY-SHAPE-GUARD: unsanctioned command segment in $AGENT — the contract allows exactly: session-digest-read.sh --read ..., query-records.sh --ask '<terms>', and (when the repo has one) the documented justfile probe. Offending segment: ${seg:0:120}" ;;
+                qsg_deny "QUERY-SHAPE-GUARD: unsanctioned command segment in $AGENT — the contract allows exactly: session-digest-read.sh --read ..., how-do-i.sh --question '<question>', and (when the repo has one) the documented justfile probe. Offending segment: ${seg:0:120}" ;;
         esac
     done <<EOF
 $(printf '%s' "$stmt" | sed -e 's/|/\n/g')

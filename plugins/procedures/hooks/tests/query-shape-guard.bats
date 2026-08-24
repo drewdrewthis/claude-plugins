@@ -89,7 +89,16 @@ allowed_silent() {
   [ -z "$output" ] || { echo "expected silence, got: $output"; false; }
 }
 
-ASK_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '$SCRIPTS/query-records.sh' --ask 'terms here'"
+PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '$SCRIPTS/how-do-i.sh' --question 'goal and terms here as one question'"
+
+@test "a '|' inside the --question value is denied — prompts compose pipe-free questions" {
+  # The guard splits statements on pipes without quote-awareness, by design.
+  # That is why every prompt composes the question WITHOUT the caller's
+  # GOAL|TERMS separator; this pins that the pipe-carrying form stays
+  # denied so nobody "fixes" a prompt by reintroducing it.
+  run_guard "$(scout_bash "bash '$SCRIPTS/how-do-i.sh' --question 'goal | terms here'")"
+  denied "unsanctioned"
+}
 
 # ---------- audience: anyone but the two forks is untouched ----------
 
@@ -144,10 +153,17 @@ ASK_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '$SCRI
   denied "ls references/decisions/"
 }
 
-@test "the retired retrieval modes are unsanctioned shapes, even as the first call" {
-  local base="'$SCRIPTS/query-records.sh'"
+@test "retired retrieval-mode flags are unsanctioned on surviving scripts too" {
+  # The retired matcher's modes (keyword/cat/recall/id) died with their
+  # script in the pipeline cutover. These assert the guard never blesses a
+  # mode-flag shape on the scripts that remain: only the documented
+  # per-script flag passes (--read for the digest, --question for the
+  # pipeline).
   local cmd
-  for cmd in "$base --keyword quokka" "$base --cat references/decisions/a.md" "$base --recall quokka" "$base --id dec.x --full"; do
+  for cmd in \
+    "bash '$SCRIPTS/how-do-i.sh' --keyword quokka" \
+    "bash '$SCRIPTS/session-digest-read.sh' --recall quokka" \
+    "bash '$SCRIPTS/compile-records.sh' --cat references/decisions/a.md"; do
     run_guard "$(scout_bash "$cmd")"
     denied "unsanctioned"
   done
@@ -155,7 +171,7 @@ ASK_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '$SCRI
 
 @test "command substitution hides a segment and is denied outright" {
   local cmd
-  for cmd in "bash '$SCRIPTS/query-records.sh' --ask \$(echo terms)" "head -1 \`ls\`"; do
+  for cmd in "bash '$SCRIPTS/how-do-i.sh' --question \$(echo terms)" "head -1 \`ls\`"; do
     run_guard "$(scout_bash "$cmd")"
     denied "hides a segment"
   done
@@ -163,12 +179,12 @@ ASK_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '$SCRI
 
 @test "a multiline command hides segments behind the newline and is denied" {
   local nl=$'\n'
-  run_guard "$(scout_bash "bash '$SCRIPTS/query-records.sh' --ask 'terms'${nl}ls /")"
+  run_guard "$(scout_bash "bash '$SCRIPTS/how-do-i.sh' --question 'terms'${nl}ls /")"
   denied "hides a segment"
 }
 
 @test "file redirection is a write and is denied" {
-  run_guard "$(scout_bash "bash '$SCRIPTS/query-records.sh' --ask 'terms' > /tmp/out.txt")"
+  run_guard "$(scout_bash "bash '$SCRIPTS/how-do-i.sh' --question 'terms' > /tmp/out.txt")"
   denied "file redirection is a write"
 }
 
@@ -178,11 +194,11 @@ ASK_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '$SCRI
 }
 
 @test "a second retrieval call is denied after the budget is spent" {
-  run_guard "$(scout_bash "$ASK_CHAIN")"
+  run_guard "$(scout_bash "$PIPELINE_CHAIN")"
   allowed_silent
   [ -f "$QUERY_GUARD_STATE_DIR/$SID.bash" ] || { echo "no budget marker written for an allowed call"; false; }
 
-  run_guard "$(scout_bash "bash '$SCRIPTS/query-records.sh' --ask 'different terms entirely'")"
+  run_guard "$(scout_bash "bash '$SCRIPTS/how-do-i.sh' --question 'a different question entirely'")"
   denied "spent its one retrieval call"
 }
 
@@ -193,22 +209,22 @@ ASK_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '$SCRI
   denied "unsanctioned"
   [ ! -f "$QUERY_GUARD_STATE_DIR/$SID.bash" ] || { echo "a DENIED call consumed budget"; false; }
 
-  run_guard "$(scout_bash "$ASK_CHAIN")"
+  run_guard "$(scout_bash "$PIPELINE_CHAIN")"
   allowed_silent
 }
 
 # ---------- Bash shape: SILENT on compliant one-query use ----------
 
-@test "the documented one-call chain — digest replay && --ask — is allowed silently" {
-  run_guard "$(scout_bash "$ASK_CHAIN")"
+@test "the documented one-call chain — digest replay && pipeline — is allowed silently" {
+  run_guard "$(scout_bash "$PIPELINE_CHAIN")"
   allowed_silent
 }
 
 @test "discarding output is not mistaken for a write: 2>/dev/null, >/dev/null, 2>&1" {
   local cmd i=0
   for cmd in \
-    "bash '$SCRIPTS/session-digest-read.sh' --read x 2>/dev/null && bash '$SCRIPTS/query-records.sh' --ask 'terms' >/dev/null" \
-    "bash '$SCRIPTS/query-records.sh' --ask 'terms' 2>&1"; do
+    "bash '$SCRIPTS/session-digest-read.sh' --read x 2>/dev/null && bash '$SCRIPTS/how-do-i.sh' --question 'terms' >/dev/null" \
+    "bash '$SCRIPTS/how-do-i.sh' --question 'terms' 2>&1"; do
     i=$((i + 1))
     SID="${SID}-discard-$i"   # fresh budget per iteration: each shape is judged on ITS OWN first call
     run_guard "$(scout_bash "$cmd")"

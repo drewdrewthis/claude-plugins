@@ -376,10 +376,10 @@ EOF
 
 # ---- (f) PROJECT: OPTIONAL key, shape-checked only when present ----
 #
-# `project:` is the column `query-records.sh --project` filters on. Absent is a
-# corpus-wide record and must stay legal (the field was added to a corpus of
-# ~1,800 records that carry none). Present-but-malformed must FAIL, because it
-# looks scoped and is reachable by no query at all — worse than absent.
+# `project:` marks a record as scoped to one repo. Absent is a corpus-wide
+# record and must stay legal (the field was added to a corpus of ~1,800
+# records that carry none). Present-but-malformed must FAIL, because it looks
+# scoped and matches nothing at all — worse than absent.
 
 _write_project_record() {
   # $1 = filename stem, $2 = the raw `project:` line (or "" to omit the key)
@@ -418,9 +418,10 @@ _write_project_record() {
   [ "$status" -eq 0 ]
 }
 
-@test "project: a quoted scalar passes — the lint normalises as the matcher does" {
-  # record-scan.awk strips one outer quote pair before comparing, so a quoted
-  # value IS queryable. A lint that rejected it would fail a working record.
+@test "project: a quoted scalar passes — the lint normalises before comparing" {
+  # The linter strips one outer quote pair before comparing against
+  # PROJECT_RE, so a quoted value passes. A lint that rejected it would fail
+  # a well-formed record.
   _write_project_record ok-quoted 'project: "langwatch/scenario"'
   run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
       references/decisions/ok-quoted.md
@@ -612,8 +613,8 @@ EOF
 }
 
 @test "vendored stores are still excluded from lint even as a records-root subdirectory" {
-  # "titw" is VENDOR_STORES in scripts/lib/stores.sh: queried by
-  # query-records.sh but never linted (titw check validates it at publish
+  # "titw" is VENDOR_STORES in scripts/lib/stores.sh: scanned by
+  # build-record-index.sh but never linted (titw check validates it at publish
   # time). Give it a deliberately-broken record — no frontmatter at all — and
   # confirm the whole-corpus run neither counts nor fails on it.
   mkdir -p "$FIX/references/titw"
@@ -690,4 +691,24 @@ EOF
   # Must pass because it IS a valid record (frontmatter has all required keys),
   # even though the body contains the string 'user-invocable:'.
   [[ "$output" == *"linted 1 file(s)"* ]]
+}
+
+@test "log-record.sh's own output passes the frontmatter shape lint (writer/lint parity)" {
+  # Ported from the retired project-field-roundtrip.bats: a writer that emits
+  # a value its own lint rejects makes the record uncommittable — the two
+  # halves must agree on the grammar. --project is the sharpest case: it is
+  # optional, free-form at the write site, and shape-checked here.
+  local WRITER="$BATS_TEST_DIRNAME/../../scripts/log-record.sh"
+  # Same isolation the round-trip suite used: point EVERY root the writer
+  # reads at the fixture so neither the live corpus nor mistakes.jsonl is touched.
+  export CODEX_ROOT="$FIX"
+  export MISTAKES_JSONL="$FIX/mistakes.jsonl"   # keep the promotion gate off the live corpus
+  : > "$MISTAKES_JSONL"
+  run bash "$WRITER" decision --slug lint-parity --date 2026-08-10 \
+    --title "Lint parity decision" --keywords '[lintparitykw]' \
+    --project langwatch/scenario
+  [ "$status" -eq 0 ]
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/2026-08-10-lint-parity.md
+  [ "$status" -eq 0 ]
 }
