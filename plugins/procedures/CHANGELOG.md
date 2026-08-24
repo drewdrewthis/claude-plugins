@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.9.0...procedures-v0.9.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **procedures:** make the orwrap gateway fallback actually take effect ([#126](https://github.com/drewdrewthis/claude-plugins/issues/126)) ([86b57f2](https://github.com/drewdrewthis/claude-plugins/commit/86b57f2c0fd48a3153e7be3577e2aafd5d30dd68))
+
 ## [0.9.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.8.1...procedures-v0.9.0) (2026-08-24)
 
 
