@@ -563,6 +563,12 @@ while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
         ATTEMPT=$((ATTEMPT - 1))   # retry this attempt number, now cold
         RETRY_SAME_ATTEMPT=true
     fi
+    # PLUGIN ADAPTATION: no upstream counterpart. orchard-codex's how-do-i.sh
+    # always reaches the first-party Anthropic API, so it needs no gateway
+    # fallback. The installed plugin can run on a box whose Claude Code is
+    # routed through a third-party gateway by a wrapper (orwrap) that injects
+    # its config via --settings — visible only to the CHILD process, so this
+    # script cannot sniff for it and must fall back on observed behavior.
     # Gateway fallback: when a RAW `claude` child dies with an auth-shaped
     # failure (gateway env lives in settings.json, which only the child sees,
     # so env-sniffing cannot predict it) and the orwrap wrapper exists, retry

@@ -458,6 +458,8 @@ STUB
   [ ! -f "$index_dir/session.id" ]
 }
 
+# PLUGIN ADAPTATION: no upstream counterpart — covers the plugin-local gateway
+# fallback in scripts/how-do-i.sh, which orchard-codex's copy does not have.
 @test "a raw-claude spawn failure retries the attempt THROUGH the orwrap wrapper, not raw claude again" {
   # Regression: the fallback used to reassign a local word-array that
   # run_claude_call never reads, so the "retrying via orwrap" retry silently
