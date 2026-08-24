@@ -46,6 +46,15 @@ records (nested), plus 62 research records under `research/` (2 levels) and
 containing directory, so authoring it by hand only ever repeats a fact the
 path already states.
 
+## Command frontmatter — not records
+
+Files carrying `user-invocable:` in their frontmatter block are Claude Code
+slash-command definitions, not knowledge records. Their `description:` serves
+as an invocation trigger for the CLI, not a retrieval description for question
+matching. These files are exempt from this standard: they need no `id`, `kind`,
+`date`, `keywords`, `links`, or `status`. The linter (`lint-frontmatter.sh`)
+skips them entirely.
+
 ## Per-kind `id` prefix and status values
 
 Harvested verbatim from `references/principles/file-directory.md` (lines

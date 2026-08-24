@@ -622,3 +622,72 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"frontmatter-lint: linted 2 file(s)"* ]]
 }
+
+# ---- command frontmatter (user-invocable:): not records, exempt from linting ----
+#
+# Files carrying `user-invocable:` in their frontmatter block are Claude Code
+# slash-command definitions, not records. Their `description:` is an invocation
+# trigger, not a retrieval description. They must not be linted against the
+# record schema.
+
+@test "command frontmatter: user-invocable: true with no record keys passes" {
+  cat > "$FIX/references/procedures/sweep.md" <<'EOF'
+---
+name: sweep
+description: "Search for similar patterns... Use after implementing a fix to..."
+user-invocable: true
+argument-hint: "<pattern>"
+---
+# Sweep command
+
+This is a slash-command file, not a record.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/procedures/sweep.md
+  [ "$status" -eq 0 ]
+  # The file must pass even though it has no id, kind, status, or other record keys.
+  # It must count as linted (file still exists and is in a store dir).
+  [[ "$output" == *"linted 0 file(s)"* ]]
+}
+
+@test "command frontmatter: whole-corpus skips user-invocable files" {
+  cat > "$FIX/references/procedures/investigate.md" <<'EOF'
+---
+name: investigate
+description: "Dig into a failure... Use when debugging."
+user-invocable: true
+---
+# Investigate command
+
+Another slash-command file.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  # Only the two baseline records should be linted; investigate.md is skipped.
+  [[ "$output" == *"linted 2 file(s)"* ]]
+}
+
+@test "command frontmatter: string 'user-invocable:' in the BODY is linted normally" {
+  # A normal record file that contains the string 'user-invocable:' in its BODY
+  # (below the closing ---) must still be linted as a record, since the string
+  # is outside the frontmatter block.
+  cat > "$FIX/references/decisions/about-commands.md" <<'EOF'
+---
+id: dec.command-design
+kind: decision
+date: 2026-08-23
+keywords: [commands, slash-commands]
+links: {}
+status: active
+---
+# Decision on slash-commands
+
+When implementing a feature, all user-invocable: commands must be documented.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/about-commands.md
+  [ "$status" -eq 0 ]
+  # Must pass because it IS a valid record (frontmatter has all required keys),
+  # even though the body contains the string 'user-invocable:'.
+  [[ "$output" == *"linted 1 file(s)"* ]]
+}

@@ -211,6 +211,18 @@ for f in "${TARGETS[@]:-}"; do
         continue
     fi
 
+    # Check for command frontmatter before counting this file as linted. Files
+    # with `user-invocable:` are not records and must be skipped entirely.
+    # Check only the frontmatter block (between the two `---` lines), not the
+    # whole file body.
+    if [ "$(head -1 "$f")" = "---" ]; then
+        block="$(frontmatter_block "$f")"
+        fm_haystack_check=$'\n'"$block"$'\n'
+        case "$fm_haystack_check" in
+            *$'\n'"user-invocable:"*) continue ;;
+        esac
+    fi
+
     LINTED=$((LINTED + 1))
 
     # (a) PRESENT — first line must be the frontmatter fence.
@@ -219,6 +231,7 @@ for f in "${TARGETS[@]:-}"; do
         continue
     fi
     block="$(frontmatter_block "$f")"
+
     # Zero-fork, pipe-free membership haystack — same pattern as
     # scripts/query-records.sh (002f95a). `printf '%s\n' "$block" | grep -q`
     # looks equivalent and is not: grep exits on its first match, the still-

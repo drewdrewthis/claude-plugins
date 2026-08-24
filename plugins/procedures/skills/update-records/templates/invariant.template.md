@@ -1,3 +1,4 @@
+<!-- Frontmatter mirrors templates/_frontmatter.partial.md (schema SSOT, itself mirroring specs/RECORD_FRONTMATTER.md) — edit there first, then here. -->
 ---
 id: inv.<slug>
 kind: invariant

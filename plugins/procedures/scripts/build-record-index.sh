@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+# build-record-index.sh — numbered record index for integer-based selection.
+#
+# A model asked to pick a record by id string fabricates ids (recombines real
+# id fragments) under load. Asked to pick by integer, fabrication is
+# structurally impossible: an out-of-range or non-numeric answer is trivially
+# rejected by the caller. This script builds that numbering.
+#
+# Usage: build-record-index.sh --out DIR [--root PATH] [--strict]
+#
+#   --out DIR    Required. index.txt and map.tsv are written into DIR
+#                (created with mkdir -p if missing).
+#   --root PATH  Corpus root. Defaults to ${CODEX_ROOT:-$HOME/.claude}.
+#                Tests MUST pass --root at a fixture dir, never the real
+#                corpus.
+#   --strict     Exit non-zero if any file was skipped for a missing id
+#                and/or description, or had unparseable frontmatter — even
+#                though the (partial) index is still written.
+#
+# Outputs (exactly two files, both inside DIR):
+#   index.txt  One line per record: "N :: description". N is a 1-based
+#              integer assigned in id-sorted order. No paths, no ids, no
+#              header, no banner — this file is fed verbatim to a model and
+#              every byte is prompt cost.
+#   map.tsv    One line per record, tab-separated: "N<TAB>id<TAB>path". Same
+#              N, same order as index.txt. path is absolute. Lookup table to
+#              resolve a model's chosen integer back to a real file.
+#
+# Discovery: scans <root>/references/** and <root>/plans/** for *.md, via
+# lib/stores.sh's _stores_discover() (never a hardcoded store list).
+#
+# Excluded unconditionally:
+#   - any path containing /node_modules/
+#   - files named EVOLUTION.md or INDEX.md
+#   - any file whose FRONTMATTER BLOCK (not body) contains a user-invocable:
+#     key — these are command files (skills/steps), not records
+#   - <root>/references/plans/ — a stale duplicate of the live <root>/plans/
+#
+# Included only if frontmatter has both a non-empty id: and a non-empty
+# description:. description is normalized (interior whitespace collapsed to
+# single spaces, trimmed) so a tab or an accidental multi-line value can
+# never corrupt map.tsv's column count or index.txt's one-line-per-record
+# shape.
+#
+# Loud failure, always to stderr (stdout stays clean — it is not this
+# script's product, the two files are):
+#   - count of files with an id but no description
+#   - count of files with a description but no id
+#   - count of files whose frontmatter could not be parsed (no opening ---,
+#     or an opening --- that never closes)
+#   - a one-line summary: total indexed, per-store breakdown
+#   A file whose closed frontmatter has NEITHER id nor description is not a
+#   record-shaped file at all (e.g. a policy doc with title:/purpose: keys);
+#   it is skipped silently, incrementing none of the three counters above.
+#
+# Exit codes: 0 success. 1 zero stores discovered, zero records indexed, an
+# internal scan failure, or (--strict) a nonzero skip count. 2 usage error.
+
+set -uo pipefail
+export LC_ALL=C
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/lib"
+
+usage() {
+    cat <<'EOF'
+Usage: build-record-index.sh --out DIR [--root PATH] [--strict]
+
+  --out DIR    Required. index.txt and map.tsv are written into DIR.
+  --root PATH  Corpus root (default: ${CODEX_ROOT:-$HOME/.claude}).
+  --strict     Exit non-zero if any file was skipped (missing id/description,
+               or unparseable frontmatter).
+EOF
+}
+
+OUT_DIR=""
+ROOT="${CODEX_ROOT:-$HOME/.claude}"
+STRICT=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --out)
+            if [ "$#" -lt 2 ]; then
+                echo "build-record-index: --out requires a value" >&2
+                exit 2
+            fi
+            OUT_DIR="$2"
+            shift 2
+            ;;
+        --root)
+            if [ "$#" -lt 2 ]; then
+                echo "build-record-index: --root requires a value" >&2
+                exit 2
+            fi
+            ROOT="$2"
+            shift 2
+            ;;
+        --strict)
+            STRICT=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "build-record-index: unknown argument: $1 (see --help)" >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [ -z "$OUT_DIR" ]; then
+    echo "build-record-index: --out is required (see --help)" >&2
+    exit 2
+fi
+if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
+    echo "build-record-index: --root not found or not a directory: $ROOT" >&2
+    exit 2
+fi
+if [ ! -f "$LIB_DIR/stores.sh" ]; then
+    echo "build-record-index: lib missing: $LIB_DIR/stores.sh" >&2
+    exit 1
+fi
+if [ ! -f "$LIB_DIR/record-scan.awk" ]; then
+    echo "build-record-index: lib missing: $LIB_DIR/record-scan.awk" >&2
+    exit 1
+fi
+
+# Resolve --out to an absolute path from the CALLER's cwd, before this
+# script cd's into ROOT below (a relative --out would otherwise silently
+# resolve against ROOT instead).
+mkdir -p "$OUT_DIR" || { echo "build-record-index: cannot create --out directory: $OUT_DIR" >&2; exit 2; }
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+
+ROOT="$(cd "$ROOT" && pwd)"
+cd "$ROOT" || { echo "build-record-index: cannot cd to root: $ROOT" >&2; exit 1; }
+
+# shellcheck source=lib/stores.sh
+source "$LIB_DIR/stores.sh"
+
+if [ "${#STORES[@]}" -eq 0 ]; then
+    echo "build-record-index: zero stores discovered under $ROOT -- aborting (a silently-empty index is the worst failure mode here)" >&2
+    exit 1
+fi
+
+# references/plans is a stale nested directory; the live plans store is the
+# top-level plans/ (also in STORES). Dropped here, without editing stores.sh.
+CANDIDATE_STORES=()
+for s in "${STORES[@]}"; do
+    [ "$s" = "references/plans" ] && continue
+    CANDIDATE_STORES+=("$s")
+done
+
+ALL_FILES=""
+for s in ${CANDIDATE_STORES[@]+"${CANDIDATE_STORES[@]}"}; do
+    [ -d "$s" ] || continue
+    found="$(find "$s" -type f -name '*.md' \
+                ! -path '*/node_modules/*' \
+                ! -name 'EVOLUTION.md' \
+                ! -name 'INDEX.md')"
+    [ -n "$found" ] && ALL_FILES="${ALL_FILES}${found}
+"
+done
+ALL_FILES="$(printf '%s' "$ALL_FILES" | sort)"
+
+ID_NO_DESC=0
+DESC_NO_ID=0
+UNPARSED=0
+RECS=""
+
+if [ -n "$ALL_FILES" ]; then
+    # Reuse stripq() from record-scan.awk (the SSOT for unquoting a
+    # frontmatter scalar) rather than reimplementing it. Extracted at
+    # runtime so this always tracks the live function, not a frozen copy.
+    STRIPQ_FILE="$(mktemp)"
+    MAIN_AWK_FILE="$(mktemp)"
+    trap 'rm -f "$STRIPQ_FILE" "$MAIN_AWK_FILE"' EXIT
+
+    sed -n '/^function stripq(/,/^}/p' "$LIB_DIR/record-scan.awk" > "$STRIPQ_FILE"
+    if [ ! -s "$STRIPQ_FILE" ]; then
+        echo "build-record-index: could not extract stripq() from $LIB_DIR/record-scan.awk -- lib missing or reshaped" >&2
+        exit 1
+    fi
+
+    cat > "$MAIN_AWK_FILE" <<'AWKPROG'
+FNR == 1 {
+    if (NR > 1) finish()
+    fpath = FILENAME
+    infm = 0
+    closed = 0
+    id = ""
+    desc = ""
+    indesc = 0
+    userinv = 0
+    if ($0 == "---") { infm = 1; next }
+    nextfile
+}
+
+infm == 1 && $0 == "---" {
+    infm = 0
+    closed = 1
+    nextfile
+}
+
+infm == 1 && /^user-invocable:/ {
+    userinv = 1
+    indesc = 0
+    next
+}
+
+infm == 1 && /^id:/ {
+    v = $0
+    sub(/^id:[[:space:]]*/, "", v)
+    sub(/[[:space:]].*$/, "", v)
+    id = stripq(v)
+    indesc = 0
+    next
+}
+
+infm == 1 && /^description:/ {
+    v = $0
+    sub(/^description:[[:space:]]*/, "", v)
+    desc = v
+    indesc = 1
+    next
+}
+
+infm == 1 && /^[A-Za-z_][A-Za-z0-9_-]*:/ {
+    indesc = 0
+    next
+}
+
+infm == 1 && indesc == 1 {
+    cont = $0
+    sub(/^[[:space:]]+/, "", cont)
+    if (cont != "") desc = desc " " cont
+    next
+}
+
+infm == 1 { next }
+
+END {
+    if (NR > 0) finish()
+    printf "STATS\t%d\t%d\t%d\n", id_no_desc, desc_no_id, unparsed
+}
+
+function finish(   d) {
+    if (closed != 1) { unparsed++; return }
+    if (userinv == 1) return
+    d = normdesc(stripq(desc))
+    if (id != "" && d != "") {
+        printf "REC\t%s\t%s\t%s\n", fpath, id, d
+    } else if (id != "" && d == "") {
+        id_no_desc++
+    } else if (id == "" && d != "") {
+        desc_no_id++
+    }
+    # else: neither id nor description present -- not a record-shaped file,
+    # skipped silently (not counted -- it never claimed to be a record).
+}
+
+function normdesc(s) {
+    gsub(/[\t\r\n]/, " ", s)
+    gsub(/[[:space:]]+/, " ", s)
+    sub(/^[[:space:]]+/, "", s)
+    sub(/[[:space:]]+$/, "", s)
+    return s
+}
+AWKPROG
+
+    if ! SCAN_OUT="$(printf '%s\n' "$ALL_FILES" | tr '\n' '\0' | xargs -0 awk -f "$STRIPQ_FILE" -f "$MAIN_AWK_FILE")"; then
+        echo "build-record-index: record scan failed (awk unusable or lib missing) -- NOT 'zero records'" >&2
+        exit 1
+    fi
+
+    RECS="$(printf '%s\n' "$SCAN_OUT" | awk -F'\t' '$1 == "REC"')"
+    STATS_LINE="$(printf '%s\n' "$SCAN_OUT" | awk -F'\t' '$1 == "STATS"')"
+
+    if [ -z "$STATS_LINE" ]; then
+        echo "build-record-index: internal error -- scan produced no STATS line" >&2
+        exit 1
+    fi
+    ID_NO_DESC="$(printf '%s\n' "$STATS_LINE" | cut -f2)"
+    DESC_NO_ID="$(printf '%s\n' "$STATS_LINE" | cut -f3)"
+    UNPARSED="$(printf '%s\n' "$STATS_LINE" | cut -f4)"
+fi
+
+echo "build-record-index: $ID_NO_DESC file(s) have an id but no description" >&2
+echo "build-record-index: $DESC_NO_ID file(s) have a description but no id" >&2
+echo "build-record-index: $UNPARSED file(s) have unparseable frontmatter (no opening '---', or unclosed)" >&2
+
+TOTAL_INDEXED=0
+if [ -n "$RECS" ]; then
+    TOTAL_INDEXED="$(printf '%s\n' "$RECS" | grep -c .)"
+fi
+
+if [ "$TOTAL_INDEXED" -eq 0 ]; then
+    echo "build-record-index: zero records indexed from $ROOT -- aborting (a silently-empty index is the worst failure mode here)" >&2
+    exit 1
+fi
+
+# path \t id \t description, sorted by id (LC_ALL=C), path as a deterministic
+# tiebreak so two runs on unchanged input are always byte-identical even in
+# a hypothetical duplicate-id corpus.
+SORTED="$(printf '%s\n' "$RECS" | cut -f2- | LC_ALL=C sort -t "$(printf '\t')" -k2,2 -k1,1)"
+
+INDEX_FILE="$OUT_DIR/index.txt"
+MAP_FILE="$OUT_DIR/map.tsv"
+: > "$INDEX_FILE"
+: > "$MAP_FILE"
+
+n=0
+while IFS="$(printf '\t')" read -r path id desc; do
+    [ -n "$path" ] || continue
+    n=$((n + 1))
+    printf '%d :: %s\n' "$n" "$desc" >> "$INDEX_FILE"
+    printf '%d\t%s\t%s/%s\n' "$n" "$id" "$ROOT" "$path" >> "$MAP_FILE"
+done <<< "$SORTED"
+
+BREAKDOWN_STR="$(
+    printf '%s\n' "$SORTED" | awk -F'\t' '
+        {
+            n = split($1, parts, "/")
+            store = (parts[1] == "plans") ? "plans" : parts[1] "/" parts[2]
+            count[store]++
+        }
+        END {
+            for (s in count) {
+                name = s
+                sub(/^.*\//, "", name)
+                printf "%d\t%s\n", count[s], name
+            }
+        }
+    ' | sort -k1,1rn -k2,2 | awk -F'\t' '{ printf "%s%s %d", (NR > 1 ? ", " : ""), $2, $1 }'
+)"
+
+echo "build-record-index: indexed $TOTAL_INDEXED record(s) from $ROOT ($BREAKDOWN_STR)" >&2
+
+SKIPPED=$((ID_NO_DESC + DESC_NO_ID + UNPARSED))
+if [ "$STRICT" -eq 1 ] && [ "$SKIPPED" -gt 0 ]; then
+    echo "build-record-index: --strict: $SKIPPED file(s) skipped (see counts above) -- failing" >&2
+    exit 1
+fi
+
+exit 0
