@@ -83,7 +83,7 @@
 # Pure bash + awk; no network, no model calls. Sources scripts/lib/
 # frontmatter.sh's frontmatter_block()/fm_value() (the same SSOT readers
 # lint-frontmatter.sh uses) and reuses the link-token shape + stripq()
-# quote-stripper from scripts/lib/record-scan.awk (copied into
+# quote-stripper shape proven against the old awk scanner (kept in-line:
 # AWK_STRIPQ_FN below — awk has no cross-file import, so it is kept in this
 # ONE place rather than as drifting per-snippet copies).
 
@@ -141,10 +141,10 @@ ended up emitted, or --strict hit an unresolvable request; 2 usage error.
 EOF
 }
 
-# Adapted from scripts/lib/record-scan.awk's stripq(): strips one matching
-# pair of outer quotes from an already-trimmed token. Copied rather than
-# sourced (awk has no cross-file import) — kept in this ONE variable so
-# every awk snippet below shares one definition instead of drifting copies.
+# Strips one matching pair of outer quotes from an already-trimmed token
+# (the same shape the retired awk scanner used). Kept in this ONE variable
+# so every awk snippet below shares one definition instead of drifting
+# copies.
 AWK_STRIPQ_FN="$(cat <<'AWKEOF'
 function stripq(v,   n) {
     n = length(v)
@@ -190,8 +190,8 @@ tokenize_list() {
 # extract_link_ids <links_raw>: prints every candidate link-target id token
 # from a frontmatter links: value's raw RHS (fm_value's output), one per
 # line. Category-label tokens ("procedures:", "decisions:", ...) carry a
-# trailing colon and are dropped; ids never do — record-scan.awk's qlinks
-# heuristic, reused verbatim per this script's brief.
+# trailing colon and are dropped; ids never do (the qlinks heuristic this
+# script's brief specifies).
 extract_link_ids() {
     local raw="$1"
     printf '%s\n' "$raw" | awk "$AWK_STRIPQ_FN"'

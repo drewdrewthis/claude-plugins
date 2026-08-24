@@ -27,13 +27,13 @@ The four script-backed kinds call the deterministic writer:
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" <kind> [flags…]
 ```
 
-The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal) and writing the file. No index files are maintained: discovery is the record's frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. You own the JUDGMENT half below. Templates live in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/templates/`, the longhand procedures in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/references/`.
+The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal) and writing the file. No index files are maintained: discovery is the record's frontmatter (id, description, keywords) plus `/how-do-i`, which scans every store via `build-record-index.sh` and its numbered index. You own the JUDGMENT half below. Templates live in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/templates/`, the longhand procedures in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/references/`.
 
 **Choosing among the four rule kinds:** an **invariant** forbids absolutely and has no carve-outs — the moment you write "except when", it is a **principle**, which guides judgment where the rules do not reach. A **policy** grants or withholds authority and is in force from merge until a line is struck. A **standard** states the measurable bar a finished artifact must clear, never the steps to clear it. These are not a severity scale: promoting a rule you still intend to break trains every reader to treat the whole kind as advice.
 
 **Rules that hold for every kind:** check `/how-do-i` for an existing artifact first; six-key frontmatter on every record (the frontmatter hook enforces it); draft-then-promote — a first success earns a draft, promotion needs the gate in `docs/adrs/001-procedural-knowledge-system.md` ("Evolution"). Patching an existing PROCEDURE is `/evolve-procedure`, not this skill.
 
-`--project <owner/repo>` is OPTIONAL on `decision`, `solution`, and `failure-mode`, and writes the frontmatter `project:` key that `query-records.sh --project` filters on. Pass it only when the record is genuinely about ONE repo; omit it for anything corpus-wide. ⚠ `--project` matches the full `owner/name` or the repo name after the last `/`, never the owner alone — so a record filed under `langwatch/scenario` is invisible to `--project langwatch`.
+`--project <owner/repo>` is OPTIONAL on `decision`, `solution`, and `failure-mode`, and writes the frontmatter `project:` key so repo-scoped records are distinguishable from corpus-wide ones at a glance. Pass it only when the record is genuinely about ONE repo; omit it for anything corpus-wide.
 
 Resume the interrupted conversation immediately after — the four script-backed kinds take <10 seconds and must not derail it.
 
@@ -96,7 +96,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" mistake \
 
 ## kind = decision
 
-Writes `references/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. Consumed by the pre-action grep that prevents relitigating settled choices.
+Writes `references/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by the pre-action grep that prevents relitigating settled choices.
 
 **Pre-action grep first** — `grep -rl '<keywords>' ~/.claude/references/decisions/`; if the question is already settled, link the existing record instead of creating a duplicate.
 
@@ -121,7 +121,7 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = solution
 
-Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter plus `${CLAUDE_PLUGIN_ROOT}/scripts/query-records.sh`. Consumed by the procedure-scout's pre-action sweep.
+Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by the procedure-scout's pre-action sweep.
 
 **Gather:** `slug` (kebab-case, ≤6 words, names the *problem* not the fix), `keywords` (problem domain, tool name, error class), `situation-tags` (lowercase situation class: `daemon`, `gh-cli`, `env-config`, …), `resolve-after` (~3 months out; env/version hacks expire faster), a one-line `summary` = the canonical resolution, and the prose `body` (Symptom / Rule / optional Check / optional Recipe — Recipe only when flags/order matter).
 

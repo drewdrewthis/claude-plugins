@@ -9,7 +9,7 @@ status: active
 
 # /create-procedure
 
-Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<area>/<name>/`. Consumed via the `keywords` field by `Skill(how-do-i)` → `procedure-scout` and by `scripts/query-records.sh` at the plugin root (the invoking skill's prompt carries the resolved path).
+Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<area>/<name>/`. Consumed by the `/how-do-i` pipeline: its `description` is what `build-record-index.sh` indexes for selection, and its `keywords` stay greppable (the invoking skill's prompt carries the resolved path).
 
 # Triggers
 
