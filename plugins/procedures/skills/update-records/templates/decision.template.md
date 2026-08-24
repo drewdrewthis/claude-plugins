@@ -1,26 +1,12 @@
-<!-- TEMPLATE — the shape `/update-records decision` writes: one markdown file at
-     <knowledge-root>/references/decisions/<YYYY-MM-DD>-<slug>.md
-     (default root ~/.claude). Written by the log-record.sh writer script; use
-     this template when hand-editing an existing record, or to know what to
-     expect back.
-
-     Rules:
-     - The slug names the QUESTION resolved, kebab-case, <=7 words.
-     - `status: active` at creation; flip to `resolved` only once the outcome is
-       known. A reversal is a NEW record referencing this one in `links` —
-       never rewrite a decision's history.
-     - Leave `[pending]` in any section that needs future evidence; that is
-       correct on creation.
-     - `project:` is OPTIONAL (`--project` on the writer). DELETE the line for
-       a corpus-wide decision — an empty or placeholder value is unmatchable
-       and fails the lint. -->
+<!-- Frontmatter mirrors templates/_frontmatter.partial.md (schema SSOT, itself mirroring specs/RECORD_FRONTMATTER.md) — edit there first, then here. -->
 ---
 id: dec.<YYYY-MM-DD>-<slug>
 kind: decision
 date: <YYYY-MM-DD>
-keywords: [<lowercase — domain, options considered, key actors>]
+keywords: [<named entities only — projects, tools, commands, repos involved — never empty>]
 links: {}
 status: active
+description: <One line, ~120 chars: what was decided — the concrete choice and the reasoning that makes it stick, not "decision about X".>
 project: <owner/repo this decision is scoped to — delete if corpus-wide>
 ---
 
@@ -38,3 +24,20 @@ Real: <what was actually being solved, if different>
 
 ## Outcome
 [pending]
+
+<!-- TEMPLATE — the shape `/update-records decision` writes: one markdown file at
+     <knowledge-root>/references/decisions/<YYYY-MM-DD>-<slug>.md
+     (default root ~/.claude). Written by the log-record.sh writer script; use
+     this template when hand-editing an existing record, or to know what to
+     expect back.
+
+     Rules:
+     - The slug names the QUESTION resolved, kebab-case, <=7 words.
+     - `status: active` at creation; flip to `resolved` only once the outcome is
+       known. A reversal is a NEW record referencing this one in `links` —
+       never rewrite a decision's history.
+     - Leave `[pending]` in any section that needs future evidence; that is
+       correct on creation.
+     - `project:` is OPTIONAL (`--project` on the writer). DELETE the line for
+       a corpus-wide decision — an empty or placeholder value is unmatchable
+       and fails the lint. -->

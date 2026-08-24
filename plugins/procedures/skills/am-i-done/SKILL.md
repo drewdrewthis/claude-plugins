@@ -9,6 +9,10 @@ agent: work-reviewer
 model: sonnet
 background: false
 argument-hint: "<the am-i-done report>"
+# PLUGIN ADAPTATION: the fork may inherit the parent toolset; this key is a
+# best-effort second layer. The reviewer needs only Bash (one --ask) and Agent
+# (one evolution dispatch); everything else is judgment over pasted text.
+disallowed-tools: Read, Grep, Glob, Write, Edit, NotebookEdit
 ---
 
 Review this am-i-done report and return findings.
@@ -19,6 +23,26 @@ $ARGUMENTS
 
 A claim without its command and output is "no evidence shown" — not something to
 go and check yourself.
+
+Your two allowed actions beyond reading the report (the shape guard enforces
+both budgets; see agents/work-reviewer.md for the full contract):
+
+1. ONE corpus verification lookup, only when a finding hinges on what a record
+   says:
+
+   ```bash
+   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --ask '<terms>'
+   ```
+
+2. ONE dispatch of the evolution agent with the report + your findings + which
+   "Procedures followed" rows route:
+
+   ```
+   Agent(subagent_type: "procedures:procedure-evolver",
+         prompt: <the full report> + <your findings> + <routed rows>)
+   ```
+
+Everything else is judged from the report alone.
 
 Route the report's "Procedures followed" section per your *Read "Procedures
 followed" as evolution input* step.

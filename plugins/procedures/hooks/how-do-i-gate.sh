@@ -104,7 +104,7 @@ if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "HOW_DO_I_GATE"; then e
 # (observed: a main agent proposed exactly that, on the premise that a
 # same-session run should carry over). Per-turn re-gating is deliberate and
 # load-bearing — see lib/turn-state.sh and turn-state-reset.sh.
-jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(procedures:how-do-i). Run it before acting, then retry. Gating is PER TURN by design — one user prompt is one turn, and a lookup from an earlier turn says nothing about what this turn is about to do, so a run earlier in the session does not carry over. The pass is bounded — a typical goal finishes in 3-4 Bash calls in a forked session, not a research project. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
+jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(procedures:how-do-i). Run it before acting, then retry. Gating is PER TURN by design — a lookup from an earlier turn does not carry over. Invoke with TWO parts separated by '|': GOAL = one concrete sentence stating what you are about to DO and where; TERMS = the full search vocabulary — every concept the answer might touch, 2–3 synonyms each, corpus words included (proc, fm, evolve, squash), phrases hyphenated. The term list must be COMPLETE: there is exactly one query. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",

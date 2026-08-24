@@ -1,11 +1,21 @@
 #!/usr/bin/env bats
-# The scout's retrieval contract: query-records.sh is its SOLE retrieval
-# surface, batch reads go through --cat, and a record it can reach by hand but
-# not by query is reported as a bug rather than routed around.
+# The scout's retrieval contract, post one-query redesign: query-records.sh
+# --ask is the SOLE retrieval surface — ONE term set, ONE invocation — with
+# the digest replay and the project-justfile probe riding that same single
+# Bash call, and a record the scout can reach by hand but not by query is
+# reported as a bug (UNREACHABLE) rather than routed around.
 #
-# These are prose assertions on an agent prompt, which is the only place the
+# The redesign retired the old auxiliary surfaces this file used to pin: the
+# --cat batch read, --recall-first ordering over iterative --keyword probes,
+# and the 3-4 call budget. hooks/query-shape-guard.sh now enforces the same
+# shape from outside the prompt; these tests hold the PROMPTS to it from
+# inside.
+#
+# These are prose assertions on agent prompts, which is the only place the
 # contract can live — the harness reads the markdown, not a config. They pin
-# the load-bearing clauses, not the wording around them.
+# the load-bearing clauses, not the wording around them. The fork binds from
+# skills/how-do-i/SKILL.md; agents/procedure-scout.md governs direct
+# Agent-tool spawns and must carry the same clauses.
 #
 # Run: bats hooks/tests/scout-retrieval.bats
 
@@ -15,13 +25,14 @@ setup() {
   AGENT="$PLUGIN/agents/procedure-scout.md"
   SKILL="$PLUGIN/skills/how-do-i/SKILL.md"
   SCRIPT="$PLUGIN/scripts/query-records.sh"
+  GATE="$PLUGIN/hooks/how-do-i-gate.sh"
   # shellcheck source=../../scripts/lib/frontmatter.sh
   source "$PLUGIN/scripts/lib/frontmatter.sh"
 }
 
 fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
 
-# ---------- #34.2 query-records.sh is the sole retrieval surface ----------
+# ---------- the sole retrieval surface is the --ask front door ----------
 
 @test "the scout body carries no free-form recursive grep fallback" {
   # `grep -rn '^keywords:' .../references/procedures/` was the documented
@@ -42,11 +53,7 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
 
 @test "the scout body does not send the scout to find(1) for retrieval" {
   # Fence-scoped for the same reason the grep check above is: a file-wide
-  # pattern also matches PROSE that names the command. `^[[:space:]]*find `
-  # matched any line opening with the English word "find", so a future
-  # Boundaries line like "find the governing record first" would fail the suite
-  # with no defect present. What is forbidden is find(1) as a command the scout
-  # RUNS, which is what a fenced bash block means.
+  # pattern also matches PROSE that names the command.
   local offenders
   offenders="$(awk '
     /^[[:space:]]*```bash/ { inblock=1; next }
@@ -57,85 +64,227 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
 }
 
 @test "the scout body carries no raw awk batch-read recipe" {
-  # Superseded by --cat. Left in place it is a second retrieval surface, and
-  # the one that can read outside the record stores.
+  # Superseded first by --cat, then by the one-shot --ask dump: every matched
+  # record comes back IN FULL inside the single call, so there is no reading
+  # step left for awk to serve. Left in place it is a second retrieval
+  # surface, and the one that can read outside the record stores.
   run grep -n "FNR==1" "$AGENT"
   [ "$status" -ne 0 ] || { echo "raw awk batch-read still in the scout: $output"; false; }
 }
 
-@test "the scout reads selected records with --cat" {
-  # Scoped to fenced bash blocks, so this pins --cat as a command the scout
-  # RUNS. A bare file-wide grep would also be satisfied by a Boundaries line
-  # merely mentioning --cat, or by prose that forbids it.
-  local uses
-  uses="$(awk '
-    /^[[:space:]]*```bash/ { inblock=1; next }
-    /^[[:space:]]*```/     { inblock=0; next }
-    inblock && /--cat/     { print FNR ": " $0 }
-  ' "$AGENT")"
-  [ -n "$uses" ] || { echo "no runnable --cat invocation in the scout body"; false; }
-}
-
-@test "every command block in the scout body invokes query-records.sh" {
-  # The whole point of the issue: one retrieval surface. Any bash line in the
-  # prompt that runs something else is a second one.
-  # Fences are indented inside the numbered steps, so the pattern must not be
-  # anchored hard to column 0 — anchoring it there is how this assertion passes
-  # while reading nothing.
-  local offenders blocks
-  # `|| true`: bats runs test bodies under errexit and grep exits 1 on no
-  # match, so without this the assignment aborts the test BEFORE the vacuity
-  # guard below can print — the diagnostic could never fire.
-  blocks="$(grep -cE '^[[:space:]]*```bash' "$AGENT" || true)"
-  [ "$blocks" -ge 1 ] || { echo "no bash blocks found — assertion would pass vacuously"; false; }
-  offenders="$(awk '
-    /^[[:space:]]*```bash/ { inblock=1; next }
-    /^[[:space:]]*```/     { inblock=0; next }
-    inblock && $0 ~ /[^[:space:]]/ && $0 !~ /query-records\.sh/ && $0 !~ /^[[:space:]]*#/ { print FILENAME ":" FNR ": " $0 }
-  ' "$AGENT")"
-  [ -z "$offenders" ] || { echo "non-query-records command in the scout prompt:"; echo "$offenders"; false; }
-}
-
-@test "the scout's tool grant does not reopen the retrieval surface it forbids" {
-  # The frontmatter is where retrieval is actually enforced; the Boundaries are
-  # only prose. Granting Read/Grep/Glob while forbidding their use for retrieval
-  # left the second surface open at the layer that decides. Bash stays — the
-  # scout runs query-records.sh and the digest replay through it.
-  local tools
-  tools="$(fm_key "$AGENT" tools)"
-  [ -n "$tools" ] || { echo "no tools: key in the scout frontmatter"; false; }
-  [[ "$tools" == *Bash* ]] || { echo "scout cannot run query-records.sh without Bash: $tools"; false; }
-  for forbidden in Read Grep Glob; do
-    [[ "$tools" != *"$forbidden"* ]] \
-      || { echo "tools: grants $forbidden, which the Boundaries forbid for retrieval: $tools"; false; }
+@test "no prompt issues a retired retrieval mode as a command" {
+  # The one-query redesign retired the scout's auxiliary surfaces: --cat
+  # batching, --recall-first ordering, iterative --keyword probes, id pulls.
+  # A Boundary may NAME them to forbid them; they may never appear as a
+  # command either fork RUNS. Fence-scoped so the prohibition prose cannot
+  # trip it.
+  local f offenders
+  for f in "$SKILL" "$AGENT"; do
+    offenders="$(awk '
+      /^[[:space:]]*```bash/ { inblock=1; next }
+      /^[[:space:]]*```/     { inblock=0; next }
+      inblock && /--cat|--keyword|--recall|--id/ { print FILENAME ":" FNR ": " $0 }
+    ' "$f")"
+    [ -z "$offenders" ] || { echo "retired retrieval mode runnable in $(basename "$f"):"; echo "$offenders"; false; }
   done
 }
 
-@test "the scout's boundaries still scope reading to the discovered store list" {
-  # Pre-existing guard (store-list-drift.bats) restated here as a diff-preserve
-  # check: the retrieval rewrite must not have dropped it.
-  grep -qF -- '--list-stores' "$AGENT"
+@test "every runnable line in both prompts is a sanctioned one-shot shape" {
+  # The runnable surface must be exactly what hooks/query-shape-guard.sh lets
+  # through: the digest replay, the single --ask query, and the justfile
+  # probe (command -v just / just --dump / its jq stage). Anything else
+  # runnable sanctions a second retrieval or mutation surface behind the
+  # guard's back.
+  local f blocks offenders
+  for f in "$SKILL" "$AGENT"; do
+    blocks="$(grep -cE '^[[:space:]]*```bash' "$f" || true)"
+    [ "$blocks" -ge 1 ] || { echo "$(basename "$f"): no bash blocks — assertion would pass vacuously"; false; }
+    offenders="$(awk '
+      /^[[:space:]]*```bash/ { inblock=1; next }
+      /^[[:space:]]*```/     { inblock=0; next }
+      inblock && $0 ~ /[^[:space:]]/ && $0 !~ /^[[:space:]]*#/ &&
+      $0 !~ /query-records\.sh/ && $0 !~ /session-digest-read\.sh/ &&
+      $0 !~ /just/ && $0 !~ /jq -r/ { print FILENAME ":" FNR ": " $0 }
+    ' "$f")"
+    [ -z "$offenders" ] || { echo "unsanctioned runnable line in $(basename "$f"):"; echo "$offenders"; false; }
+  done
 }
 
-# ---------- #34.3 an unreachable-but-real record is a bug signal ----------
+@test "query-records.sh is invoked in one mode only: --ask" {
+  # Every fence line that runs the tool must be the front door. A bare
+  # query-records.sh line would let another flag ride a future edit.
+  local f bad
+  for f in "$SKILL" "$AGENT"; do
+    bad="$(awk '
+      /^[[:space:]]*```bash/ { inblock=1; next }
+      /^[[:space:]]*```/     { inblock=0; next }
+      inblock && /query-records\.sh/ && $0 !~ /--ask/ { print FILENAME ":" FNR ": " $0 }
+    ' "$f")"
+    [ -z "$bad" ] || { echo "$(basename "$f"): query-records.sh invoked outside --ask:"; echo "$bad"; false; }
+  done
+}
 
-@test "the scout is told to report a record it can reach but not query as a bug" {
-  grep -qiE 'keywords .*(wrong|bug)|matcher .*(wrong|bug)|bug (signal|in the)' "$AGENT"
+@test "the fork prompt mandates the --ask front door as its one retrieval act" {
+  grep -qF -- '--ask' "$SKILL" \
+    || { echo "SKILL.md never names --ask; the fork is never told how to retrieve"; false; }
+
+  # Anchored, not a bare presence grep: --ask must appear as a command the
+  # fork RUNS, inside a fenced bash block invoking query-records.sh.
+  run awk '
+    /^[[:space:]]*```bash/ { inblock = 1; next }
+    /^[[:space:]]*```/     { inblock = 0; next }
+    inblock && /query-records\.sh/ && /--ask/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$SKILL"
+  [ "$status" -eq 0 ] \
+    || { echo "--ask is mentioned in prose but never shown as a runnable command"; false; }
+
+  grep -qiE 'only retrieval act|sole retrieval' "$SKILL" \
+    || { echo "SKILL.md states no one-retrieval-act boundary"; false; }
+}
+
+@test "the sole-retrieval boundary forbids each named alternative, not retrieval in general" {
+  # Read a window from the clause itself rather than grepping the whole file,
+  # so an unrelated mention elsewhere cannot satisfy this. The redesigned
+  # boundary enumerates BOTH the retired flags AND the raw shell tools, plus
+  # the Read tool.
+  local line anchor window
+  line="$(grep -inE 'only retrieval act|sole retrieval (surface|act)' "$SKILL" | head -1)"
+  [ -n "$line" ] \
+    || { echo "SKILL.md states no sole-surface boundary — the fork may use any tool"; false; }
+  anchor="$(printf '%s' "$line" | cut -d: -f1)"
+  window="$(sed -n "${anchor},$((anchor + 6))p" "$SKILL")"
+  local tool
+  for tool in '--keyword' '--cat' '--recall' '--id' 'grep' 'find' 'ls' 'awk' 'cat' 'head' 'Read'; do
+    [[ "$window" == *"$tool"* ]] \
+      || { echo "the sole-retrieval boundary does not forbid '$tool': $window"; false; }
+  done
+}
+
+@test "the one Bash call chains the digest replay AND the query together" {
+  # Step 3 of both prompts: warm start and retrieval ride in ONE call, judged
+  # as one block because the guard counts Bash CALLS, not lines. Split into
+  # two calls, the digest replay doubles the bill and the query is denied.
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    run awk '
+      /^[[:space:]]*```bash/ { inblock=1; buf=""; next }
+      /^[[:space:]]*```/     {
+        if (inblock && buf ~ /session-digest-read\.sh/ && buf ~ /--read/ \
+            && buf ~ /query-records\.sh/ && buf ~ /--ask/) found=1
+        inblock=0; next
+      }
+      inblock { buf = buf $0 "\n" }
+      END { exit(found ? 0 : 1) }
+    ' "$f"
+    [ "$status" -eq 0 ] \
+      || { echo "$(basename "$f"): digest replay and --ask do not share one command block"; false; }
+  done
+}
+
+@test "neither tool grant reopens the surface the contract forbids" {
+  # The agent file is where direct spawns are enforced; the skill frontmatter
+  # is the fork's best-effort layer, because a fork inherits the parent
+  # toolset and must disallow the read/write bypass explicitly.
+  local tools disallowed forbidden
+  tools="$(fm_key "$AGENT" tools)"
+  [ -n "$tools" ] || { echo "no tools: key in the scout frontmatter"; false; }
+  [[ "$tools" == *Bash* ]] || { echo "scout cannot run query-records.sh without Bash: $tools"; false; }
+  for forbidden in Read Grep Glob Write Edit; do
+    [[ "$tools" != *"$forbidden"* ]] \
+      || { echo "agent tools: grants $forbidden, which the contract forbids: $tools"; false; }
+  done
+  disallowed="$(fm_key "$SKILL" disallowed-tools)"
+  [ -n "$disallowed" ] || { echo "no disallowed-tools: key in SKILL.md frontmatter"; false; }
+  for forbidden in Read Grep Glob; do
+    [[ "$disallowed" == *"$forbidden"* ]] \
+      || { echo "SKILL.md fails to disallow $forbidden for the fork: $disallowed"; false; }
+  done
+}
+
+@test "both prompts point at --list-stores as discovery, and never run it in-fork" {
+  # The redesign pulled the store-list dump OUT of the fork's budget: running
+  # it inside a fork is an unsanctioned shape the guard denies (it burns the
+  # one call). The boundary must still point at the discovery mechanism
+  # rather than freeze a copy of the list — citation, not invocation.
+  local f n
+  for f in "$SKILL" "$AGENT"; do
+    grep -qF -- '--list-stores' "$f" \
+      || { echo "$(basename "$f"): no pointer at the store-list discovery mechanism"; false; }
+    n="$(awk '/^[[:space:]]*```bash/{b=1;next} /^[[:space:]]*```/{b=0;next}
+              b && /--list-stores/ { print NR; exit }' "$f")"
+    [ -z "$n" ] \
+      || { echo "$(basename "$f"): --list-stores is runnable at line $n — it costs a Bash call the fork does not have"; false; }
+  done
+}
+
+# ---------- one query, ever ----------
+
+@test "both prompts state the one-query budget, with no retry and an outlet" {
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qF 'exactly ONE query' "$f" \
+      || { echo "$(basename "$f"): the exactly-one-query budget was lost"; false; }
+    grep -qiE 'no retry|no widening|no follow-up|no second (call|query)' "$f" \
+      || { echo "$(basename "$f"): the budget states no closed doors"; false; }
+    # Thoroughness protection, relocated not deleted: a miss is reported as
+    # UNREACHABLE, never probed around. Without the outlet the budget reads
+    # as permission to answer from memory.
+    grep -qF 'UNREACHABLE' "$f" \
+      || { echo "$(basename "$f"): no UNREACHABLE outlet beside the budget"; false; }
+  done
+}
+
+@test "the gate message agrees: the term list is complete because there is one query" {
+  # Tool, gate, and prompts must state the same economy, or the blocked main
+  # agent is coached into composing multi-call flows the forks are forbidden.
+  grep -qiE 'exactly one query' "$GATE" \
+    || { echo "gate deny message no longer says there is exactly one query"; false; }
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'exactly one query|exactly ONE query' "$f" \
+      || { echo "$(basename "$f"): disagrees with the gate's one-query message"; false; }
+  done
+}
+
+@test "the repo step does not spend a Bash call, so the one-query budget holds" {
+  # Repo resolution is reasoning over text already in hand, not a lookup;
+  # #48 bought that explicitly. If it ever costs a call, the fork has zero.
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'no bash call|costs no|without a bash call|zero bash' "$f" \
+      || { echo "$(basename "$f"): repo step never says it is free"; false; }
+  done
+}
+
+# ---------- an unreachable-but-real record is a bug signal ----------
+
+@test "both prompts route a known-record miss to UNREACHABLE, for the matcher's sake" {
+  # The old phrasing ("bug signal") was replaced by the same idea: reporting
+  # the miss is what gets the matcher FIXED. Both halves must survive, or the
+  # finding loses its addressee and degrades into a complaint.
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qF 'UNREACHABLE' "$f" \
+      || { echo "$(basename "$f"): no UNREACHABLE finding for a known-record miss"; false; }
+    grep -qiE '(gets|get) the matcher fixed|matcher gets fixed' "$f" \
+      || { echo "$(basename "$f"): the UNREACHABLE finding no longer names fixing the matcher"; false; }
+  done
 }
 
 @test "the scout is forbidden from silently routing around a query miss" {
-  # POSITIONALLY anchored, not two independent whole-file greps. The earlier
-  # version checked "an unreachable clause exists" and "a prohibition exists"
-  # separately, and passed with the prohibition DELETED — because an unrelated
-  # rule elsewhere in the file ("never fall back to a raw grep over
-  # mistakes.jsonl") satisfied the prohibition pattern on its own. Proven by
-  # mutation; the window is what makes this test able to fail.
-  local anchor window
-  anchor="$(grep -inE 'unreachable|reach(able)? by hand|exists but' "$AGENT" | head -1 | cut -d: -f1)"
-  [ -n "$anchor" ] || { echo "no unreachable-record clause to anchor the prohibition to"; false; }
-  window="$(sed -n "${anchor},$((anchor + 12))p" "$AGENT")"
-  grep -qiE '(never|do not|not) .{0,40}(silently|work around|route around|fall back)' <<< "$window" \
-    || { echo "no prohibition within 12 lines of the unreachable-record clause at line $anchor"; false; }
+  # POSITIONALLY anchored, not two independent whole-file greps: the
+  # prohibition must live WITHIN the budget/unreachable paragraph, or it can
+  # be deleted there while an unrelated rule elsewhere keeps the test green.
+  # Proven by mutation on the pre-redesign version of this test.
+  local f anchor window
+  for f in "$SKILL" "$AGENT"; do
+    anchor="$(grep -in 'UNREACHABLE' "$f" | head -1 | cut -d: -f1)"
+    [ -n "$anchor" ] || { echo "$(basename "$f"): no unreachable-record clause to anchor to"; false; }
+    window="$(sed -n "${anchor},$((anchor + 10))p" "$f")"
+    grep -qiE 'no retry|no widening|no follow-up pull|probing around it' <<< "$window" \
+      || { echo "$(basename "$f"): no routing-around prohibition within 10 lines of UNREACHABLE at line $anchor"; false; }
+  done
 }
 
 @test "the output shape has somewhere to put the unreachable-record finding" {
@@ -144,16 +293,14 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
   grep -qiE 'UNREACHABLE|RETRIEVAL' "$AGENT"
 }
 
-# ---------- the tool and the prompt agree ----------
-
 @test "the --full truncation notice points at --cat, not a raw awk recipe" {
-  # The notice is the one place the SCRIPT tells a caller how to read the rest.
-  # If it still hands out an awk one-liner, the prompt and the tool disagree
-  # and the scout has a sanctioned way back out of the record stores.
-  # Scoped to the notice STRING, not the whole file — print_full's own
-  # implementation legitimately uses awk.
+  # Legacy callers (--full without --ask) still exist outside the forks; the
+  # notice must hand them the sanctioned batch-read surface, never an awk
+  # one-liner. Scoped to the notice STRING, not the whole file — print_full's
+  # own implementation legitimately uses awk.
   local notice
-  # `|| true` for the same errexit reason as the bash-block count above.
+  # `|| true` for errexit: grep exits 1 on no match, which would abort the
+  # test before the vacuity guard below could print.
   notice="$(grep -n '(--full: dumped' "$SCRIPT" || true)"
   [ -n "$notice" ] || { echo "truncation notice not found — assertion would pass vacuously"; false; }
   [[ "$notice" == *"--cat"* ]] || { echo "notice does not point at --cat: $notice"; false; }
@@ -162,36 +309,13 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
 
 # ---------- the fork prompt is SKILL.md, so the contract must live there ----------
 #
-# These tests used to assert the OPPOSITE: that SKILL.md must NOT mention
-# `--cat`, on a say-each-thing-once rationale that gave the flag list to the
-# agent file alone. That rationale assumed the agent file reaches the fork. It
-# does not — a marker injected into agents/procedure-scout.md ran zero times in
-# a live fork, and the docs confirm the Task for `context: fork` is the SKILL.md
-# content. So the old test did not merely miss the bug, it REQUIRED it. Every
-# assertion below is therefore against $SKILL, the file that actually binds.
-
-@test "the fork prompt mandates the --cat batch read" {
-  grep -qF -- '--cat' "$SKILL" \
-    || { echo "SKILL.md never names --cat; the fork is never told to batch-read"; false; }
-
-  # Anchored, not a bare presence grep: --cat must appear as a command the fork
-  # RUNS, inside a fenced bash block invoking query-records.sh.
-  run awk '
-    /^[[:space:]]*```bash/ { inblock = 1; next }
-    /^[[:space:]]*```/     { inblock = 0; next }
-    inblock && /query-records\.sh/ && /--cat/ { found = 1 }
-    END { exit(found ? 0 : 1) }
-  ' "$SKILL"
-  [ "$status" -eq 0 ] \
-    || { echo "--cat is mentioned in prose but never shown as a runnable command"; false; }
-}
+# A forked skill loads SKILL.md as its prompt and takes `agent:` as identity
+# only. Every binding assertion below therefore runs against $SKILL as well
+# as $AGENT — parity on clauses, not wording.
 
 @test "neither prompt claims grep as the scout's own method" {
-  # Both files legitimately NAME grep in prohibitions ("never fall back to a raw
-  # grep over mistakes.jsonl"), so the word itself is not the tell. Possessive
-  # framing is: a line calling grep the scout's work contradicts the
-  # sole-retrieval-surface contract in Boundaries, and an identity doc that
-  # disagrees with its own contract instructs whoever reads it first.
+  # Both files legitimately NAME grep in prohibitions, so the word itself is
+  # not the tell. Possessive framing is.
   local f hit
   for f in "$SKILL" "$AGENT"; do
     hit="$(grep -niE 'your (greps|grepping|grep )' "$f" || true)"
@@ -200,85 +324,11 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
   done
 }
 
-@test "both prompts issue --recall FIRST, before iterative keyword probing" {
-  # --recall is the one-shot multi-signal query; --keyword is the iterative
-  # probe it exists to replace. Ordering is the whole point: a loop that probes
-  # first and recalls last pays for the iteration it was supposed to skip. A
-  # live fork ran the loop in file order and spent 9 Bash calls / 99s doing it.
-  local f r k
-  for f in "$SKILL" "$AGENT"; do
-    r="$(awk '/^[[:space:]]*```bash/{b=1;next} /^[[:space:]]*```/{b=0;next}
-              b && /--recall/ { print NR; exit }' "$f")"
-    k="$(awk '/^[[:space:]]*```bash/{b=1;next} /^[[:space:]]*```/{b=0;next}
-              b && /--keyword/ { print NR; exit }' "$f")"
-    [ -n "$r" ] || { echo "$(basename "$f"): --recall is never issued as a command"; false; }
-    [ -n "$k" ] || { echo "$(basename "$f"): --keyword is never issued as a command"; false; }
-    [ "$r" -lt "$k" ] \
-      || { echo "$(basename "$f"): --recall at line $r comes AFTER --keyword at line $k; the fork reads in order"; false; }
-  done
-}
-
-@test "both prompts make batching the rule, without licensing a skipped probe" {
-  # Perf work on a retrieval prompt has one failure mode: it quietly becomes
-  # scope reduction. The budget must read as guidance and must say, in the
-  # file, that it never justifies dropping a probe.
-  local f
-  for f in "$SKILL" "$AGENT"; do
-    grep -qiE 'one bash call|single bash call' "$f" \
-      || { echo "$(basename "$f"): batching multiple queries into one Bash call is never mandated"; false; }
-    grep -qE '[0-9]' <<<"$(grep -iE 'bash call' "$f")" \
-      || { echo "$(basename "$f"): no call budget is stated"; false; }
-    grep -qiE 'never skip|not a cap|thoroughness' "$f" \
-      || { echo "$(basename "$f"): the budget is stated without protecting thoroughness"; false; }
-  done
-}
-
-@test "both prompts RUN --list-stores, rather than citing output they never produced" {
-  # The store list is referenced downstream ("step 2's --list-stores boundary")
-  # to scope the failure-store sweep. Naming a flag in prose does not put its
-  # output in front of the model: unless the command is shown as one it RUNS,
-  # the later step is reasoning from a list it was never given.
-  local f
-  for f in "$SKILL" "$AGENT"; do
-    run awk '
-      /^[[:space:]]*```bash/ { inblock = 1; next }
-      /^[[:space:]]*```/     { inblock = 0; next }
-      inblock && /query-records\.sh/ && /--list-stores/ { found = 1 }
-      END { exit(found ? 0 : 1) }
-    ' "$f"
-    [ "$status" -eq 0 ] \
-      || { echo "$(basename "$f"): --list-stores is cited but never run as a command"; false; }
-  done
-}
-
-@test "the fork prompt names query-records.sh as the SOLE retrieval surface" {
-  local line
-  line="$(grep -inE 'ONLY retrieval tool|sole retrieval surface' "$SKILL" | head -1)"
-  [ -n "$line" ] \
-    || { echo "SKILL.md states no sole-surface boundary — the fork may use any tool"; false; }
-
-  # The boundary is only worth anything if it names what it excludes. Read a
-  # window from the clause itself rather than grepping the whole file, so an
-  # unrelated mention elsewhere cannot satisfy this.
-  local anchor window
-  anchor="$(printf '%s' "$line" | cut -d: -f1)"
-  window="$(sed -n "${anchor},$((anchor + 8))p" "$SKILL")"
-  [[ "$window" == *"Read"* ]] \
-    || { echo "the sole-surface boundary does not forbid the Read tool: $window"; false; }
-  local tool
-  for tool in grep find cat; do
-    [[ "$window" == *"$tool"* ]] \
-      || { echo "the sole-surface boundary does not forbid '$tool': $window"; false; }
-  done
-}
-
-@test "the fork prompt carries the UNREACHABLE bug-report contract" {
-  # Step 3b only exists to stop a silent workaround; if the output shape has no
-  # slot for it, the scout has nowhere to put the finding.
+@test "the fork carries the UNREACHABLE bug-report contract, not a silent workaround licence" {
   grep -qF 'UNREACHABLE' "$SKILL" \
     || { echo "SKILL.md has no UNREACHABLE section; a query miss has nowhere to go"; false; }
-  grep -qiE 'never silently work around a query miss' "$SKILL" \
-    || { echo "SKILL.md does not forbid silently routing around a query miss"; false; }
+  grep -qiE 'corpus bug|silently work around|route around' "$SKILL" \
+    || { echo "SKILL.md lost the express-it-as-corpus-bug framing for unsearchable records"; false; }
 }
 
 @test "the fork prompt carries the output-shape contract" {
@@ -292,15 +342,14 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
 @test "the two prompts do not disagree: the agent file keeps the same contract" {
   # agents/procedure-scout.md no longer binds the fork, but it still governs a
   # direct Agent-tool spawn. Both must carry the load-bearing clauses, or one
-  # caller silently gets a weaker scout. Parity is checked on the specific
-  # clauses, not on wording, so the files may still read differently.
+  # caller silently gets a weaker scout.
   local key
-  for key in '--cat' 'UNREACHABLE' 'query-records.sh'; do
+  for key in '--ask' 'UNREACHABLE' 'query-records.sh'; do
     grep -qF -- "$key" "$SKILL" || { echo "SKILL.md lost '$key'"; false; }
     grep -qF -- "$key" "$AGENT" || { echo "procedure-scout.md lost '$key'"; false; }
   done
-  grep -qiE 'ONLY retrieval tool|sole retrieval surface' "$AGENT" \
-    || { echo "procedure-scout.md lost its sole-surface boundary"; false; }
+  grep -qiE 'only retrieval act|sole retrieval surface' "$AGENT" \
+    || { echo "procedure-scout.md lost its sole-retrieval boundary"; false; }
 }
 
 @test "the agent file says plainly that it does not bind the fork" {
@@ -310,6 +359,154 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
     || { echo "procedure-scout.md does not warn that the fork ignores it"; false; }
   grep -qF 'SKILL.md' "$AGENT" \
     || { echo "procedure-scout.md does not point at the file that does bind"; false; }
+}
+
+# ---------- #48: resolve the target repo, never assume cwd ----------
+#
+# Unchanged by the one-query redesign: resolution is free reasoning, and a
+# repo-scoped goal resolved against the wrong repo is still the most
+# confident wrong answer this loop produces.
+
+@test "both prompts resolve the target repo before retrieving, not from cwd by default" {
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'resolve .*repo|target repo' "$f" \
+      || { echo "$(basename "$f"): no repo-resolution step at all"; false; }
+    # The precedence, in order, and cwd explicitly LAST.
+    grep -qiE 'goal text' "$f" || { echo "$(basename "$f"): goal text not named as a source"; false; }
+    grep -qiE 'held context|context you were|already handed' "$f" \
+      || { echo "$(basename "$f"): held context not named as a source"; false; }
+    grep -qiE 'working directory|cwd' "$f" || { echo "$(basename "$f"): cwd not named as a source"; false; }
+    # Precedence is an ORDER, not a bag of words. Asserted on the FLATTENED
+    # text: a line-by-line check reads whichever mention happens to come first
+    # on its own line, so wrapping across a break was enough to hide a fully
+    # inverted list from an earlier draft. Prefix-before-match length is the
+    # index of each phrase.
+    local flat g h c
+    flat="$(tr '\n' ' ' < "$f" | tr -s ' ')"
+    g="${flat%%goal text*}"; h="${flat%%held context*}"; c="${flat%%working directory*}"
+    [ "${#g}" -lt "${#h}" ] \
+      || { echo "$(basename "$f"): held context is offered before goal text"; false; }
+    [ "${#h}" -lt "${#c}" ] \
+      || { echo "$(basename "$f"): the working directory is offered before held context"; false; }
+    # Resolution must come BEFORE any retrieval mention — the repo has to be
+    # settled before the one query is issued. The first `--recall` token in
+    # the file sits in the Boundary that forbids it, which is still downstream
+    # of step 1, so it remains a valid retrieval marker.
+    local s r
+    s="${flat%%Resolve the target repo*}"; r="${flat%%--recall*}"
+    [ "${#s}" -lt "${#r}" ] \
+      || { echo "$(basename "$f"): repo resolution comes AFTER retrieval"; false; }
+    # Never silently.
+    grep -qiE 'never .*(assume|default).*(cwd|working directory)|cwd .*never' "$f" \
+      || { echo "$(basename "$f"): nothing forbids silently defaulting to cwd"; false; }
+    # Held context is scoped to the CURRENT goal. Unscoped, it lets a digest
+    # from an unrelated prior goal supply the repo — a stale answer that still
+    # looks fully sourced.
+    grep -qE 'CURRENT goal' "$f" \
+      || { echo "$(basename "$f"): held context is not scoped to the current goal"; false; }
+    grep -qiE 'not a repo source' "$f" \
+      || { echo "$(basename "$f"): an unrelated prior goal's digest is not excluded as a repo source"; false; }
+  done
+}
+
+@test "both prompts require STATING the repo source, on a template that names the sources" {
+  local f
+  for f in "$SKILL" "$AGENT"; do
+    grep -qiE 'state which|which one you used|say which' "$f" \
+      || { echo "$(basename "$f"): resolution is never reported to the caller"; false; }
+    grep -qF 'REPO: <owner/repo>  [from goal text|from held context|from cwd]' "$f" \
+      || { echo "$(basename "$f"): REPO: template missing, or no longer names its source"; false; }
+    local src
+    for src in 'from goal text' 'from held context' 'from cwd'; do
+      grep -qF "$src" "$f" \
+        || { echo "$(basename "$f"): REPO: template no longer offers '$src'"; false; }
+    done
+  done
+}
+
+# ---------- the project-justfile probe (procedures x just integration) ----------
+#
+# Still an ADDITION, not a second retrieval surface — but under the one-query
+# budget it rides INSIDE the single Bash call instead of costing its own.
+
+@test "both prompts probe the project justfile after the query, before the return" {
+  local f b j v
+  for f in "$SKILL" "$AGENT"; do
+    b="$(awk '/^[[:space:]]*```bash/{bl=1;next} /^[[:space:]]*```/{bl=0;next}
+              bl && /query-records\.sh/ && /--ask/ { print NR; exit }' "$f")"
+    j="$(awk '/^[[:space:]]*```bash/{bl=1;next} /^[[:space:]]*```/{bl=0;next}
+              bl && /--dump/ { print NR; exit }' "$f")"
+    v="$(grep -n '^5\. ' "$f" | head -1 | cut -d: -f1)"
+    [ -n "$b" ] || { echo "$(basename "$f"): no --ask block to anchor against"; false; }
+    [ -n "$j" ] || { echo "$(basename "$f"): the justfile dump is never issued as a command"; false; }
+    [ -n "$v" ] || { echo "$(basename "$f"): no return step to anchor against"; false; }
+    { [ "$b" -lt "$j" ] && [ "$j" -lt "$v" ]; } \
+      || { echo "$(basename "$f"): the probe (line $j) is not between the query (line $b) and the return (line $v)"; false; }
+  done
+}
+
+@test "both prompts soft-degrade the justfile probe and never report its absence as a miss" {
+  # A missing just(1) or justfile is a normal environment, not a gap: if the
+  # degrade were reported, every non-just repo would grow a phantom
+  # UNREACHABLE. Matched on FLATTENED text — both files wrap these clauses
+  # across lines ("never a retrieval / miss"), and grep is line-based.
+  local f flat
+  for f in "$SKILL" "$AGENT"; do
+    flat="$(tr '\n' ' ' < "$f" | tr -s ' ')"
+    grep -qiE 'skip it silently|soft-degrade' "$f" \
+      || { echo "$(basename "$f"): the justfile probe does not soft-degrade"; false; }
+    [[ "$flat" == *"never a retrieval miss"* ]] \
+      || { echo "$(basename "$f"): a skipped probe is not kept distinct from a retrieval miss"; false; }
+  done
+}
+
+@test "both prompts put matched recipes under RECIPES, preferred over raw commands" {
+  local f co re tr
+  for f in "$SKILL" "$AGENT"; do
+    grep -qF 'preferred over reciting equivalent raw commands' "$f" \
+      || { echo "$(basename "$f"): RECIPES carries no preference over raw commands"; false; }
+    co="$(grep -n 'COMMANDS (verbatim)' "$f" | head -1 | cut -d: -f1)"
+    re="$(grep -n '^RECIPES' "$f" | head -1 | cut -d: -f1)"
+    tr="$(grep -n '^TRAPS:' "$f" | head -1 | cut -d: -f1)"
+    [ -n "$co" ] && [ -n "$re" ] && [ -n "$tr" ] \
+      || { echo "$(basename "$f"): output-shape anchors missing"; false; }
+    { [ "$co" -lt "$re" ] && [ "$re" -lt "$tr" ]; } \
+      || { echo "$(basename "$f"): RECIPES is not adjacent to COMMANDS (before TRAPS:)"; false; }
+  done
+}
+
+@test "the just-dump exemption stays anchored to a written carve-out in both boundaries" {
+  # The sanctioned-shapes test exempts just/jq lines. Without this companion,
+  # deleting the boundary clause that licenses the exemption would leave it
+  # free-floating — an unanchored exception is how a second retrieval surface
+  # grows back. The redesign collapsed the old two boundaries into one per
+  # file, so ONE written carve-out per file is the anchor now.
+  local f n bnd
+  for f in "$SKILL" "$AGENT"; do
+    n="$(grep -cF 'cwd-resolving justfile' "$f")"
+    [ "$n" -ge 1 ] \
+      || { echo "$(basename "$f"): no written carve-out for the just-dump exemption"; false; }
+    bnd="$(grep -n '^# Boundaries' "$f" | head -1 | cut -d: -f1)"
+    [ -n "$bnd" ] || { echo "$(basename "$f"): no Boundaries section to anchor within"; false; }
+    local occ
+    occ="$(grep -nF 'cwd-resolving justfile' "$f" | head -1 | cut -d: -f1)"
+    [ "$occ" -gt "$bnd" ] \
+      || { echo "$(basename "$f"): carve-out at line $occ sits outside Boundaries (section starts line $bnd)"; false; }
+  done
+}
+
+@test "the justfile probe rides the SAME call, costing no extra query" {
+  # The old budget charged +1 for the probe; the redesign folds it into the
+  # single Bash call. The prompt must say so, or a fork pays (and the guard
+  # denies) a call the design already spent. Flattened text again: both files
+  # wrap the clause ("the SAME / call:").
+  local f flat
+  for f in "$SKILL" "$AGENT"; do
+    flat="$(tr '\n' ' ' < "$f" | tr -s ' ')"
+    [[ "$flat" == *"append the probe to the SAME call"* ]] \
+      || { echo "$(basename "$f"): the probe is not stated to ride the same call"; false; }
+  done
 }
 
 # ---------- #22 AC-4: every declaring agent, not just the scout ----------
@@ -347,96 +544,7 @@ fm_key() { fm_value "$(frontmatter_block "$1")" "$2"; }
 # ---------- #22 AC-6: the inheritance is design, and is recorded as such ----------
 
 @test "AC-6: the README records fork-model inheritance as documented harness design" {
-  # The issue asks for a decision record rather than a 'fix' if the tier turns
-  # out to be deliberately inherited. It is. This pins that the repo says so
-  # AND cites where the harness documents it, so the next reader does not
-  # refile it as a bug.
   local README="$REPO/README.md"
   grep -qiE 'documented (harness )?(design|behaviour|behavior)' "$README"
   grep -qF 'sub-agents' "$README"
-}
-
-# ---------- #48: resolve the target repo, never assume cwd ----------
-#
-# The scout ran inside whatever directory the shell happened to sit in and
-# answered PR/issue questions against THAT repo — silently. A repo-scoped goal
-# resolved against the wrong repo is the most confident wrong answer this loop
-# produces: every command is verbatim, every path resolves, and all of it is
-# about somewhere else. Ordering (goal text > held context > cwd) is the fix;
-# stating the choice is what makes a wrong pick visible to the caller.
-
-@test "both prompts resolve the target repo before retrieving, not from cwd by default" {
-  local f
-  for f in "$SKILL" "$AGENT"; do
-    grep -qiE 'resolve .*repo|target repo' "$f" \
-      || { echo "$(basename "$f"): no repo-resolution step at all"; false; }
-    # The precedence, in order, and cwd explicitly LAST.
-    grep -qiE 'goal text' "$f" || { echo "$(basename "$f"): goal text not named as a source"; false; }
-    grep -qiE 'held context|context you were|already handed' "$f" \
-      || { echo "$(basename "$f"): held context not named as a source"; false; }
-    grep -qiE 'working directory|cwd' "$f" || { echo "$(basename "$f"): cwd not named as a source"; false; }
-    # Precedence is an ORDER, not a bag of words. Asserted on the FLATTENED
-    # text: a line-by-line check reads whichever mention happens to come first
-    # on its own line, so wrapping "the working / directory" across a break was
-    # enough to hide a fully inverted list from an earlier draft of this test.
-    # Prefix-before-match length is the index of each phrase.
-    local flat g h c
-    flat="$(tr '\n' ' ' < "$f" | tr -s ' ')"
-    g="${flat%%goal text*}"; h="${flat%%held context*}"; c="${flat%%working directory*}"
-    [ "${#g}" -lt "${#h}" ] \
-      || { echo "$(basename "$f"): held context is offered before goal text"; false; }
-    [ "${#h}" -lt "${#c}" ] \
-      || { echo "$(basename "$f"): the working directory is offered before held context"; false; }
-    # Step 0 must come BEFORE retrieval, not merely exist somewhere in the file
-    # — the repo has to be settled before any query is issued. Prefix-index for
-    # the same reason as above; the first `--recall` mention IS the retrieval
-    # step in both files, so there is no earlier mention to match by accident.
-    local s r
-    s="${flat%%Resolve the target repo*}"; r="${flat%%--recall*}"
-    [ "${#s}" -lt "${#r}" ] \
-      || { echo "$(basename "$f"): repo resolution comes AFTER the --recall retrieval step"; false; }
-    # Never silently.
-    grep -qiE 'never .*(assume|default).*(cwd|working directory)|cwd .*never' "$f" \
-      || { echo "$(basename "$f"): nothing forbids silently defaulting to cwd"; false; }
-    # Held context is scoped to the CURRENT goal. Unscoped, it lets a digest
-    # from an unrelated prior goal supply the repo — a stale answer that still
-    # looks fully sourced.
-    grep -qE 'CURRENT goal' "$f" \
-      || { echo "$(basename "$f"): held context is not scoped to the current goal"; false; }
-    grep -qiE 'not a repo source' "$f" \
-      || { echo "$(basename "$f"): an unrelated prior goal's digest is not excluded as a repo source"; false; }
-  done
-}
-
-@test "both prompts require STATING the repo source, on a template that names the sources" {
-  local f
-  for f in "$SKILL" "$AGENT"; do
-    grep -qiE 'state which|which one you used|say which' "$f" \
-      || { echo "$(basename "$f"): resolution is never reported to the caller"; false; }
-    # The template must carry the source annotation, or "state which source"
-    # has nowhere to land. A bare `REPO:` prefix match would stay green with
-    # the annotation stripped — losing exactly what the step asks be reported.
-    grep -qF 'REPO: <owner/repo>  [from goal text|from held context|from cwd]' "$f" \
-      || { echo "$(basename "$f"): REPO: template missing, or no longer names its source"; false; }
-    local src
-    for src in 'from goal text' 'from held context' 'from cwd'; do
-      grep -qF "$src" "$f" \
-        || { echo "$(basename "$f"): REPO: template no longer offers '$src'"; false; }
-    done
-  done
-}
-
-@test "the repo step does not spend a Bash call, so the 3-4 call budget still holds" {
-  # #45 bought the call budget; #48 must not quietly spend it. The step is
-  # reasoning over text already in hand, not a lookup.
-  local f
-  for f in "$SKILL" "$AGENT"; do
-    grep -qiE 'no bash call|costs no|without a bash call|zero bash' "$f" \
-      || { echo "$(basename "$f"): repo step never says it is free"; false; }
-    # The budget block itself must survive unchanged.
-    grep -qE 'Budget: a typical goal finishes in 3-4 Bash calls' "$f" \
-      || { echo "$(basename "$f"): the 3-4 Bash call budget block was lost"; false; }
-    grep -qiE 'guidance, not a cap' "$f" \
-      || { echo "$(basename "$f"): the not-a-cap caveat was lost"; false; }
-  done
 }

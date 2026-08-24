@@ -3,8 +3,8 @@
 Fill this in. Each section says what it is for; the traps are marked inline.
 
 Delete this explanatory block from your copy. Delete any section that is
-genuinely empty, except **Procedures followed**, **Not done**, and
-**Assumptions** — those three are load-bearing precisely when they look empty,
+genuinely empty, except **Procedures followed**, **Not done**, **Assumptions**,
+and **Records owed** — those are load-bearing precisely when they look empty,
 because silence in them reads as coverage.
 
 ---
@@ -63,6 +63,26 @@ embarrassment.
 ## Not done
 
 - <Deferred work, skipped checks, paths not taken, and why.>
+
+## Records owed
+
+- <A mistake corrected, a fix confirmed, or a judgment call resolved this turn
+  whose record the stores do not yet hold. Empty means none were detected —
+  that silence is itself the claim.>
+
+Close each one before replying. When the environment has the global just
+library (probe `command -v just` plus a justfile once), prefer the flat
+recipes:
+
+```
+just log-mistake --pattern <fm.id> --summary "<one line>"
+just log-solution --slug <slug> --summary "<one line>"
+just log-decision --slug <slug> --summary "<one line>"
+```
+
+Without it, log the same gaps via /update-records. failure-mode always routes
+to /update-records — promoting a recurring mistake is judgment, not a recipe
+line.
 
 ## What would change my mind
 

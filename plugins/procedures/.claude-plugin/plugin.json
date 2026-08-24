@@ -23,6 +23,12 @@
       "default": true,
       "title": "Enable the frontmatter check",
       "description": "Require the six-key frontmatter schema on records written into a knowledge store. Set false to turn this check off; also settable per-invocation as PROCEDURES_ENABLE_FRONTMATTER_CHECK=false."
+    },
+    "enable_query_shape_guard": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enable the gate-fork shape guard",
+      "description": "Hold the how-do-i / am-i-done forks to their one-shot contracts: the scout may only run query-records.sh --ask (plus digest replay and the justfile probe); the reviewer gets one --ask verification and one evolution dispatch. Set false to turn this guard off; also settable per-invocation as PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=false."
     }
   }
 }

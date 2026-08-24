@@ -77,6 +77,19 @@
 #                      same as every other mode.
 #                      Matcher: scripts/lib/recall-match.awk. File:
 #                      $ROOT/mistakes.jsonl (env QUERY_RECORDS_RECALL_FILE).
+#   --ask <toks>       THE FRONT DOOR for one-shot callers (the gate forks):
+#                      ONE term set, ONE invocation. Runs the ranked union
+#                      over ALL stores, folds vendored mirrors into their
+#                      canonical twins, dumps FULL TEXT for the top-15 ranked
+#                      matches (anything beyond that is DISCLOSED by count,
+#                      never silently dropped — narrow the terms to reach it),
+#                      THEN sweeps mistakes.jsonl with the same terms.
+#                      Output is sectioned: `== records: N matched ==`, the
+#                      dumps behind `==> path <==` headers, then `== mistakes:
+#                      N matched ==`. A records-miss never skips the mistakes
+#                      sweep. Combine only with the ranking knobs (--limit,
+#                      --rel-ratio, --k-floor); any query flag alongside it is
+#                      a usage error — the term set IS the query.
 #   --rel-ratio <X>    matcher's relative floor, within a kind bucket a
 #                      candidate scoring < X * (bucket top score) is dropped
 #                      (env QUERY_RECORDS_REL_RATIO). 0 disables this
@@ -171,6 +184,8 @@ Q_LINKS_TO=""
 Q_PROJECT=""
 Q_FULL=0
 Q_RECALL=""
+Q_ASK=""
+ASK=0
 Q_CAT=0
 CAT_REFS=()
 
@@ -219,6 +234,7 @@ while [ "$#" -gt 0 ]; do
                 CAT_REFS+=("$1"); shift
             done
             ;;
+        --ask)       seen_once "$1"; Q_ASK="${2:-}"; shift 2 ;;
         --rel-ratio) seen_once "$1"; REL_RATIO="${2:-}"; shift 2 ;;
         --k-floor)   seen_once "$1"; K_FLOOR="${2:-}"; shift 2 ;;
         *) echo "query-records: unknown flag: $1" >&2; exit 2 ;;
@@ -247,65 +263,116 @@ if [ "$Q_CAT" -eq 1 ]; then
     fi
 fi
 
-if [ "$Q_CAT" -eq 0 ] && [ -z "$Q_KEYWORD" ] && [ -z "$Q_KIND" ] && [ -z "$Q_ID" ] && [ -z "$Q_LINKS_TO" ] && [ -z "$Q_RECALL" ] && [ -z "$Q_PROJECT" ]; then
-    echo "query-records: need at least one of --keyword/--kind/--id/--links-to/--recall/--project" >&2
+if [ "$Q_CAT" -eq 0 ] && [ -z "$Q_KEYWORD" ] && [ -z "$Q_KIND" ] && [ -z "$Q_ID" ] && [ -z "$Q_LINKS_TO" ] && [ -z "$Q_RECALL" ] && [ -z "$Q_PROJECT" ] && [ -z "$Q_ASK" ]; then
+    echo "query-records: need at least one of --ask/--keyword/--kind/--id/--links-to/--recall/--project" >&2
     exit 2
 fi
 
-# ---- recall mode: field-anchored sweep over mistakes.jsonl ----
+# --ask resolves INTO the keyword+full path below; it only adds the sectioned
+# output (full dumps of every match) and the fused mistakes sweep. Refuse
+# query-flag combinations here so the term set stays the whole query — a
+# second filter alongside it would mean the caller is composing the old
+# multi-call loop this flag exists to replace.
+case "$SEEN_FLAGS" in
+    *" --ask "*)
+        [ -n "$Q_ASK" ] || { echo "query-records: --ask needs a term set." >&2; exit 2; }
+        case "$SEEN_FLAGS" in
+            *" --keyword "*|*" --kind "*|*" --id "*|*" --links-to "*|*" --recall "*|*" --project "*|*" --cat "*)
+                echo "query-records: --ask takes ONLY the term set — it already unions all stores, dumps every match in full, and sweeps mistakes.jsonl." >&2
+                exit 2 ;;
+        esac
+        Q_KEYWORD="$Q_ASK"
+        ASK=1
+        ;;
+esac
+
+# ---- recall sweep, shared by --recall mode and --ask's mistakes section ----
 # PLUGIN ADAPTATION: recall has no upstream counterpart to vendor from —
 # orchard-codex#268 phase 1 removed these scripts from the codex, making this
 # plugin the source of truth for query-records machinery. The codex's own
 # copy is a frozen older version that never covered mistakes.jsonl.
-if [ -n "$Q_RECALL" ]; then
-    if [ -n "$Q_KEYWORD" ] || [ -n "$Q_KIND" ] || [ -n "$Q_ID" ] || [ -n "$Q_LINKS_TO" ] || [ -n "$Q_PROJECT" ] || [ "$Q_FULL" -eq 1 ]; then
-        echo "query-records: --recall is its own mode — combine only with --limit" >&2
-        exit 2
-    fi
-    RECALL_FILE="${QUERY_RECORDS_RECALL_FILE:-$ROOT/mistakes.jsonl}"
-    if [ ! -f "$RECALL_FILE" ]; then
-        # Same contract as exit 3 elsewhere: "no store" must not read as "no
-        # matches".
-        echo "query-records: recall store not found: $RECALL_FILE — NOT 'no matches'" >&2
-        exit 3
+#
+# Sets RECALL_HITS (newline-joined hit lines) and RECALL_TOTAL. Returns the
+# codes the --recall mode must preserve: 2 = no searchable token, 3 = store
+# missing or scan failed. Both mean "did not search" and must never read as
+# "searched, found nothing".
+recall_run() {
+    RECALL_HITS=""; RECALL_TOTAL=0
+    local rf="${QUERY_RECORDS_RECALL_FILE:-$ROOT/mistakes.jsonl}"
+    if [ ! -f "$rf" ]; then
+        echo "query-records: recall store not found: $rf — NOT 'no matches'" >&2
+        return 3
     fi
     # Recall tokenization differs from --keyword: whitespace separates TERMS,
     # and punctuation inside a term is kept as a phrase joint ("pickup-loop"
     # matches the phrase "pickup loop"/"pickup-loop", never bare "loop").
     # Splitting phrases into independent tokens made a broad term set match
     # most of the file — common words like "type" hit everywhere.
-    TOKEN_FILE="$(mktemp)"
-    trap 'rm -f "$TOKEN_FILE"' EXIT
-    printf '%s' "$Q_RECALL" \
-        | tr '[:upper:]' '[:lower:]' \
-        | tr -s '[:space:]' '\n' \
-        | awk -v min="$MIN_TOKEN_LEN" '{ s = $0; gsub(/[^a-z0-9]/, "", s); if (length(s) >= min) print }' \
-        | sort -u > "$TOKEN_FILE"
-    if [ ! -s "$TOKEN_FILE" ]; then
-        echo "query-records: --recall \"$Q_RECALL\" has no token of $MIN_TOKEN_LEN+ characters — nothing to search." >&2
-        echo "query-records: this is NOT 'no matches'. Tokens shorter than $MIN_TOKEN_LEN characters are dropped; use a longer term." >&2
+    local tf; tf="$(mktemp)"
+    printf '%s' "$1" | awk -v min="$MIN_TOKEN_LEN" -v tokfile="$tf" '
+        { n = split(tolower($0), t, /[[:space:]]+/)
+          for (i = 1; i <= n; i++) { s = t[i]; gsub(/[^a-z0-9]/, "", s); if (length(s) >= min) u[s] = 1 } }
+        END { for (k in u) print k > tokfile }'
+    if [ ! -s "$tf" ]; then rm -f "$tf"; return 2; fi
+    if ! RECALL_HITS="$(awk -v tokfile="$tf" -f "$LIB_DIR/recall-match.awk" "$rf")"; then
+        rm -f "$tf"
+        echo "query-records: recall scan failed (awk unusable or lib missing) — NOT 'no matches'" >&2
+        return 3
+    fi
+    rm -f "$tf"
+    [ -n "$RECALL_HITS" ] && RECALL_TOTAL="$(printf '%s\n' "$RECALL_HITS" | grep -c .)"
+    return 0
+}
+
+# ---- --recall mode: field-anchored sweep over mistakes.jsonl ----
+if [ -n "$Q_RECALL" ]; then
+    if [ -n "$Q_KEYWORD" ] || [ -n "$Q_KIND" ] || [ -n "$Q_ID" ] || [ -n "$Q_LINKS_TO" ] || [ -n "$Q_PROJECT" ] || [ "$Q_FULL" -eq 1 ]; then
+        echo "query-records: --recall is its own mode — combine only with --limit" >&2
         exit 2
     fi
-    if ! HITS="$(awk -v tokfile="$TOKEN_FILE" -f "$LIB_DIR/recall-match.awk" "$RECALL_FILE")"; then
-        echo "query-records: recall scan failed (awk unusable or lib missing) — NOT 'no matches'" >&2
-        exit 3
-    fi
-    [ -z "$HITS" ] && exit 0
-    TOTAL="$(printf '%s\n' "$HITS" | grep -c .)"
+    recall_run "$Q_RECALL"
+    case "$?" in
+        2)
+            echo "query-records: --recall \"$Q_RECALL\" has no token of $MIN_TOKEN_LEN+ characters — nothing to search." >&2
+            echo "query-records: this is NOT 'no matches'. Tokens shorter than $MIN_TOKEN_LEN characters are dropped; use a longer term." >&2
+            exit 2 ;;
+        3) exit 3 ;;
+    esac
+    [ -z "$RECALL_HITS" ] && exit 0
     # Default cap 20 (most recent — file order is chronological); an explicit
     # --limit overrides, 0 = uncapped. The count line always prints, so a cap
     # can never be silent.
     RECALL_CAP=20
     case "$SEEN_FLAGS" in *" --limit "*) RECALL_CAP="$LIMIT" ;; esac
-    if [ "$RECALL_CAP" -gt 0 ] && [ "$TOTAL" -gt "$RECALL_CAP" ]; then
-        printf 'recall: %d matched — showing the %d most recent (raise --limit for more)\n' "$TOTAL" "$RECALL_CAP"
-        printf '%s\n' "$HITS" | tail -n "$RECALL_CAP"
+    if [ "$RECALL_CAP" -gt 0 ] && [ "$RECALL_TOTAL" -gt "$RECALL_CAP" ]; then
+        printf 'recall: %d matched — showing the %d most recent (raise --limit for more)\n' "$RECALL_TOTAL" "$RECALL_CAP"
+        printf '%s\n' "$RECALL_HITS" | tail -n "$RECALL_CAP"
     else
-        printf 'recall: %d matched\n' "$TOTAL"
-        printf '%s\n' "$HITS"
+        printf 'recall: %d matched\n' "$RECALL_TOTAL"
+        printf '%s\n' "$RECALL_HITS"
     fi
     exit 0
 fi
+
+# ---- --ask: emit the mistakes section for the fused one-shot answer ----
+# Records-miss never skips this: the caller paid one call for BOTH surfaces.
+ask_mistakes_section() {
+    local rc=0
+    recall_run "$Q_ASK" || rc="$?"
+    if [ "$rc" -ne 0 ]; then
+        echo "query-records: --ask mistakes sweep skipped (recall unavailable, rc=$rc) — NOT 'no matches'" >&2
+        return 0
+    fi
+    printf '== mistakes: %d matched ==\n' "$RECALL_TOTAL"
+    [ "$RECALL_TOTAL" -eq 0 ] && return 0
+    # Same cap semantics as --recall's default: 20 most recent, never silent.
+    if [ "$RECALL_TOTAL" -gt 20 ]; then
+        printf '== mistakes: showing the 20 most recent ==\n'
+        printf '%s\n' "$RECALL_HITS" | tail -n 20
+    else
+        printf '%s\n' "$RECALL_HITS"
+    fi
+}
 
 # print_full <paths on stdin> — dump each record in full with a path header.
 print_full() {
@@ -330,10 +397,17 @@ print_full_capped() {
 }
 
 # ---- candidate corpus (all stores, excluding INDEX.md and archived) ----
-ALL_FILES="$(for d in "${ALL_STORES[@]}"; do
-    [ -d "$d" ] || continue
-    find -H "$d" -type f -name '*.md' ! -name 'INDEX.md' ! -path '*_archived*'
-done | sort)"
+# ONE find over every existing store (missing stores are skipped, as before);
+# the global sort makes the order identical to the old per-store concatenation.
+EXISTING_STORES=()
+for d in "${ALL_STORES[@]}"; do
+    [ -d "$d" ] && EXISTING_STORES+=("$d")
+done
+ALL_FILES=""
+if [ "${#EXISTING_STORES[@]}" -gt 0 ]; then
+    ALL_FILES="$(find -H ${EXISTING_STORES[@]+"${EXISTING_STORES[@]}"} \
+        -type f -name '*.md' ! -name 'INDEX.md' ! -path '*_archived*' | sort)"
+fi
 
 # ---- --cat mode: dump an EXPLICIT list of records, in one call ----
 # PLUGIN ADAPTATION: --cat has no upstream counterpart to vendor from —
@@ -468,26 +542,33 @@ fi
 # Emits `path \t gloss` for every passing file.
 # PLUGIN ADAPTATION: fail loud, not silently-empty — plugin runs on arbitrary
 # hosts whose awk may lack nextfile.
-if ! SCANNED="$(printf '%s\n' "$ALL_FILES" | tr '\n' '\0' \
-    | xargs -0 awk -v qkind="$Q_KIND" -v qid="$Q_ID" -v qlinks="$Q_LINKS_TO" -v qproject="$Q_PROJECT" \
-        -f "$LIB_DIR/record-scan.awk")"; then
-    echo "query-records: record scan failed (awk unusable or lib missing) — NOT 'no matches'" >&2
-    exit 3
+# --ask SKIPS this pass: it can carry no structural filter (refused at parse),
+# so the scan's only effect — dropping 0-byte files — is applied to its own
+# feed below, and the matcher pass would reread everything anyway.
+if [ "$ASK" -eq 0 ]; then
+    if ! SCANNED="$(printf '%s\n' "$ALL_FILES" | tr '\n' '\0' \
+        | xargs -0 awk -v qkind="$Q_KIND" -v qid="$Q_ID" -v qlinks="$Q_LINKS_TO" -v qproject="$Q_PROJECT" \
+            -f "$LIB_DIR/record-scan.awk")"; then
+        echo "query-records: record scan failed (awk unusable or lib missing) — NOT 'no matches'" >&2
+        exit 3
+    fi
+    [ -z "$SCANNED" ] && exit 0
+    NARROWED="$(printf '%s\n' "$SCANNED" | cut -f1)"
 fi
-[ -z "$SCANNED" ] && exit 0
-NARROWED="$(printf '%s\n' "$SCANNED" | cut -f1)"
 
 # ---- keyword path: hand the narrowed set to the SHARED matcher ----
 if [ -n "$Q_KEYWORD" ]; then
-    # tokenize the keyword the same way the router tokenizes its prompt.
+    # tokenize the keyword the same way the router tokenizes its prompt —
+    # lowercase, split on non-alphanumerics, length floor, dedupe. One awk
+    # writes the token set directly (order in the file is irrelevant: the
+    # matcher loads it into a table).
     TOKEN_FILE="$(mktemp)"
     IDF_FILE="$(mktemp)"
     trap 'rm -f "$TOKEN_FILE" "$IDF_FILE"' EXIT
-    printf '%s' "$Q_KEYWORD" \
-        | tr '[:upper:]' '[:lower:]' \
-        | tr -cs 'a-z0-9' '\n' \
-        | awk -v min="$MIN_TOKEN_LEN" 'length($0) >= min' \
-        | sort -u > "$TOKEN_FILE"
+    printf '%s' "$Q_KEYWORD" | awk -v min="$MIN_TOKEN_LEN" -v tokfile="$TOKEN_FILE" '
+        { n = split(tolower($0), t, /[^a-z0-9]+/)
+          for (i = 1; i <= n; i++) if (length(t[i]) >= min) u[t[i]] = 1 }
+        END { for (k in u) print k > tokfile }'
     if [ ! -s "$TOKEN_FILE" ]; then
         # PLUGIN ADAPTATION: upstream exits 0 here, which a caller cannot tell
         # apart from a genuine miss. This copy fails loud, matching the exit-3
@@ -500,31 +581,102 @@ if [ -n "$Q_KEYWORD" ]; then
         echo "query-records: this is NOT 'no matches'. Tokens shorter than $MIN_TOKEN_LEN characters are dropped; use a longer term." >&2
         exit 2
     fi
-    # IDF pre-pass over the narrowed set, shared lib (df + idf + corpus stats).
-    printf '%s\n' "$NARROWED" | awk -v min_tok="$MIN_TOKEN_LEN" \
-        -f "$LIB_DIR/record-rarity.awk" > "$IDF_FILE"
-    # The PULL path is deliberately permissive: an explicit single-token query
-    # (e.g. --keyword issue) must still surface that token's records even though
-    # the PUSH gate would suppress a lone common token. So pass gate=0 to turn
-    # OFF the absolute df<=K_floor floor — the matcher then ranks every record
-    # with >=1 matched token and returns the top-N. The router keeps gate=1.
-    # PLUGIN ADAPTATION: owner call — the matcher's own per-kind `limit` stays
-    # uncapped (0) here; the total-result cap (--limit/QUERY_RECORDS_LIMIT) is
-    # applied uniformly below, after this path and the structural-only path
-    # both emit their full match sets.
-    MATCH_OUT="$(printf '%s\n' "$NARROWED" | awk \
-        -v tokfile="$TOKEN_FILE" \
-        -v idffile="$IDF_FILE" \
-        -v gate=0 \
-        -v limit=0 \
-        -v rel_ratio="$REL_RATIO" \
-        -v k_floor="$K_FLOOR" \
-        -v min_tok="$MIN_TOKEN_LEN" \
-        -f "$LIB_DIR/record-match.awk")"
+    if [ "$ASK" -eq 1 ]; then
+        # --ask runs ONE corpus pass: no structural scan (above), and the IDF
+        # pre-pass runs inside the matcher (self_idf=1 — exact record-rarity.awk
+        # math over the same feed). The 0-byte drop the scan used to perform is
+        # applied here; an all-empty corpus exits silently exactly where the old
+        # SCANNED check did. A fused pass failure is the scan-failure contract:
+        # exit 3, never a silent miss.
+        # (Array-append, not string-concat: growing a string per path is
+        # quadratic and cost more than the matcher it feeds.)
+        ASK_LIST=()
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            [ -s "$f" ] && ASK_LIST+=("$f")
+        done <<EOF
+$(printf '%s\n' "$ALL_FILES")
+EOF
+        MATCH_OUT=""
+        if [ "${#ASK_LIST[@]}" -gt 0 ]; then
+            if ! MATCH_OUT="$(printf '%s\n' ${ASK_LIST[@]+"${ASK_LIST[@]}"} | awk \
+                -v tokfile="$TOKEN_FILE" \
+                -v self_idf=1 \
+                -v gate=0 \
+                -v limit=0 \
+                -v rel_ratio="$REL_RATIO" \
+                -v k_floor="$K_FLOOR" \
+                -v min_tok="$MIN_TOKEN_LEN" \
+                -f "$LIB_DIR/record-match.awk")"; then
+                echo "query-records: record scan failed (awk unusable or lib missing) — NOT 'no matches'" >&2
+                exit 3
+            fi
+        fi
+    else
+        # IDF pre-pass over the narrowed set, shared lib (df + idf + corpus stats).
+        printf '%s\n' "$NARROWED" | awk -v min_tok="$MIN_TOKEN_LEN" \
+            -f "$LIB_DIR/record-rarity.awk" > "$IDF_FILE"
+        # The PULL path is deliberately permissive: an explicit single-token query
+        # (e.g. --keyword issue) must still surface that token's records even though
+        # the PUSH gate would suppress a lone common token. So pass gate=0 to turn
+        # OFF the absolute df<=K_floor floor — the matcher then ranks every record
+        # with >=1 matched token and returns the top-N. The router keeps gate=1.
+        # PLUGIN ADAPTATION: owner call — the matcher's own per-kind `limit` stays
+        # uncapped (0) here; the total-result cap (--limit/QUERY_RECORDS_LIMIT) is
+        # applied uniformly below, after this path and the structural-only path
+        # both emit their full match sets.
+        MATCH_OUT="$(printf '%s\n' "$NARROWED" | awk \
+            -v tokfile="$TOKEN_FILE" \
+            -v idffile="$IDF_FILE" \
+            -v gate=0 \
+            -v limit=0 \
+            -v rel_ratio="$REL_RATIO" \
+            -v k_floor="$K_FLOOR" \
+            -v min_tok="$MIN_TOKEN_LEN" \
+            -f "$LIB_DIR/record-match.awk")"
+    fi
     if [ "$LIMIT" -gt 0 ]; then
         MATCHED="$(printf '%s\n' "$MATCH_OUT" | head -n "$LIMIT")"
     else
         MATCHED="$MATCH_OUT"
+    fi
+    # --ask: the one-shot answer. Vendored mirrors fold into their canonical
+    # twins (same record shipped twice by titw would be paid twice), full text
+    # dumps up to ASK_FULL_CAP ranked records with the remainder DISCLOSED —
+    # never silently dropped — then the fused mistakes sweep.
+    if [ "$ASK" -eq 1 ]; then
+        if [ -z "$MATCHED" ]; then
+            printf '== records: 0 matched ==\n'
+        else
+            # Fold vendored mirrors: a hit under titw/corpus/@owner+repo/
+            # whose canonical twin also matched adds nothing.
+            DEDUPED="$(printf '%s\n' "$MATCHED" | awk '
+                { L[NR] = $0
+                  if ($0 !~ /^titw\/corpus\//) canon[$0] = 1 }
+                END {
+                  for (i = 1; i <= NR; i++) {
+                    l = L[i]
+                    if (l ~ /^titw\/corpus\/@[^\/]+\//) {
+                      c = l; sub(/^titw\/corpus\/@[^\/]+\//, "", c)
+                      if (c in canon) continue
+                    }
+                    print l
+                  }
+                }')"
+            TOTAL="$(printf '%s\n' "$MATCHED" | grep -c .)"
+            KEPT="$(printf '%s\n' "$DEDUPED" | grep -c .)"
+            FOLDED=$((TOTAL - KEPT))
+            printf '== records: %d matched%s ==\n' "$KEPT" \
+                "$([ "$FOLDED" -gt 0 ] && printf ' (%d vendored mirrors folded)' "$FOLDED")"
+            ASK_FULL_CAP=15
+            printf '%s\n' "$DEDUPED" | sed 's/ — .*//' | head -n "$ASK_FULL_CAP" | print_full
+            if [ "$KEPT" -gt "$ASK_FULL_CAP" ]; then
+                printf '(full text dumped for the %d top-ranked; %d more matched but are not dumped — narrow the terms to reach them)\n' \
+                    "$ASK_FULL_CAP" "$((KEPT - ASK_FULL_CAP))"
+            fi
+        fi
+        ask_mistakes_section
+        exit 0
     fi
     [ -z "$MATCHED" ] && exit 0
     printf '%s\n' "$MATCHED"
