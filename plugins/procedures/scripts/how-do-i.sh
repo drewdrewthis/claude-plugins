@@ -534,6 +534,8 @@ NUMBERS=()
 LAST_RESP_FILE=""
 STAGE1_ATTEMPTS_MADE=0
 USE_SCHEMA=true
+ORWRAP_TRIED=false
+RETRY_SAME_ATTEMPT=false
 
 while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
     resp_file="$WORK/stage1-attempt${ATTEMPT}.json"
@@ -551,6 +553,7 @@ while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
     # was primed). That must not brick the tool: drop the poisoned cache and
     # re-prime cold ONCE. Measured live: resume of a stale session exits 1
     # with "unrecognized_model".
+    RETRY_SAME_ATTEMPT=false
     if [ "$CALL_STATUS" -ne 0 ] && $WARM; then
         echo "how-do-i: warm session unresumable — clearing stale cache and re-priming cold" >&2
         rm -f "$INDEX_DIR/session.id" "$INDEX_DIR/session.fingerprint"
@@ -558,6 +561,25 @@ while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
         MODE_LABEL="cold"
         RESUME_SID=""
         ATTEMPT=$((ATTEMPT - 1))   # retry this attempt number, now cold
+        RETRY_SAME_ATTEMPT=true
+    fi
+    # Gateway fallback: when a RAW `claude` child dies with an auth-shaped
+    # failure (gateway env lives in settings.json, which only the child sees,
+    # so env-sniffing cannot predict it) and the orwrap wrapper exists, retry
+    # the whole attempt through the wrapper. Measured live both ways.
+    if [ "$CALL_STATUS" -ne 0 ] && ! $ORWRAP_TRIED \
+       && [ "${_claudewords[0]}" = "claude" ] \
+       && command -v orwrap >/dev/null 2>&1; then
+        echo "how-do-i: raw claude spawn failed — retrying via orwrap wrapper" >&2
+        # run_claude_call re-splits $CLAUDE_BIN, so the wrapper must land THERE:
+        # reassigning _claudewords alone silently re-ran raw claude.
+        CLAUDE_BIN="orwrap claude"
+        read -r -a _claudewords <<<"$CLAUDE_BIN"
+        ORWRAP_TRIED=true
+        rm -f "$INDEX_DIR/session.id" "$INDEX_DIR/session.fingerprint"
+        WARM=false; MODE_LABEL="cold"; RESUME_SID=""
+        ATTEMPT=$((ATTEMPT - 1))
+        RETRY_SAME_ATTEMPT=true
     fi
     LAST_RESP_FILE="$resp_file"
     STAGE1_ATTEMPTS_MADE="$ATTEMPT"
@@ -568,6 +590,10 @@ while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
     fi
 
     if [ "$CALL_STATUS" -ne 0 ]; then
+        if $RETRY_SAME_ATTEMPT; then
+            ATTEMPT=$((ATTEMPT + 1))
+            continue
+        fi
         err_detail="$(cat "${resp_file}.stderr" 2>/dev/null | head -c 300)"
         die "stage 1 (select) CLI invocation failed (exit $CALL_STATUS): ${err_detail:-no stderr captured}"
     fi
