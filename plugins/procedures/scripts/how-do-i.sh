@@ -334,7 +334,15 @@ run_claude_call() {
     shift 3
     local time_file
     time_file="$(mktemp "$WORK/time.XXXXXX")"
-    { time "$CLAUDE_BIN" -p --output-format json --model "$model" "$@" <<<"$prompt" >"$out_file" 2>"$out_file.stderr"; } 2>"$time_file"
+    # Measured: the default harness (tool defs + default system prompt) costs
+    # ~49k tokens/call; --tools "" + --exclude-dynamic-system-prompt-sections
+    # cuts that to ~6k (8x). Both stages here are pure text-in/text-out, so
+    # neither needs tools. MAX_THINKING_TOKENS=0 is exported at top of file.
+    # HOWDOI_CLAUDE_BIN may be multi-word (e.g. "orwrap claude" for an
+    # OpenRouter gateway), so split it into words before exec.
+    local claude_cmd
+    read -r -a claude_cmd <<<"$CLAUDE_BIN"
+    { time "${claude_cmd[@]}" -p --output-format json --model "$model" --tools "" --exclude-dynamic-system-prompt-sections "$@" <<<"$prompt" >"$out_file" 2>"$out_file.stderr"; } 2>"$time_file"
     CALL_STATUS=$?
     CALL_SECONDS="$(cat "$time_file" 2>/dev/null || true)"
     [ -n "$CALL_SECONDS" ] || CALL_SECONDS="0.000"
@@ -508,7 +516,9 @@ if $DRY_RUN; then
 fi
 
 CLAUDE_BIN="${HOWDOI_CLAUDE_BIN:-claude}"
-command -v "$CLAUDE_BIN" >/dev/null 2>&1 \
+# Multi-word values ("orwrap claude") resolve on their first word.
+read -r -a _claudewords <<<"$CLAUDE_BIN"
+command -v "${_claudewords[0]}" >/dev/null 2>&1 \
     || die "'$CLAUDE_BIN' CLI not found. Install Claude Code, or set HOWDOI_CLAUDE_BIN to override (tests use this to inject a stub)."
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/how-do-i.XXXXXX")"
@@ -523,15 +533,32 @@ SEL_OK=false
 NUMBERS=()
 LAST_RESP_FILE=""
 STAGE1_ATTEMPTS_MADE=0
+USE_SCHEMA=true
 
 while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
     resp_file="$WORK/stage1-attempt${ATTEMPT}.json"
     prompt="$(build_stage1_prompt "$QUESTION" "$MODE_LABEL" "$ATTEMPT")"
 
-    extra_args=(--json-schema "$STAGE1_SCHEMA")
+    extra_args=()
+    # Gateways behind ANTHROPIC_BASE_URL (e.g. OpenRouter) may silently drop
+    # --json-schema: measured structured_output=null, result="null". After the
+    # first such reply, retry under the plain text contract instead.
+    $USE_SCHEMA && extra_args+=(--json-schema "$STAGE1_SCHEMA")
     $WARM && extra_args+=(--resume "$RESUME_SID")
 
     run_claude_call "$resp_file" "$SELECT_MODEL" "$prompt" "${extra_args[@]}"
+    # A stored session can become unresumable (CLI/model/auth drift since it
+    # was primed). That must not brick the tool: drop the poisoned cache and
+    # re-prime cold ONCE. Measured live: resume of a stale session exits 1
+    # with "unrecognized_model".
+    if [ "$CALL_STATUS" -ne 0 ] && $WARM; then
+        echo "how-do-i: warm session unresumable — clearing stale cache and re-priming cold" >&2
+        rm -f "$INDEX_DIR/session.id" "$INDEX_DIR/session.fingerprint"
+        WARM=false
+        MODE_LABEL="cold"
+        RESUME_SID=""
+        ATTEMPT=$((ATTEMPT - 1))   # retry this attempt number, now cold
+    fi
     LAST_RESP_FILE="$resp_file"
     STAGE1_ATTEMPTS_MADE="$ATTEMPT"
     STAGE1_WALL_S="$CALL_SECONDS"
@@ -562,7 +589,13 @@ while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
         die "stage 1 (select) failed: $err_detail"
     fi
 
-    # unparseable / structured_output-shape: retry once.
+    # unparseable / structured_output-shape: retry once. If the reply carried
+    # no structured_output at all, the endpoint ignored --json-schema — drop
+    # it for the retry so the text contract (fence-tolerant parse) applies.
+    if [ "$(jq -r 'has("structured_output") and (.structured_output != null)' "$resp_file" 2>/dev/null)" != "true" ] && $USE_SCHEMA; then
+        USE_SCHEMA=false
+        echo "how-do-i: structured output not honored by this endpoint — retrying with plain-text contract" >&2
+    fi
     ATTEMPT=$((ATTEMPT + 1))
 done
 
