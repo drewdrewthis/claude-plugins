@@ -457,3 +457,41 @@ STUB
   [[ "$output" == *"not found"* ]]
   [ ! -f "$index_dir/session.id" ]
 }
+
+# PLUGIN ADAPTATION: no upstream counterpart — covers the plugin-local gateway
+# fallback in scripts/how-do-i.sh, which orchard-codex's copy does not have.
+@test "a raw-claude spawn failure retries the attempt THROUGH the orwrap wrapper, not raw claude again" {
+  # Regression: the fallback used to reassign a local word-array that
+  # run_claude_call never reads, so the "retrying via orwrap" retry silently
+  # re-ran raw `claude` and the run died anyway.
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: some record\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+
+  bin="$TMP/bin"; mkdir -p "$bin"
+  log="$TMP/spawn.log"
+
+  cat > "$bin/claude" <<EOF
+#!/usr/bin/env bash
+echo "raw-claude" >> "$log"
+echo "boom: unrecognized_model" >&2
+exit 1
+EOF
+  cat > "$bin/orwrap" <<EOF
+#!/usr/bin/env bash
+echo "orwrap \$1" >> "$log"
+cat > /dev/null
+printf '%s' '{"result":"[1]","session_id":"s1","is_error":false}'
+EOF
+  chmod +x "$bin/claude" "$bin/orwrap"
+
+  run env PATH="$bin:$PATH" HOWDOI_CLAUDE_BIN= bash "$SCRIPT" --question "q" --index-dir "$index_dir"
+
+  [ -f "$log" ]
+  # first spawn raw, second spawn through the wrapper with `claude` as argv[1]
+  [ "$(sed -n '1p' "$log")" = "raw-claude" ]
+  [ "$(sed -n '2p' "$log")" = "orwrap claude" ]
+  # and it must not have fallen back to raw claude a second time
+  [ "$(grep -c 'raw-claude' "$log")" -eq 1 ]
+}
