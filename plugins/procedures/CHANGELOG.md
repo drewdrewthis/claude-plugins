@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.7.1...procedures-v0.8.0) (2026-08-24)
+
+
+### Features
+
+* **procedures:** indexed two-stage retrieval for how-do-i, description as retrieval surface ([#112](https://github.com/drewdrewthis/claude-plugins/issues/112)) ([217112e](https://github.com/drewdrewthis/claude-plugins/commit/217112e123de9d4305e506860c885a7d3c7d3556))
+
 ## [0.7.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.7.0...procedures-v0.7.1) (2026-08-20)
 
 
