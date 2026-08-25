@@ -7,8 +7,13 @@
 #                                 pipeline run / digest replay / the documented
 #                                 justfile probe); ONE retrieval call per fork
 #                                 session.
-#   procedures:work-reviewer    — same Bash shape and budget; at most ONE Agent
-#                                 dispatch, targeting procedures:procedure-evolver.
+#   procedures:work-reviewer    — same Bash shape and budget; no Agent tool at
+#                                 all.
+# PLUGIN ADAPTATION: upstream's reviewer carried ONE Agent dispatch to
+# procedures:procedure-evolver; removed 2026-08-25 (issue #130) — record
+# evolution fires from the evolve-sweep Stop hook now, so neither fork may
+# dispatch agents. The write surface still belongs to procedure-evolver, which
+# the main session dispatches on the sweep's wake.
 # Both forks lose Write/Edit/Read-class tools outright: a fork inherits the
 # parent toolset (fm.read-only-fork-writes-anyway), so prose boundaries are not
 # the control — this guard is.
@@ -65,16 +70,14 @@ case "$AGENT" in
     procedures:procedure-scout|procedures:work-reviewer) ;;
     *) exit 0 ;;
 esac
-REVIEWER=0
-[ "$AGENT" = "procedures:work-reviewer" ] && REVIEWER=1
 
 TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '(.tool_name // .tool) // empty' 2>/dev/null || true)"
 
 SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 STATE_DIR="${QUERY_GUARD_STATE_DIR:-${TMPDIR:-/tmp}/procedures-query-guard}"
 
-# qsg_bump <key> — append one allowance; best effort, unwritable state fails
-# open (the guard degrades to shape-only enforcement).
+# qsg_allowance — append one sanction record; best effort, unwritable state
+# fails open (the guard degrades to shape-only enforcement).
 qsg_allowance() {
     [ -n "$SID" ] || { mkdir -p "$STATE_DIR" 2>/dev/null || true; return 0; }
     mkdir -p "$STATE_DIR" 2>/dev/null || return 0
@@ -92,18 +95,10 @@ qsg_count() {
 case "$TOOL_NAME" in
     Bash) : ;;
     Agent)
-        if [ "$REVIEWER" -eq 0 ]; then
-            qsg_deny "QUERY-SHAPE-GUARD: procedure-scout is read-only — no Agent dispatches. Run the pipeline once, report findings."
-        fi
-        N="$(qsg_count agent)"
-        if [ "${N:-0}" -ge 1 ]; then
-            qsg_deny "QUERY-SHAPE-GUARD: work-reviewer gets exactly ONE evolution dispatch per review, and it was spent. Return your findings now — remaining hygiene rows go in them."
-        fi
-        SUBTYPE="$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // empty' 2>/dev/null || true)"
-        case "$SUBTYPE" in
-            procedures:procedure-evolver) qsg_allowance agent; exit 0 ;;
-            *) qsg_deny "QUERY-SHAPE-GUARD: the single allowed dispatch targets procedures:procedure-evolver (got: ${SUBTYPE:-none}). Record hygiene belongs there — not to any other agent." ;;
-        esac
+        # No fork dispatches agents. Record evolution belongs to
+        # procedures:procedure-evolver, dispatched by the MAIN session when
+        # the evolve-sweep hook wakes it — never from inside a fork.
+        qsg_deny "QUERY-SHAPE-GUARD: $AGENT does not dispatch agents. Run your one pipeline lookup if not spent, then return findings — record WRITES belong to procedures:procedure-evolver via the evolve-sweep flow."
         ;;
     Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob)
         # The write surface belongs to procedure-evolver; reading beyond the
