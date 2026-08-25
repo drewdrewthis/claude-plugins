@@ -35,6 +35,7 @@ orchard-codex `develop-sweatshop`):
 | `/evolve-procedure` | patch an EXISTING procedure from a correction, incident, or friction — deviation, missing step, or stale/broken ref; procedures only, every material patch appends a dated line to that procedure dir's `EVOLUTION.md` |
 | `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded; off-switch `enable_how_do_i_gate` |
 | `am-i-done-gate` (Stop) | requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once; off-switch `enable_am_i_done_gate` |
+| `evolve-sweep` (Stop, async) | after each tool-using turn, one cheap-model triage over the final assistant message decides whether the turn looks evolvable; when it does, wakes the session once (`asyncRewake`) to dispatch `procedure-evolver`, which reviews the full turn transcript and updates records itself. Detector only — never writes a record, never stages a file; silent-degrades on triage failure (no failopen spam); no `stop_hook_active` guard so gate-blocked turns are still swept; off-switch `enable_evolve_sweep` |
 | `turn-state-reset` (UserPromptSubmit) / `turn-state-record` (PostToolUse:Skill) | the turn-boundary state the gates read (`$TURN_STATE_DIR`, default `/tmp/claude-turn-state`) |
 | `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation; off-switch `enable_frontmatter_check` |
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (`evolution.template.md` in `skills/update-records/templates/`) — one dated line per material change, newest first; `/update-records` explains it |
@@ -89,6 +90,15 @@ adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
   two-stage index pipeline (`how-do-i.sh` + `build-record-index.sh` +
   `compile-records.sh` + the `record-selector`/`how-do-i-answerer` agents) —
   all plugin-local, nothing upstream to stay byte-close to.
+
+- **No upstream counterpart (post-turn evolution detector):** `hooks/evolve-sweep.sh`
+  and its `enable_evolve_sweep` switch are new machinery, not vendored — a port of
+  the Hermes post-turn background-review pattern (detect evolvable material each
+  turn, wake once, let the dispatched agent write). The hook is a DETECTOR: it
+  never writes a record and never stages a file; judgment and every write belong
+  to `agents/procedure-evolver.md`, which it reaches by waking the session.
+  Its silent-degrade posture (token/curl/parse failures exit 0 with no record)
+  is a deliberate third release class documented in `docs/adrs/001`.
 
 - **Fork-path session state:** `hooks/digest-record.sh` +
   `hooks/lib/session-digest.sh` + `scripts/session-digest-read.sh` carry a

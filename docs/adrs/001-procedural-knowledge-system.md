@@ -27,7 +27,12 @@ real outcomes — and each of those needs a mechanism, not a convention.
   happen (gates, frontmatter schema) is a script wired to a lifecycle event,
   never a request in prose. Deterministic, not unconditional: each gate
   carries an owner-set off-switch (below), on by default and recorded when
-  used.
+  used. A **detector hook** relaxes this one degree: the wiring, guards, and
+  release decisions stay deterministic, but the hook may consult a side model
+  (one cheap call) to decide *whether to wake the session* — never to write.
+  `evolve-sweep.sh` is the instance: all judgment and every record write stay
+  with the agent it dispatches (`procedure-evolver`), and a hook that both
+  gates and writes remains forbidden.
 
 ## Per-turn invariant gates
 
@@ -40,6 +45,18 @@ Two invariants hold on every main-agent turn, enforced by blocking hooks:
    cold-read review of its am-i-done report before the turn may end
    (`am-i-done-gate.sh`, Stop — asks at most once; when there is genuinely
    nothing to review, stop honestly rather than fabricating work).
+
+A third Stop-time behavior is a detector, not an invariant gate:
+
+3. **Post-turn evolution sweep** — after each tool-using turn,
+   `evolve-sweep.sh` (Stop, `async` + `asyncRewake`) triages the final
+   assistant message with one cheap-model call and wakes the session once when
+   the turn looks evolvable, so the session dispatches `procedure-evolver` to
+   review the full turn transcript and update records. It blocks nothing: a
+   negative triage releases silently, a positive one wakes rather than gates,
+   and there is deliberately no `stop_hook_active` check — the turns a gate
+   had to block are the likeliest evolvable material, and the per-turn
+   `evolve_swept` marker alone prevents duplicate wakes within a turn.
 
 Design rules the gates follow:
 
@@ -68,7 +85,13 @@ Design rules the gates follow:
 - **Fail open, and record blind failures.** Missing jq, unreadable state, an
   unwired reset hook — all release the gate. A gate that blocks on its own
   bug bricks the session. Every *blind* fail-open (as opposed to a legitimate
-  release) is appended to a jsonl log so silent degradation is visible.
+  release) is appended to a jsonl log so silent degradation is visible. The
+  evolve-sweep detector names one further class explicitly: its model-side
+  failures (missing token, curl failure, non-200, unparseable reply) exit 0
+  with NO record — a best-effort pass running every turn would otherwise write
+  a failopen row per turn and destroy the rate that log exists to carry. That
+  silence is deliberate, documented in the hook header, and distinct from the
+  degenerate paths (no jq, unreadable lib), which still record.
 - **Each gate has an owner-set off-switch, on by default.** A `userConfig`
   boolean per gate (`enable_how_do_i_gate`, `enable_am_i_done_gate`,
   `enable_frontmatter_check`), read by that gate alone — no wildcard, no

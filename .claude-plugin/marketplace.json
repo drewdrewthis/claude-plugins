@@ -8,7 +8,7 @@
     {
       "name": "procedures",
       "source": "./plugins/procedures",
-      "description": "Procedural knowledge system: /how-do-i, /update-records (+templates), /am-i-done, and the how-do-i/am-i-done gate hooks with turn-state wiring."
+      "description": "Procedural knowledge system: /how-do-i, /update-records (+templates), /am-i-done, the how-do-i/am-i-done gate hooks with turn-state wiring, and the evolve-sweep Stop hook that dispatches post-turn record evolution."
     },
     {
       "name": "delegation",
