@@ -165,17 +165,26 @@ TEXT="$(printf '%s' "$RESP" | jq -r '[.content[]? | select(.type == "text") | .t
 VERDICT="$(jq -e . <<<"$TEXT" 2>/dev/null)" ||
     VERDICT="$(sed -e 's/^```[a-z]*//' -e 's/```$//' <<<"$TEXT" | jq -e . 2>/dev/null)" || exit 0
 
-ROUTES="$(printf '%s' "$VERDICT" | jq -r '([.routes[]? | select(. != null and . != "" and . != "none")] | unique | join(","))' 2>/dev/null)"
+# SECURITY: the route list is a CLOSED vocabulary, filtered here rather than
+# sanitized downstream. Route strings are printed verbatim into the wake
+# reminder — an instruction channel — so a classifier steered by hostile turn
+# content could otherwise place arbitrary printable text there. Stripping
+# control characters does not help: the injection would be one legible line.
+# An unrecognized route is dropped; a verdict of only unrecognized routes
+# reads as `none` and releases silently.
+ROUTES="$(printf '%s' "$VERDICT" | jq -r '
+    ["mistake","solution","decision","draft","patch","friction"] as $ok
+    | ([.routes[]? | select(type == "string") | select(. as $r | $ok | index($r))]
+       | unique | join(","))' 2>/dev/null)"
 [ -n "$ROUTES" ] || exit 0
 GIST="$(printf '%s' "$VERDICT" | jq -r '.gist // "see triage"' 2>/dev/null)"
 
 # SECURITY: verdict fields are model output derived from turn content —
 # untrusted data heading for an instruction channel (the wake reminder). A
 # jq-decoded \n would forge extra reminder lines; strip control characters and
-# cap the gist where they are built, per the house convention in
-# lib/gate-failopen.sh. Same clamp for the harness-supplied path fields, so no
+# cap the gist where it is built, per the house convention in
+# lib/gate-failopen.sh (routes are whitelisted above instead). Same clamp for the harness-supplied path fields, so no
 # line of the wake text trusts its input.
-ROUTES="${ROUTES//[[:cntrl:]]/ }"
 GIST="${GIST//[[:cntrl:]]/ }"
 GIST="${GIST:0:240}"
 TP="${TP//[[:cntrl:]]/ }"

@@ -30,9 +30,11 @@ real outcomes — and each of those needs a mechanism, not a convention.
   used. A **detector hook** relaxes this one degree: the wiring, guards, and
   release decisions stay deterministic, but the hook may consult a side model
   (one cheap call) to decide *whether to wake the session* — never to write.
-  `evolve-sweep.sh` is the instance: all judgment and every record write stay
-  with the agent it dispatches (`procedure-evolver`), and a hook that both
-  gates and writes remains forbidden.
+  `evolve-sweep.sh` is the instance: the side model makes one preliminary
+  triage judgment over a closed route vocabulary, and the final
+  evidence-backed judgment plus every record write stay with the agent it
+  dispatches (`procedure-evolver`). A hook that both gates and writes remains
+  forbidden.
 
 ## Per-turn invariant gates
 
@@ -48,7 +50,7 @@ Two invariants hold on every main-agent turn, enforced by blocking hooks:
 
 A third Stop-time behavior is a detector, not an invariant gate:
 
-3. **Post-turn evolution sweep** — after each tool-using turn,
+1. **Post-turn evolution sweep** — after each tool-using turn,
    `evolve-sweep.sh` (Stop, `async` + `asyncRewake`) triages the final
    assistant message with one cheap-model call and wakes the session once when
    the turn looks evolvable, so the session dispatches `procedure-evolver` to
