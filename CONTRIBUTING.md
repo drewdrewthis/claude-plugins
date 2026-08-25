@@ -33,8 +33,8 @@ linter, templates) is vendored from `orchard-codex@develop-sweatshop`.
   the point of divergence, in whatever comment form the file's format allows
   (`#` in shell, YAML, and agent/skill frontmatter; an HTML comment in a
   Markdown body; JSON has no comment syntax, so a manifest divergence is
-  marked in the README class list alone) — the legitimate classes are the plugin-hosting
-  context (data-root defaults, `${CLAUDE_SKILL_DIR}` script paths), harness
+  marked in the README class list alone) — the legitimate classes are the
+  plugin-hosting context (data-root defaults, `${CLAUDE_SKILL_DIR}` script paths), harness
   dispatch-path differences (the fork-skill `model:` pin), machinery with no
   upstream counterpart (sourced here, e.g. the retrieval pipeline, the
   evolve-sweep detector), and owner-directed behavioral divergence from
