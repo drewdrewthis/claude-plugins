@@ -132,7 +132,7 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
   done
 }
 
-@test "the reviewer's Write is denied and routed to the evolution agent" {
+@test "the reviewer's Write is denied and pointed at the evolution write surface" {
   # A fork inherits the parent toolset, so prose boundaries are not the
   # control. Record WRITES belong to procedures:procedure-evolver; the deny
   # reason must say so or the fork guesses at the seam.
@@ -262,30 +262,28 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
   allowed_silent
 }
 
-# ---------- Agent tool: scout never, reviewer once, evolver only ----------
+# ---------- Agent tool: NEITHER fork dispatches agents (issue #130) ----------
+# The reviewer's one-dispatch allowance was removed with the evolution chain:
+# record evolution fires from the evolve-sweep Stop hook into
+# procedure-evolver, dispatched by the MAIN session. Both forks are denied,
+# always.
 
 @test "the scout gets NO Agent dispatch, ever" {
   run_guard "$(jq -nc --arg sid "$SID" --arg s "procedures:procedure-evolver" '{session_id:$sid, agent_type:"procedures:procedure-scout", tool_name:"Agent", tool_input:{subagent_type:$s, prompt:"p"}}')"
-  denied "no Agent dispatches"
+  denied "does not dispatch agents"
 }
 
-@test "the reviewer's evolution dispatch is allowed once, silently" {
+@test "the reviewer gets NO Agent dispatch — even procedure-evolver, even first" {
   run_guard "$(reviewer_dispatch "procedures:procedure-evolver")"
-  allowed_silent
-  [ -f "$QUERY_GUARD_STATE_DIR/$SID.agent" ] || { echo "no agent-budget marker written"; false; }
+  denied "does not dispatch agents"
+  [ ! -f "$QUERY_GUARD_STATE_DIR/$SID.agent" ]
 }
 
-@test "the reviewer's SECOND dispatch is denied" {
-  run_guard "$(reviewer_dispatch "procedures:procedure-evolver")"
-  allowed_silent
-  run_guard "$(reviewer_dispatch "procedures:procedure-evolver")"
-  denied "exactly ONE evolution dispatch"
-}
-
-@test "the reviewer's dispatch to any other agent is denied and names the target" {
+@test "the reviewer's second dispatch attempt is denied identically" {
   run_guard "$(reviewer_dispatch "general-purpose")"
-  denied "procedures:procedure-evolver"
-  denied "got: general-purpose"
+  denied "does not dispatch agents"
+  run_guard "$(reviewer_dispatch "general-purpose")"
+  denied "does not dispatch agents"
 }
 
 # ---------- degradation: fail-open and the off-switch ----------

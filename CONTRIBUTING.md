@@ -30,9 +30,12 @@ agents, gate hooks + lib, the two-stage retrieval pipeline, `log-record.sh`,
 linter, templates) is vendored from `orchard-codex@develop-sweatshop`.
 
 - Anything that isn't upstream must be marked `# PLUGIN ADAPTATION: <why>` at
-  the point of divergence — the plugin-hosting context (data-root defaults,
-  `${CLAUDE_SKILL_DIR}` script paths) and harness dispatch-path differences
-  (the fork-skill `model:` pin) are the only legitimate reasons to diverge.
+  the point of divergence — the legitimate classes are the plugin-hosting
+  context (data-root defaults, `${CLAUDE_SKILL_DIR}` script paths), harness
+  dispatch-path differences (the fork-skill `model:` pin), machinery with no
+  upstream counterpart (sourced here, e.g. the retrieval pipeline, the
+  evolve-sweep detector), and owner-directed behavioral divergence from
+  upstream (e.g. issue #130's removal of evolution dispatch from am-i-done).
   See `README.md`'s documented adaptation classes for the pattern; adding a
   divergence means adding its class there in the same PR.
 - Everything else stays byte-close to upstream. A re-sync from

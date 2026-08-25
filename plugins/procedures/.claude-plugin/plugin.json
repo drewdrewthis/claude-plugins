@@ -34,7 +34,7 @@
       "type": "boolean",
       "default": true,
       "title": "Enable the gate-fork shape guard",
-      "description": "Hold the how-do-i / am-i-done forks to their one-shot contracts: each may run exactly one retrieval call (the how-do-i.sh pipeline, plus digest replay and the justfile probe); the reviewer additionally gets one evolution dispatch. Set false to turn this guard off; also settable per-invocation as PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=false."
+      "description": "Hold the how-do-i / am-i-done forks to their one-shot contracts: each may run exactly one retrieval call (the how-do-i.sh pipeline, plus digest replay and the justfile probe); neither fork may dispatch agents or write. Set false to turn this guard off; also settable per-invocation as PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=false."
     }
   }
 }
