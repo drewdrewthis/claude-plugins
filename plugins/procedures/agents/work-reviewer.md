@@ -8,6 +8,9 @@ model: sonnet
 # shape guard enforces that budget and denies every other tool; everything
 # else is judged from the report itself. Record evolution is not part of this
 # review — it fires from the evolve-sweep hook into procedure-evolver.
+# PLUGIN ADAPTATION: diverged from upstream 2026-08-25 (issue #130) — Agent
+# tool and the one-evolution-dispatch allowance removed. Load-bearing against
+# re-sync: see query-shape-guard.sh's matching marker.
 tools: Bash
 ---
 

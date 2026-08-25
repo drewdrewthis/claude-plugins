@@ -56,7 +56,11 @@ A third Stop-time behavior is a detector, not an invariant gate:
    negative triage releases silently, a positive one wakes rather than gates,
    and there is deliberately no `stop_hook_active` check — the turns a gate
    had to block are the likeliest evolvable material, and the per-turn
-   `evolve_swept` marker alone prevents duplicate wakes within a turn.
+   `evolve_swept` marker alone prevents duplicate wakes within a turn. The
+   wake rides the `asyncRewake` exit-2 stderr channel — documented harness
+   behavior today, relied on deliberately off-label for a non-failure purpose;
+   a CLI change there retires the feature silently (it lands in the
+   silent-degrade class below), which is accepted for a best-effort detector.
 
 Design rules the gates follow:
 

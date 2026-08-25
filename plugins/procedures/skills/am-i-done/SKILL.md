@@ -7,6 +7,10 @@ agent: work-reviewer
 # PLUGIN ADAPTATION: fork skills ignore their agent's model: — must match
 # agents/work-reviewer.md. See README "Fork-skill model pin".
 model: sonnet
+# PLUGIN ADAPTATION: diverged from upstream 2026-08-25 (issue #130): allowed
+# action 2 (one evolution dispatch to procedures:procedure-evolver) removed —
+# record evolution fires from the evolve-sweep Stop hook instead. Load-bearing:
+# a re-sync must not resurrect the dispatch the shape guard now denies.
 background: false
 argument-hint: "<the am-i-done report>"
 # PLUGIN ADAPTATION: the fork may inherit the parent toolset; this key is a

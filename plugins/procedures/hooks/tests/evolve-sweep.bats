@@ -28,13 +28,14 @@ setup() {
 
   CRED="$HOME/.claude/.credentials.json"
 
-  # curl stub: records that it ran, then emits canned output. Helpers below
-  # point CURL_OUT at a verdict file of their own.
+  # curl stub: records that it ran AND captures its argument vector (so tests
+  # can pin the request body — model + digest), then emits canned output.
   STUB_BIN="$(mktemp -d "${BATS_TMPDIR:-/tmp}/sweep-bin.XXXXXX")"
   CURL_LOG="$STUB_BIN/curl-ran"
   cat > "$STUB_BIN/curl" <<EOF
 #!/usr/bin/env bash
 echo ran >> "$CURL_LOG"
+printf '%s\n' "\$*" > "$STUB_BIN/last-args"
 if [ -n "\${CURL_FAIL:-}" ]; then exit 1; fi
 cat "\${CURL_OUT:-$STUB_BIN/default-out.json}"
 EOF
@@ -45,7 +46,7 @@ EOF
 }
 
 teardown() {
-  rm -rf "$HOME" "$TURN_STATE_DIR" "$STUB_BIN" 2>/dev/null || true
+  rm -rf "$HOME" "$TURN_STATE_DIR" "$STUB_BIN" "${NO_JQ_PATH:-}" 2>/dev/null || true
 }
 
 verdict_file() { # <name> <text-json-content>
@@ -74,6 +75,7 @@ prose_verdict()  { verdict_file prose.txt 'I think this turn is worth capturing.
 
 user_prompt() { printf '{"type":"user","message":{"content":"do the thing"}}\n' >> "$JSONL"; }
 tool_use()    { printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}\n' >> "$JSONL"; }
+assistant_text() { printf '{"type":"assistant","message":{"content":[{"type":"text","text":"shipped the parser fix"}]}}\n' >> "$JSONL"; }
 
 start_turn() { printf '{"session_id":"%s"}' "$SID" | bash "$HOOKS/turn-state-reset.sh"; }
 
@@ -91,8 +93,9 @@ run_sweep() {
   tool_use
   grant_token
   local extra="${1:-}"
-  jq -nc --arg sid "$SID" --arg tp "$JSONL" --arg msg "Finished the refactor; all green." \
-    "{session_id:\$sid, hook_event_name:\"Stop\", transcript_path:\$tp, last_assistant_message:\$msg${extra:+, $extra}}" \
+  jq -nc --arg sid "$SID" --arg tp "$JSONL" --arg cwd "$BATS_TEST_DIRNAME" \
+    --arg msg "Finished the refactor; all green." \
+    "{session_id:\$sid, hook_event_name:\"Stop\", transcript_path:\$tp, cwd:\$cwd, last_assistant_message:\$msg${extra:+, $extra}}" \
     > "$TURN_STATE_DIR/payload.json"
   run bash "$HOOKS/evolve-sweep.sh" < "$TURN_STATE_DIR/payload.json"
 }
@@ -106,9 +109,52 @@ run_sweep_payload() {
 marker_absent()  { [ ! -f "$TURN_STATE_DIR/$SID.evolve_swept" ]; }
 marker_present() { [ -f "$TURN_STATE_DIR/$SID.evolve_swept" ]; }
 
-@test "hooks.json registers evolve-sweep on Stop with async + asyncRewake" {
+@test "hooks.json registers evolve-sweep on Stop with async + asyncRewake + ceiling" {
   jq -e '.hooks.Stop[] | .hooks[] | select(.command == "bash ${CLAUDE_PLUGIN_ROOT}/hooks/evolve-sweep.sh")
-        | .async == true and .asyncRewake == true' "$HOOKS/hooks.json" >/dev/null
+        | .async == true and .asyncRewake == true and .timeout == 120' "$HOOKS/hooks.json" >/dev/null
+}
+
+@test "the triage request carries the turn's final message and the configured model" {
+  EVOLVE_SWEEP_MODEL=test-model run_sweep
+  [ "$status" -eq 2 ]
+  grep -q '"model":"test-model"' "$STUB_BIN/last-args"
+  grep -q "Finished the refactor; all green." "$STUB_BIN/last-args"
+}
+
+@test "the triage model defaults to claude-haiku-4-5" {
+  run_sweep   # setup unsets EVOLVE_SWEEP_MODEL
+  grep -q '"model":"claude-haiku-4-5"' "$STUB_BIN/last-args"
+}
+
+@test "sdk-cli ephemeral sessions never wake" {
+  CLAUDE_CODE_ENTRYPOINT=sdk-cli run_sweep
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  marker_absent
+  [ ! -f "$CURL_LOG" ]
+}
+
+@test "unwired reset hook records a blind fail-open and releases" {
+  user_prompt; tool_use; grant_token   # NO start_turn — no .turn marker
+  run_sweep_payload "{\"session_id\":\"$SID\",\"hook_event_name\":\"Stop\",\"transcript_path\":\"$JSONL\"}"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  grep -q '"why":"reset-hook-never-ran"' "$GATE_FAILOPEN_LOG"
+}
+
+@test "empty last_assistant_message falls back to the transcript tail and still wakes" {
+  start_turn; user_prompt; tool_use; assistant_text; grant_token
+  run_sweep_payload "{\"session_id\":\"$SID\",\"hook_event_name\":\"Stop\",\"transcript_path\":\"$JSONL\",\"cwd\":\"$BATS_TEST_DIRNAME\"}"
+  [ "$status" -eq 2 ]
+  grep -q "procedures:procedure-evolver" <<<"$output"
+  grep -q "shipped the parser fix" "$STUB_BIN/last-args"
+}
+
+@test "empty message and no assistant text in transcript => silent exit 0" {
+  start_turn; user_prompt; tool_use; grant_token   # fixture has tool_use only, no text block
+  run_sweep_payload "{\"session_id\":\"$SID\",\"hook_event_name\":\"Stop\",\"transcript_path\":\"$JSONL\"}"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "non-Stop event releases silently: no marker, no network call" {
@@ -170,13 +216,15 @@ marker_present() { [ -f "$TURN_STATE_DIR/$SID.evolve_swept" ]; }
   grep -q "procedure-evolver" <<<"$output"
 }
 
-@test "positive triage wakes: exit 2, stderr carries dispatch imperative + session + transcript + gist" {
+@test "positive triage wakes: exit 2, stderr carries dispatch imperative + session + transcript + cwd + gist" {
   run_sweep
   [ "$status" -eq 2 ]
   grep -q "procedures:procedure-evolver" <<<"$output"
   grep -q "$SID" <<<"$output"
   grep -q "$JSONL" <<<"$output"
+  grep -q "$BATS_TEST_DIRNAME" <<<"$output"
   grep -q "how-do-i.sh spawn env broke twice" <<<"$output"
+  grep -q "untrusted model summary" <<<"$output"
   marker_present
 }
 

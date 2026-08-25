@@ -98,7 +98,17 @@ adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
   never writes a record and never stages a file; judgment and every write belong
   to `agents/procedure-evolver.md`, which it reaches by waking the session.
   Its silent-degrade posture (token/curl/parse failures exit 0 with no record)
-  is a deliberate third release class documented in `docs/adrs/001`.
+  is a deliberate third release class documented in `docs/adrs/001`. Tunable:
+  `EVOLVE_SWEEP_MODEL` (default `claude-haiku-4-5`). Requires
+  `$HOME/.claude/.credentials.json` (claudeAiOauth token) — tokenless installs
+  degrade to inert on every turn.
+
+- **Owner-directed behavioral divergence (issue #130):** evolution dispatch was
+  removed from `skills/am-i-done/SKILL.md` and `agents/work-reviewer.md` — both
+  otherwise byte-close vendored files — and `query-shape-guard.sh` now denies
+  Agent for BOTH forks. Dated markers at each removal site are load-bearing:
+  without them a `develop-sweatshop` re-sync resurrects a dispatch contract the
+  guard denies.
 
 - **Fork-path session state:** `hooks/digest-record.sh` +
   `hooks/lib/session-digest.sh` + `scripts/session-digest-read.sh` carry a
