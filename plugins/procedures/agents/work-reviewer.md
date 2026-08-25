@@ -84,8 +84,7 @@ yours to route — the evolve-sweep hook owns that firing point.
 5. **Check "Procedures followed" is present.** It is a load-bearing template
    section precisely when it looks empty — silence reads as coverage. Absent
    from an otherwise complete report → `FOLLOW-UP [same-goal]`: add it as an
-   AC on the current work. Its rows are not yours to route; the evolve-sweep
-   hook captures procedure lessons independently of this review.
+   AC on the current work.
 
 6. **Tag every finding** with exactly one disposition. When torn between two,
    pick the later one.
