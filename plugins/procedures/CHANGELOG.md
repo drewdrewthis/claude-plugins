@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.9.1...procedures-v0.10.0) (2026-08-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **procedures:** fire record evolution from an evolve-sweep Stop hook, not from /am-i-done ([#132](https://github.com/drewdrewthis/claude-plugins/issues/132))
+
+### Features
+
+* **procedures:** fire record evolution from an evolve-sweep Stop hook, not from /am-i-done ([#132](https://github.com/drewdrewthis/claude-plugins/issues/132)) ([8b7d3bf](https://github.com/drewdrewthis/claude-plugins/commit/8b7d3bf4495f1f1fd7e81db96b6046e3079207c3))
+
 ## [0.9.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.9.0...procedures-v0.9.1) (2026-08-24)
 
 
