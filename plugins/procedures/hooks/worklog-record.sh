@@ -204,6 +204,62 @@ wl_sid() {
     printf '%s' "$sid"
 }
 
+# wl_note WHY — append one observability record and RETURN (unlike
+# gate_failopen, which exits). For a condition worth logging that is not itself
+# a fail-open: the turn proceeds, but an operator should be able to see the
+# degraded path in the same log. Reuses gate_failopen's writer by forking a
+# subshell so its exit does not end this process; best-effort, never blocks.
+wl_note() {
+    ( gate_failopen worklog-record "$1" "$(wl_sid)" ) 2>/dev/null || true
+}
+
+# wl_timeout SECS CMD... — run CMD with a hard wall-clock ceiling, portably.
+#
+# The judgment call MUST be bounded: a hung `claude` would otherwise pin the
+# detached child until the OS reaps it, well past the claim TTL, and a later
+# fire could not tell "still working" from "wedged". GNU `timeout` is the
+# natural tool but is absent on a stock macOS (no coreutils) and on any minimal
+# image — where the bare `timeout claude …` pipeline used to die under `|| true`
+# so the model was never called at all, silently emptying every row.
+#
+# Preference order, first found wins:
+#   timeout   — GNU coreutils, Linux default
+#   gtimeout  — coreutils via Homebrew on macOS
+#   perl      — alarm(); effectively universal, needs no extra package
+# If none exists the command runs UNCAPPED. That is deliberately the last
+# resort, not a silent default: the detached child and the claim TTL still
+# bound the turn, and a row that is late beats a hook that records nothing. The
+# choice is announced once via the fail-open log so an operator can see it.
+wl_timeout() {
+    local secs="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$secs" "$@"
+    elif command -v perl >/dev/null 2>&1; then
+        # fork/exec/alarm, not exec-then-alarm: exec would replace perl and drop
+        # the ALRM handler (leaving SIGALRM's default kill and a 142 exit), so
+        # the command runs in a forked child while the parent perl holds the
+        # alarm and SIGTERMs the child on expiry — exit 124 on timeout, matching
+        # GNU `timeout`, and the child's real status otherwise.
+        perl -e '
+            my $t = shift;
+            my $pid = fork();
+            exec(@ARGV) or exit 127 if !$pid;      # child (or fork failed): run it
+            my $to = 0;
+            $SIG{ALRM} = sub { $to = 1; kill "TERM", $pid; };
+            alarm $t;
+            waitpid($pid, 0);
+            my $st = $?;
+            exit 124 if $to;
+            exit($st & 127 ? 128 + ($st & 127) : $st >> 8);
+        ' "$secs" "$@"
+    else
+        wl_note no-timeout
+        "$@"
+    fi
+}
+
 # wl_precheck — every condition under which this hook has nothing to do.
 # Runs in BOTH the parent and the detached child, so the child cannot outlive
 # a reason the parent would have declined for. Exits 0 on any decline; the
@@ -950,7 +1006,7 @@ wl_run() {
     local raw="" entries="" judged=1
     if command -v claude >/dev/null 2>&1; then
         raw="$(wl_candidates "$cands" \
-            | WORKLOG_DISABLE=1 timeout "$WORKLOG_MODEL_TIMEOUT" \
+            | WORKLOG_DISABLE=1 wl_timeout "$WORKLOG_MODEL_TIMEOUT" \
               claude -p --model "$WORKLOG_MODEL" --output-format text \
                      --system-prompt "$(wl_prompt)" \
                      --allowed-tools '' 2>/dev/null || true)"
@@ -982,17 +1038,23 @@ wl_run() {
     # Built with `jq -n --arg`, never an echoed brace literal — the hard rule
     # in scripts/log-record.sh. An apostrophe in a `text` or a `quote` is not
     # hypothetical here; it is the common case.
+    #
+    # The end_uuid binding is `$end_u`, NOT `$end`: `end` is a reserved keyword
+    # in jq's grammar (it closes `if`/`reduce`/`foreach`), and jq 1.6 rejects
+    # `--arg end` / `$end` outright — "syntax error, unexpected end". jq 1.7
+    # tolerates it, so the collision hid on a newer toolchain while silently
+    # fail-opening every write to `store-unwritable` on 1.6-era machines.
     local row
     row="$(jq -nc \
         --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
         --arg session "$sid" \
         --arg ask "$ask" \
-        --arg end "$end" \
+        --arg end_u "$end" \
         --argjson entries "$entries" \
         '{ts: $ts,
           session: $session,
           ask_uuid: (if $ask   == "" then null else $ask   end),
-          end_uuid: (if $end   == "" then null else $end   end),
+          end_uuid: (if $end_u == "" then null else $end_u end),
           requests: $entries.requests,
           outcomes: $entries.outcomes,
           mistakes: $entries.mistakes}' 2>/dev/null || true)"
