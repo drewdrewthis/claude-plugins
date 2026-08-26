@@ -1,0 +1,67 @@
+name: worklog-tests
+
+# Runs the worklog hook's bats suites. Exists because the three portability
+# defects this workflow was added alongside — a jq reserved-word cliff that only
+# jq <=1.7 rejects, a hard dependency on GNU `timeout`, and a GNU-only
+# `touch -d` in a fixture — ALL passed on the author's Linux box and were caught
+# only by running on stock macOS. A green check that never ran the tests (the
+# state before this file) is how #1 shipped silently.
+#
+# THE MATRIX IS THE POINT. macos-latest has neither GNU coreutils (`timeout`)
+# nor a jq new enough to have hidden the `$end` collision on every toolchain, so
+# the macOS leg is what turns "works for me" into a real portability gate. Do
+# not drop it to speed CI up; ubuntu alone reproduces none of the three bugs.
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/procedures/hooks/worklog-record.sh'
+      - 'plugins/procedures/hooks/lib/gate-failopen.sh'
+      - 'plugins/procedures/hooks/tests/worklog-record.bats'
+      - 'plugins/procedures/hooks/tests/gate-failopen.bats'
+      - '.github/workflows/worklog-tests.yml'
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worklog-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bats:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # bats + jq from each OS's own package manager, so the suite runs against
+      # the toolchain that platform actually ships — the whole reason the matrix
+      # exists. No pinned versions: the guard is "works on what users have."
+      - name: Install bats and jq (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+
+      - name: Install bats and jq (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bats-core jq
+
+      - name: Record the toolchain under test
+        run: |
+          echo "os: ${{ matrix.os }}"
+          bash --version | head -1
+          bats --version
+          jq --version
+          command -v timeout || echo "no GNU timeout (expected on macOS)"
+          command -v perl && perl --version | sed -n 2p
+
+      - name: worklog-record suite
+        run: bats plugins/procedures/hooks/tests/worklog-record.bats
+
+      - name: gate-failopen suite
+        run: bats plugins/procedures/hooks/tests/gate-failopen.bats

@@ -136,6 +136,13 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   consumers that treat what they find as session data, so a file rewritten
   every turn in that directory is swept into corpus and, where a consumer
   takes the newest match, mistaken for the transcript itself.
+  Dependencies are `jq` and `python3` (the per-entry slice and the mtime read
+  need the interpreter; a missing `jq` is itself a recorded fail-open). The
+  judgment call is time-boxed by whichever of `timeout`, `gtimeout`, or `perl`
+  is present — so a stock macOS with no GNU coreutils still bounds it via
+  `perl` rather than, as an earlier cut did, dropping the whole call under a
+  missing `timeout`; if none of the three exists the call runs uncapped and
+  logs a `no-timeout` note rather than silently skipping.
 
 - **Fork-path agent prompt:** a `context: fork` skill takes its `agent:` as
   identity only — the agent file's prompt body and its `tools:` allowlist are
