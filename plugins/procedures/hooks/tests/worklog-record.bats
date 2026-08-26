@@ -1203,7 +1203,13 @@ SH
   no_log
 
   # Aged past any live fire, the marker is stolen and the turn is recorded.
-  touch -d '@1' "$CLAIMS/$U1"
+  # `touch -t CCYYMMDDhhmm` (POSIX) rather than GNU-only `touch -d @1`, so the
+  # staleness fixture is not silently skipped off Linux. The date is 2000, not
+  # 1970: -t reads LOCAL time, and local midnight 1970 is a NEGATIVE epoch in
+  # any positive-offset zone — where macOS `date -r` then prints e.g. `-3600`,
+  # which wl_marker_age rejects as undeterminable (non-digit `-`) and never
+  # steals. A year-2000 mtime is ~26y old (past any TTL) and positive worldwide.
+  touch -t 200001010000 "$CLAIMS/$U1"
   run drive "$CLEAN"
   [ "$status" -eq 0 ]
   [ -s "$WORKLOG_JSONL" ]
