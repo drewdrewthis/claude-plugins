@@ -15,7 +15,7 @@ Target procedure: the one named by the caller (if unnamed, scan the conversation
 
 ## When This Runs
 
-- **From the `am-i-done-gate` review** — when a deviation OR a missing/broken ref surfaced this turn against a documented procedure
+- **From the `evolve-sweep` flow** — the sweep hook flagged the turn as evolvable and the session dispatched `procedure-evolver`; this routine governs the precision patch when the route was a deviation or a stale/broken ref against a documented procedure
 - **Manually** — user invokes it to improve a specific procedure
 
 ## Step 0: Track Progress

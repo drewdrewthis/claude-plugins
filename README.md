@@ -15,6 +15,7 @@ design record.
 /plugin install about-my-person@drewdrewthis
 /plugin install take-note@drewdrewthis
 /plugin install recall@drewdrewthis
+/plugin install heartbeats@drewdrewthis
 ```
 
 ## Plugins
@@ -26,23 +27,25 @@ orchard-codex `develop-sweatshop`):
 
 | piece | what |
 |---|---|
-| `/how-do-i` | the gateway to everything the codex knows — forks the `procedure-scout` agent, which searches the record stores via `scripts/query-records.sh` and returns the governing procedure, verbatim commands, traps, and a standing label per source. `query-records.sh` is its SOLE retrieval surface (survey with `--keyword`/`--kind`/`--links-to`/`--recall`, batch-read with `--cat`); a record it can reach but not query is reported as a matcher/`keywords` bug rather than worked around |
+| `/how-do-i` | the gateway to everything the codex knows — runs the two-stage retrieval pipeline (`scripts/how-do-i.sh`): stage 1 (`record-selector`, fast model) picks relevant records from a numbered index built by `build-record-index.sh` over every store, `compile-records.sh` assembles their full text, stage 2 (`how-do-i-answerer`, strong model) writes the answer — governing procedure, verbatim commands, traps, cited to source paths. One pipeline run per invocation; a record it should have surfaced is reported as a selection gap rather than worked around |
 | `digest-record` (PostToolUse:Skill) | stores the digest each `/how-do-i` fork returns, one file per digest under `$TURN_STATE_DIR/digests`, so the next `/how-do-i` in the session starts warm and can separate "already established" from "newly found". Read-only replay via `scripts/session-digest-read.sh --read`; it changes what the fork STARTS WITH, never whether the gate fires |
 | `/update-records` | THE single entry point for every knowledge artifact — there is no separate create command. Script-backed via `scripts/log-record.sh`: mistake / decision / solution / failure-mode. Written by hand from `skills/update-records/templates/`: procedure, evolution, and the four rule shapes — principle, invariant, policy, standard. Written by following the longhand procedures in `skills/update-records/references/`: procedure, reference, skill. Carries the test for choosing among the rule kinds |
-| record stores | ten, one per GRC artifact class: `failure-modes` (risk register), `decisions` (governance choices), `solutions` (control patterns), `procedures` (control implementations), `research` (evidence), `plans` (roadmap), `principles` (judgment rules), `invariants` (absolute constraints), `policies` (standing authority), `standards` (control objectives). Defined once in `scripts/lib/stores.sh`; discover at runtime with `query-records.sh --list-stores`, never by enumerating them in prose |
-| `/am-i-done` | cold-read review of an am-i-done report (incl. the "Procedures followed" evolution table) by the `work-reviewer` agent before calling work done |
+| record stores | ten, one per GRC artifact class: `failure-modes` (risk register), `decisions` (governance choices), `solutions` (control patterns), `procedures` (control implementations), `research` (evidence), `plans` (roadmap), `principles` (judgment rules), `invariants` (absolute constraints), `policies` (standing authority), `standards` (control objectives). Defined once in `scripts/lib/stores.sh`; `build-record-index.sh` discovers them at runtime, never by enumerating them in prose |
+| `/am-i-done` | cold-read review of an am-i-done report by the `work-reviewer` agent before calling work done — findings only; record evolution is the evolve-sweep hook's job, not the review's |
 | `/evolve-procedure` | patch an EXISTING procedure from a correction, incident, or friction — deviation, missing step, or stale/broken ref; procedures only, every material patch appends a dated line to that procedure dir's `EVOLUTION.md` |
 | `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded; off-switch `enable_how_do_i_gate` |
 | `am-i-done-gate` (Stop) | requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once; off-switch `enable_am_i_done_gate` |
 | `worklog-record` (Stop) | appends one JSONL line per turn telling the turn's story — what was asked, what came of it, what went wrong: the mechanical half (`session`, `ask_uuid`, `end_uuid`) read from the transcript, and three judged arrays `requests[]`, `outcomes[]`, `mistakes[]` from a cheap model. Every entry is `{text, quote, uuid}` (`mistakes` carries `uuids[]`, needing the offense AND the correction): `text` is the model's summary, capped at 100 characters; `quote` is the evidence it rests on, capped at 120, stored as a run SLICED OUT of the cited candidate's body — located by the model's string, never copied from it. The model may only COPY uuids from a candidate list, and an entry whose quote does not appear in the body of the line it cites is DROPPED WHOLE, never stored quote-less. The caps are a readability bound, not a measured one. Never blocks and never emits a `decision`; runs detached so it cannot serialize a finishing worker. One row per turn, keyed on `ask_uuid`, because `am-i-done-gate` blocking the first Stop and releasing the next makes two Stop fires per turn the normal path. Both fires DETACH, so they overlap: the second starts while the first is still inside its judgment call and has written nothing. A store scan alone would therefore miss and duplicate, so the turn is claimed atomically with `mkdir` before the model call (`WORKLOG_CLAIM_TTL_SECS`, default settle + model timeout + 60s, after which a marker left by a killed fire is stealable — so a crash costs at most that turn's row, never a permanent hole). Store `WORKLOG_JSONL` (default `$HOME/.claude/worklog/<project-slug>.jsonl` — deliberately NOT under `~/.claude/projects/`, which other tools glob for session files); `WORKLOG_SETTLE_SECS` (default 3, the transcript tail lags Stop), `WORKLOG_WINDOW` (candidate records offered to the model, default 60), `WORKLOG_MODEL` (default `claude-haiku-4-5-20251001`), `WORKLOG_MODEL_TIMEOUT` (default 120s), `WORKLOG_DEDUP_SCAN` (rows scanned for the dedup key, default 500), `WORKLOG_CLAIM_TTL_SECS` (above), `WORKLOG_SYNC=1` (run inline instead of detached, for tests — note it also hides the concurrency the claim exists for, so it is not the shape to test ordering in), `WORKLOG_DISABLE` (any non-empty value = off; also the child's re-entrancy guard). A non-numeric value on any count falls back to its default rather than erroring. `WORKLOG_WINDOW`, `WORKLOG_MODEL_TIMEOUT`, `WORKLOG_DEDUP_SCAN` and `WORKLOG_CLAIM_TTL_SECS` also reject `0` — for `WORKLOG_DEDUP_SCAN` that is a correctness boundary, because `tail -n 0` succeeds silently and a zero scan would switch the one-row-per-turn dedup off, and for `WORKLOG_CLAIM_TTL_SECS` because a zero TTL makes every claim instantly stealable, which is the race with an extra step. `WORKLOG_SETTLE_SECS` accepts `0` deliberately, so tests can skip the settle wait |
+| `evolve-sweep` (Stop, async) | after each tool-using turn, one cheap-model triage over the final assistant message decides whether the turn looks evolvable; when it does, wakes the session once (`asyncRewake`) to dispatch `procedure-evolver`, which reviews the full turn transcript and updates records itself. Detector only — never writes a record, never stages a file; silent-degrades on triage failure (no failopen spam); no `stop_hook_active` guard so gate-blocked turns are still swept; off-switch `enable_evolve_sweep` |
 | `turn-state-reset` (UserPromptSubmit) / `turn-state-record` (PostToolUse:Skill) | the turn-boundary state the gates read (`$TURN_STATE_DIR`, default `/tmp/claude-turn-state`) |
 | `enforce-frontmatter` (PostToolUse:Write\|Edit) | every record .md written under a store beneath `$KNOWLEDGE_ROOT` (default `~/.claude`) must carry the six-key frontmatter (id, kind, date, keywords, links, status) — vendored `lint-frontmatter.sh`, exit-2 feedback on violation; off-switch `enable_frontmatter_check` |
 | EVOLUTION.md convention | every procedure dir carries an `EVOLUTION.md` log (`evolution.template.md` in `skills/update-records/templates/`) — one dated line per material change, newest first; `/update-records` explains it |
 
 The machinery is vendored from orchard-codex `develop-sweatshop` (skills,
-procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
-`log-record.sh` + shared awk matcher, linter, templates) with deliberate adaptation, marked
-`PLUGIN ADAPTATION` in the source where it touches code:
+procedure-scout/work-reviewer agents, gate hooks + lib, the two-stage
+retrieval pipeline — `how-do-i.sh`, `build-record-index.sh`,
+`compile-records.sh` — plus `log-record.sh`, linter, templates) with deliberate
+adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
 
 - **Data-root defaults:** every script's record-store root defaults to
   `~/.claude` (the host codex) instead of the script's own parent dir —
@@ -78,16 +81,35 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   that with `context: fork`, a SKILL's `model:` "sets the forked subagent's
   model instead". The skill-level pin is therefore the only control surface on
   this path, and re-declaring it per fork skill is the intended usage rather
-  than a workaround. `hooks/tests/scout-retrieval.bats` sweeps every agent
+  than a workaround. `hooks/tests/gate-skill-model.bats` sweeps every agent
   declaring `model:` across every plugin and requires the fork skill that
   dispatches it to pin the same tier.
 
-- **No upstream counterpart (query-records is now sourced here):**
-  orchard-codex#268 phase 1 removed these scripts from the codex, so this
-  plugin is the source of truth for `query-records.sh`. Machinery added since
-  — `--recall` over `mistakes.jsonl`, and `--cat` for batch full-record
-  retrieval — has nothing upstream to stay byte-close to. Each is marked at
-  its point of divergence.
+- **No upstream counterpart (the retrieval pipeline is sourced here):**
+  orchard-codex#268 removed its query machinery from the codex, and this
+  plugin's own `query-records.sh` matcher was dropped in favour of the
+  two-stage index pipeline (`how-do-i.sh` + `build-record-index.sh` +
+  `compile-records.sh` + the `record-selector`/`how-do-i-answerer` agents) —
+  all plugin-local, nothing upstream to stay byte-close to.
+
+- **No upstream counterpart (post-turn evolution detector):** `hooks/evolve-sweep.sh`
+  and its `enable_evolve_sweep` switch are new machinery, not vendored — a port of
+  the Hermes post-turn background-review pattern (detect evolvable material each
+  turn, wake once, let the dispatched agent write). The hook is a DETECTOR: it
+  never writes a record and never stages a file; judgment and every write belong
+  to `agents/procedure-evolver.md`, which it reaches by waking the session.
+  Its silent-degrade posture (token/curl/parse failures exit 0 with no record)
+  is a deliberate third release class documented in `docs/adrs/001`. Tunable:
+  `EVOLVE_SWEEP_MODEL` (default `claude-haiku-4-5`). Requires
+  `$HOME/.claude/.credentials.json` (claudeAiOauth token) — tokenless installs
+  degrade to inert on every turn.
+
+- **Owner-directed behavioral divergence (issue #130):** evolution dispatch was
+  removed from `skills/am-i-done/SKILL.md` and `agents/work-reviewer.md` — both
+  otherwise byte-close vendored files — and `query-shape-guard.sh` now denies
+  Agent for BOTH forks. Dated markers at each removal site are load-bearing:
+  without them a `develop-sweatshop` re-sync resurrects a dispatch contract the
+  guard denies.
 
 - **Fork-path session state:** `hooks/digest-record.sh` +
   `hooks/lib/session-digest.sh` + `scripts/session-digest-read.sh` carry a
@@ -156,9 +178,9 @@ procedure-scout/work-reviewer agents, gate hooks + lib, `query-records.sh` +
   shape, and the sole-retrieval-surface Boundaries — lives in
   `skills/how-do-i/SKILL.md`, the file that actually binds.
   `agents/procedure-scout.md` keeps the same contract because it still governs a
-  direct `Agent(subagent_type:)` spawn, and `hooks/tests/scout-retrieval.bats`
-  pins the load-bearing clauses in each file independently so the two cannot
-  silently split. Same class as the model pin above: the fork path reads the
+  direct `Agent(subagent_type:)` spawn. Since the pipeline cutover the agent
+  file is a deprecated-in-place pointer at `scripts/how-do-i.sh`; the live
+  contract is this SKILL.md alone. Same class as the model pin above: the fork path reads the
   SKILL, never the agent. There is no confirmed skill-level tool restriction for
   forks — `disallowed-tools` is declared on the skill as a best-effort second
   layer, but the docs do not say it reaches a fork, so the prose prohibition is
@@ -198,9 +220,9 @@ the plugin's own `procedure-scout`.
 
 ### Tests
 
-The upstream bats suites for everything shipped here (gates + libs +
-fail-open, linter, `query-records.sh` + ranking) are
-vendored under `plugins/procedures/{hooks,scripts}/tests/`. Run:
+The bats suites for everything shipped here (gates + libs + fail-open,
+linter, the retrieval pipeline) live under `plugins/procedures/hooks/tests/`.
+Run:
 
 ```
 cd plugins/procedures && bats hooks/tests
@@ -303,6 +325,49 @@ Tests:
 
 ```
 cd plugins/recall && bats scripts/tests hooks/tests
+```
+
+### heartbeats (0.1.0)
+
+`/heartbeats` — the crontab as generated output. One markdown unit file per
+recurring job (`name`, `cron`, `command`, `log`, `enabled`, plus a required
+`suspension_reason` + `restore_condition` when disabled); the script renders
+them into a single marker-delimited block and can `render`, `diff`,
+`drift-check`, or `install` it.
+
+Guarantees:
+
+- **Only the managed block is ever rewritten.** Lines outside the markers come
+  back byte for byte, CR bytes and all — absent a concurrent writer, since cron
+  exposes no lock and read-modify-write over a crontab is inherently racy. The
+  one normalisation is that a crontab whose last line lacks a newline gets one
+  on the next install that actually writes. Note that some cron builds
+  (Debian-family) prepend their own generated preamble to `crontab -l` output;
+  those lines are outside the managed block, so they are faithfully written
+  back and can accumulate across installs through no fault of this tool.
+- **No auto-install.** `install` without `--approve` is a dry run that exits 2
+  having written nothing. It renders the block and diffs it against the live
+  managed region — that much it has to do to show you anything — and stops
+  there: the spliced crontab body is not computed until the approval gate has
+  been passed, so there is no dry-run path that builds one.
+- **It fails closed, loudly.** One unreadable unit renders nothing rather than
+  a partial block; a crontab with unpaired or duplicated markers is an error on
+  every operation rather than a "no block yet"; a `crontab -l` that fails for
+  any reason other than "no crontab for this user" is an error rather than an
+  empty crontab. Each of those defaults would end with a crontab containing the
+  managed block and nothing else.
+- **Suspended jobs stay visible**, rendered as a commented line carrying the
+  reason and the restore condition, rather than vanishing from the file.
+
+Requires `python3` (stdlib only). Config: `HEARTBEATS_UNITS_DIR`, else
+`CODEX_ROOT` (default `~/.claude`) giving `<root>/heartbeats/units`.
+`HEARTBEATS_CRONTAB_FILE` substitutes a plain file for the real crontab and
+exists so the tests never touch one.
+
+Tests:
+
+```bash
+cd plugins/heartbeats && bats scripts/tests
 ```
 
 ## docs/

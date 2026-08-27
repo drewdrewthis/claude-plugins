@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.10.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.9.1...procedures-v0.10.0) (2026-08-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **procedures:** fire record evolution from an evolve-sweep Stop hook, not from /am-i-done ([#132](https://github.com/drewdrewthis/claude-plugins/issues/132))
+
+### Features
+
+* **procedures:** fire record evolution from an evolve-sweep Stop hook, not from /am-i-done ([#132](https://github.com/drewdrewthis/claude-plugins/issues/132)) ([8b7d3bf](https://github.com/drewdrewthis/claude-plugins/commit/8b7d3bf4495f1f1fd7e81db96b6046e3079207c3))
+
+## [0.9.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.9.0...procedures-v0.9.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **procedures:** make the orwrap gateway fallback actually take effect ([#126](https://github.com/drewdrewthis/claude-plugins/issues/126)) ([86b57f2](https://github.com/drewdrewthis/claude-plugins/commit/86b57f2c0fd48a3153e7be3577e2aafd5d30dd68))
+
+## [0.9.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.8.1...procedures-v0.9.0) (2026-08-24)
+
+
+### Features
+
+* **procedures:** cut how-do-i over to the index pipeline; drop query-records ([#124](https://github.com/drewdrewthis/claude-plugins/issues/124)) ([6ef760c](https://github.com/drewdrewthis/claude-plugins/commit/6ef760c0d661c84e57cd32174e48191a0987aebe))
+
+## [0.8.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.8.0...procedures-v0.8.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **procedures:** how-do-i gateway compat + harness token cut ([#122](https://github.com/drewdrewthis/claude-plugins/issues/122)) ([2f85dde](https://github.com/drewdrewthis/claude-plugins/commit/2f85dde1848bc3a68ae5d08cdf6f89dd92300cd8))
+* **procedures:** how-do-i works through gateways and cuts harness token cost ([2f85dde](https://github.com/drewdrewthis/claude-plugins/commit/2f85dde1848bc3a68ae5d08cdf6f89dd92300cd8))
+
+## [0.8.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.7.1...procedures-v0.8.0) (2026-08-24)
+
+
+### Features
+
+* **procedures:** indexed two-stage retrieval for how-do-i, description as retrieval surface ([#112](https://github.com/drewdrewthis/claude-plugins/issues/112)) ([217112e](https://github.com/drewdrewthis/claude-plugins/commit/217112e123de9d4305e506860c885a7d3c7d3556))
+
+## [0.7.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.7.0...procedures-v0.7.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* **procedures:** allowlist WebFetch/WebSearch in the how-do-i gate ([25cdbb1](https://github.com/drewdrewthis/claude-plugins/commit/25cdbb15482f471c06c683b244aaee40f0f82ff8))
+* **procedures:** allowlist WebFetch/WebSearch in the how-do-i gate ([f35c987](https://github.com/drewdrewthis/claude-plugins/commit/f35c987f73ad34ce49b05d96723034c91f74fc94))
+* **procedures:** review fixes — Edit -eq 1 coverage, hook status assert, honest comments ([6d5552c](https://github.com/drewdrewthis/claude-plugins/commit/6d5552c2717d5d41cd562a0658d75b31871d4ce5))
+
 ## [0.7.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.6.0...procedures-v0.7.0) (2026-08-18)
 
 

@@ -1,14 +1,15 @@
+<!-- Frontmatter mirrors templates/_frontmatter.partial.md (schema SSOT, itself mirroring specs/RECORD_FRONTMATTER.md) — edit there first, then here. -->
 ---
 id: inv.<slug>
 kind: invariant
 date: YYYY-MM-DD
-keywords: [<grep surface — never empty>]
+keywords: [<named entities only — tools, commands, repos this invariant governs — never empty>]
 links: { invariants: [], principles: [], procedures: [], decisions: [] }
 enforced_by: <path to the hook / gate that blocks the violating act — an invariant with no enforcer is a wish>
 mitigates: [<fm.id of any failure-mode this law treats — omit if none>]
 status: active
+description: <One line, ~120 chars: the law, stated so a reader knows instantly whether they are about to break it.>
 title: <Title Case Name>
-purpose: <One line: the law, stated so a reader knows instantly whether they are about to break it.>
 ---
 
 # <Title>

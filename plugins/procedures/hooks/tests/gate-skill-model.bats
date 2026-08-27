@@ -64,3 +64,43 @@ fm_key() {
   [ -n "$(fm_key "$AGENTS/procedure-scout.md" model)" ]
   [ -n "$(fm_key "$AGENTS/work-reviewer.md" model)" ]
 }
+
+# ---- ported from the retired scout-retrieval.bats (#22 AC-4 / AC-6): the
+# ---- fork-model pin generalises beyond the two gate skills, and the
+# ---- inheritance is recorded as documented harness design. ----
+
+@test "AC-4: every agent declaring model: that a skill forks is pinned by that skill" {
+  # Generalises the procedures-only check above across every plugin: enumerate
+  # the declaring agents, then require the fork skill that dispatches each one
+  # to re-declare the same tier — because the fork path reads the SKILL's
+  # model, never the agent's.
+  local REPO="$PLUGIN/../.."
+  local declaring checked=0
+  declaring="$(grep -l '^model:' "$REPO"/plugins/*/agents/*.md 2>/dev/null || true)"
+  [ -n "$declaring" ] || { echo "no agent declares model: — the sweep found nothing to check"; false; }
+
+  local a agent_name agent_model s skill_model
+  while IFS= read -r a; do
+    [ -n "$a" ] || continue
+    agent_name="$(basename "$a" .md)"
+    agent_model="$(fm_key "$a" model)"
+    for s in "$REPO"/plugins/*/skills/*/SKILL.md; do
+      [ "$(fm_key "$s" agent)" = "$agent_name" ] || continue
+      [ "$(fm_key "$s" context)" = "fork" ] || continue
+      skill_model="$(fm_key "$s" model)"
+      [ "$skill_model" = "$agent_model" ] || {
+        echo "$s forks $agent_name but pins '$skill_model' against the agent's '$agent_model'"
+        false
+      }
+      checked=$((checked + 1))
+    done
+  done <<< "$declaring"
+
+  [ "$checked" -ge 2 ] || { echo "expected at least the two gate forks, checked $checked"; false; }
+}
+
+@test "AC-6: the README records fork-model inheritance as documented harness design" {
+  local REPO="$PLUGIN/../.."
+  grep -qiE 'documented (harness )?(design|behaviour|behavior)' "$REPO/README.md"
+  grep -qF 'sub-agents' "$REPO/README.md"
+}

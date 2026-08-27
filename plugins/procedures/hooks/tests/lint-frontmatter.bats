@@ -7,6 +7,13 @@
 #   (c) RESOLVE   — dangling links: id fails
 #   (d) NONEMPTY  — empty keywords: [] fails
 #   (e) PRINCIPLES — enforced_by: absence is a WARNING, not a fail
+#   (f) PROJECT    — project: is OPTIONAL; present-but-malformed fails
+#   (g) DESCRIPTION — description: is OPTIONAL (WARNING if missing);
+#     present-but-empty or multi-line fails; LINT_DESCRIPTION_REQUIRED=1
+#     promotes a missing description to a fail
+#   Store discovery — STORES is derived from the records-root directory tree
+#     (scripts/lib/stores.sh), not a hardcoded list — a new store directory
+#     is linted with no list to edit; vendored stores stay excluded
 #   Targeted mode — linting one file still resolves links against full corpus
 #   Targeted mode FAILS CLOSED — a named target that does not exist, or is not
 #     a lintable record, is an ERROR; and every run prints `linted N file(s)`
@@ -369,10 +376,10 @@ EOF
 
 # ---- (f) PROJECT: OPTIONAL key, shape-checked only when present ----
 #
-# `project:` is the column `query-records.sh --project` filters on. Absent is a
-# corpus-wide record and must stay legal (the field was added to a corpus of
-# ~1,800 records that carry none). Present-but-malformed must FAIL, because it
-# looks scoped and is reachable by no query at all — worse than absent.
+# `project:` marks a record as scoped to one repo. Absent is a corpus-wide
+# record and must stay legal (the field was added to a corpus of ~1,800
+# records that carry none). Present-but-malformed must FAIL, because it looks
+# scoped and matches nothing at all — worse than absent.
 
 _write_project_record() {
   # $1 = filename stem, $2 = the raw `project:` line (or "" to omit the key)
@@ -411,9 +418,10 @@ _write_project_record() {
   [ "$status" -eq 0 ]
 }
 
-@test "project: a quoted scalar passes — the lint normalises as the matcher does" {
-  # record-scan.awk strips one outer quote pair before comparing, so a quoted
-  # value IS queryable. A lint that rejected it would fail a working record.
+@test "project: a quoted scalar passes — the lint normalises before comparing" {
+  # The linter strips one outer quote pair before comparing against
+  # PROJECT_RE, so a quoted value passes. A lint that rejected it would fail
+  # a well-formed record.
   _write_project_record ok-quoted 'project: "langwatch/scenario"'
   run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
       references/decisions/ok-quoted.md
@@ -442,4 +450,265 @@ _write_project_record() {
       references/decisions/bad-nested.md
   [ "$status" -ne 0 ]
   [[ "$output" == *"is malformed"* ]]
+}
+
+# ---- (g) DESCRIPTION: OPTIONAL key, WARN-only until the corpus backfills ----
+#
+# ~940 existing records predate `description:`. A missing description must
+# warn, not fail, until LINT_DESCRIPTION_REQUIRED=1 flips the switch after
+# backfill. A PRESENT-but-malformed value (empty, or spanning more than one
+# line) always hard-fails — a broken field is worse than an absent one.
+
+@test "description: missing warns but does not fail" {
+  cat > "$FIX/references/decisions/no-desc.md" <<'EOF'
+---
+id: dec.no-desc
+kind: decision
+date: 2026-08-23
+keywords: [nodesckw]
+links: {}
+status: active
+---
+# No description
+
+This record has no description: key at all.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/no-desc.md
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "WARNING" ]] || [[ "$stderr" =~ "WARNING" ]]
+  [[ "$output" =~ "description" ]] || [[ "$stderr" =~ "description" ]]
+}
+
+@test "description: a valid single-line value passes with no warning" {
+  cat > "$FIX/references/decisions/good-desc.md" <<'EOF'
+---
+id: dec.good-desc
+kind: decision
+date: 2026-08-23
+keywords: [gooddesckw]
+links: {}
+status: active
+description: A short, valid single-line description.
+---
+# Good description
+
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/good-desc.md
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"WARNING"* ]]
+}
+
+@test "description: an empty value hard-fails" {
+  cat > "$FIX/references/decisions/empty-desc.md" <<'EOF'
+---
+id: dec.empty-desc
+kind: decision
+date: 2026-08-23
+keywords: [emptydesckw]
+links: {}
+status: active
+description:
+---
+# Empty description
+
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/empty-desc.md
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "description" ]] || [[ "$stderr" =~ "description" ]]
+  [[ "$output" =~ "empty" ]] || [[ "$stderr" =~ "empty" ]]
+}
+
+@test "description: a multi-line value hard-fails" {
+  cat > "$FIX/references/decisions/multiline-desc.md" <<'EOF'
+---
+id: dec.multiline-desc
+kind: decision
+date: 2026-08-23
+keywords: [multilinedesckw]
+links: {}
+status: active
+description: |
+  This spans
+  two lines.
+---
+# Multi-line description
+
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/multiline-desc.md
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "description" ]] || [[ "$stderr" =~ "description" ]]
+  [[ "$output" == *"multiple lines"* ]] || [[ "$stderr" == *"multiple lines"* ]]
+}
+
+@test "LINT_DESCRIPTION_REQUIRED=1 promotes a missing description to a hard failure" {
+  cat > "$FIX/references/decisions/no-desc-required.md" <<'EOF'
+---
+id: dec.no-desc-required
+kind: decision
+date: 2026-08-23
+keywords: [nodescreqkw]
+links: {}
+status: active
+---
+# No description, but required this time
+
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" LINT_DESCRIPTION_REQUIRED=1 bash "$SCRIPT" \
+      references/decisions/no-desc-required.md
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "description" ]] || [[ "$stderr" =~ "description" ]]
+  [[ "$output" != *"WARNING"* ]]
+}
+
+@test "missing-description summary count reflects how many linted files lack one" {
+  # The two setup() baseline records (good.md, anchor.md) have no description
+  # either, so a whole-corpus run counts all three.
+  cat > "$FIX/references/decisions/no-desc-2.md" <<'EOF'
+---
+id: dec.no-desc-2
+kind: decision
+date: 2026-08-23
+keywords: [nodesc2kw]
+links: {}
+status: active
+---
+# Another record without description
+
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"frontmatter-lint: 3 file(s) missing description"* ]]
+}
+
+# ---- store discovery: STORES is derived from the directory tree ----
+#
+# scripts/lib/stores.sh discovers stores by listing directories under
+# RECORDS_ROOT instead of a hardcoded array, so a brand-new store directory
+# is linted with no list to edit — and a vendored store stays excluded even
+# though it is now structurally indistinguishable from a real one.
+
+@test "a newly-created directory in the records root is picked up as a store without editing any list" {
+  mkdir -p "$FIX/references/newstore"
+  cat > "$FIX/references/newstore/bad.md" <<'EOF'
+---
+id: new.bad-record
+kind: newkind
+date: 2026-08-23
+keywords: [newstorekw]
+links: {}
+---
+# Bad record in a brand-new store directory
+
+Missing the required 'status:' key — proves the new directory is being
+linted without any STORES list edit.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"references/newstore/bad.md"* ]] || [[ "$stderr" == *"references/newstore/bad.md"* ]]
+  [[ "$output" == *"missing required key 'status:'"* ]] || [[ "$stderr" == *"missing required key 'status:'"* ]]
+}
+
+@test "vendored stores are still excluded from lint even as a records-root subdirectory" {
+  # "titw" is VENDOR_STORES in scripts/lib/stores.sh: scanned by
+  # build-record-index.sh but never linted (titw check validates it at publish
+  # time). Give it a deliberately-broken record — no frontmatter at all — and
+  # confirm the whole-corpus run neither counts nor fails on it.
+  mkdir -p "$FIX/references/titw"
+  printf '# not a record, no frontmatter at all\n' > "$FIX/references/titw/vendored.md"
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"frontmatter-lint: linted 2 file(s)"* ]]
+}
+
+# ---- command frontmatter (user-invocable:): not records, exempt from linting ----
+#
+# Files carrying `user-invocable:` in their frontmatter block are Claude Code
+# slash-command definitions, not records. Their `description:` is an invocation
+# trigger, not a retrieval description. They must not be linted against the
+# record schema.
+
+@test "command frontmatter: user-invocable: true with no record keys passes" {
+  cat > "$FIX/references/procedures/sweep.md" <<'EOF'
+---
+name: sweep
+description: "Search for similar patterns... Use after implementing a fix to..."
+user-invocable: true
+argument-hint: "<pattern>"
+---
+# Sweep command
+
+This is a slash-command file, not a record.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/procedures/sweep.md
+  [ "$status" -eq 0 ]
+  # The file must pass even though it has no id, kind, status, or other record keys.
+  # It must count as linted (file still exists and is in a store dir).
+  [[ "$output" == *"linted 0 file(s)"* ]]
+}
+
+@test "command frontmatter: whole-corpus skips user-invocable files" {
+  cat > "$FIX/references/procedures/investigate.md" <<'EOF'
+---
+name: investigate
+description: "Dig into a failure... Use when debugging."
+user-invocable: true
+---
+# Investigate command
+
+Another slash-command file.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  # Only the two baseline records should be linted; investigate.md is skipped.
+  [[ "$output" == *"linted 2 file(s)"* ]]
+}
+
+@test "command frontmatter: string 'user-invocable:' in the BODY is linted normally" {
+  # A normal record file that contains the string 'user-invocable:' in its BODY
+  # (below the closing ---) must still be linted as a record, since the string
+  # is outside the frontmatter block.
+  cat > "$FIX/references/decisions/about-commands.md" <<'EOF'
+---
+id: dec.command-design
+kind: decision
+date: 2026-08-23
+keywords: [commands, slash-commands]
+links: {}
+status: active
+---
+# Decision on slash-commands
+
+When implementing a feature, all user-invocable: commands must be documented.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/about-commands.md
+  [ "$status" -eq 0 ]
+  # Must pass because it IS a valid record (frontmatter has all required keys),
+  # even though the body contains the string 'user-invocable:'.
+  [[ "$output" == *"linted 1 file(s)"* ]]
+}
+
+@test "log-record.sh's own output passes the frontmatter shape lint (writer/lint parity)" {
+  # Ported from the retired project-field-roundtrip.bats: a writer that emits
+  # a value its own lint rejects makes the record uncommittable — the two
+  # halves must agree on the grammar. --project is the sharpest case: it is
+  # optional, free-form at the write site, and shape-checked here.
+  local WRITER="$BATS_TEST_DIRNAME/../../scripts/log-record.sh"
+  # Same isolation the round-trip suite used: point EVERY root the writer
+  # reads at the fixture so neither the live corpus nor mistakes.jsonl is touched.
+  export CODEX_ROOT="$FIX"
+  export MISTAKES_JSONL="$FIX/mistakes.jsonl"   # keep the promotion gate off the live corpus
+  : > "$MISTAKES_JSONL"
+  run bash "$WRITER" decision --slug lint-parity --date 2026-08-10 \
+    --title "Lint parity decision" --keywords '[lintparitykw]' \
+    --project langwatch/scenario
+  [ "$status" -eq 0 ]
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT" \
+      references/decisions/2026-08-10-lint-parity.md
+  [ "$status" -eq 0 ]
 }
