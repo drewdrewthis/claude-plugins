@@ -18,7 +18,7 @@ real outcomes — and each of those needs a mechanism, not a convention.
 - **A procedure is a prose script.** The atomic unit is the *document*
   (`PROCEDURE.md`), not an index entry — a procedure is read whole, top to
   bottom, and its frontmatter is its discovery surface. There are no
-  maintained index files; digests are compiled per-query by the scout.
+  maintained index files; digests are compiled per-query by `/how-do-i`.
 - **A skill is a gateway with context.** It is the invocation handle
   (`/how-do-i`, `/update-records`, `/am-i-done`): thin, user/agent-invocable, and it may
   carry context or dispatch a subagent (`context: fork` + `agent:`). Executor
@@ -40,9 +40,8 @@ real outcomes — and each of those needs a mechanism, not a convention.
 
 Two invariants hold on every main-agent turn, enforced by blocking hooks:
 
-1. **`/how-do-i` before acting** — no mutating tool call until the
-   procedure-scout has been consulted this turn (`how-do-i-gate.sh`,
-   PreToolUse, all tools).
+1. **`/how-do-i` before acting** — no mutating tool call until `/how-do-i`
+   has been run this turn (`how-do-i-gate.sh`, PreToolUse, all tools).
 2. **`/am-i-done` before stopping** — any turn that called tools gets one
    cold-read review of its am-i-done report before the turn may end
    (`am-i-done-gate.sh`, Stop — asks at most once; when there is genuinely
@@ -125,8 +124,8 @@ Design rules the gates follow:
 - Every record carries the **six-key frontmatter** (`id`, `kind`, `date`,
   `keywords` non-empty, `links`, `status`) — enforced by lint + hook. The
   frontmatter is the index; `query-records.sh` is the one PULL interface over
-  all stores. There are no materialized views and no index files: the
-  procedure-scout compiles a digest per query, so nothing can go stale
+  all stores. There are no materialized views and no index files: `/how-do-i`
+  compiles a digest per query, so nothing can go stale
   between a record and its copy.
 - **Two naming namespaces, deliberately.** Host procedure records live as
   directories (`references/procedures/<area>/<name>/PROCEDURE.md` plus a

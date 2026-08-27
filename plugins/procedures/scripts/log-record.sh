@@ -2,7 +2,7 @@
 # log-record.sh — the DETERMINISTIC half of `/update-records <kind>`.
 #
 # PLUGIN ADAPTATION: no materialized views — the upstream gen-* regen steps are
-# removed; the procedure-scout compiles views on demand.
+# removed; `/how-do-i` compiles views on demand.
 #
 # Consolidates the four record-writers (log-mistake, record-decision,
 # record-solution, record-failure-mode) into one script with four

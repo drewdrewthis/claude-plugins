@@ -128,8 +128,8 @@
 # project slug instead: outside every one of those globs, present and future.
 #
 # PLUGIN ADAPTATION: no upstream counterpart. Class: "Turn worklog" in the root
-# README — like digest-record.sh this is a WRITER, not a gate, so group by
-# <gate> before computing any fail-open rate over the log.
+# README — a WRITER, not a gate, so group by <gate> before computing any
+# fail-open rate over the log.
 
 set -uo pipefail
 
@@ -164,8 +164,7 @@ WORKLOG_MODEL="${WORKLOG_MODEL:-claude-haiku-4-5-20251001}"
 # Rows of the store scanned for the dedup key. See wl_seen.
 WORKLOG_DEDUP_SCAN="${WORKLOG_DEDUP_SCAN:-500}"
 # Non-numeric values feed `sleep`/`timeout`/`tail`, which error rather than
-# default — a typo'd env var must not change the contract (same guard as
-# lib/session-digest.sh).
+# default — a typo'd env var must not change the contract.
 case "$WORKLOG_SETTLE_SECS"   in ''|*[!0-9]*) WORKLOG_SETTLE_SECS=3 ;; esac
 case "$WORKLOG_WINDOW"        in ''|*[!0-9]*|0) WORKLOG_WINDOW=60 ;; esac
 case "$WORKLOG_MODEL_TIMEOUT" in ''|*[!0-9]*|0) WORKLOG_MODEL_TIMEOUT=120 ;; esac

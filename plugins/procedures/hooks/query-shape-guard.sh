@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
 # query-shape-guard.sh — PreToolUse hook (all tools; no matcher).
 #
-# SINGLE RESPONSIBILITY: hold the two gate forks to their one-shot contracts.
-#   procedures:procedure-scout  — Bash only, and every segment of that Bash is
-#                                 the ONE sanctioned shape (one how-do-i.sh
-#                                 pipeline run / digest replay / the documented
-#                                 justfile probe); ONE retrieval call per fork
-#                                 session.
-#   procedures:work-reviewer    — same Bash shape and budget; no Agent tool at
-#                                 all.
+# SINGLE RESPONSIBILITY: hold the procedures:work-reviewer gate fork to its
+# one-shot contract — Bash only, and every segment of that Bash is the ONE
+# sanctioned shape (one how-do-i.sh pipeline run / the documented justfile
+# probe); ONE retrieval call per fork session; no Agent tool at all.
 # PLUGIN ADAPTATION: upstream's reviewer carried ONE Agent dispatch to
 # procedures:procedure-evolver; removed 2026-08-25 (issue #130) — record
-# evolution fires from the evolve-sweep Stop hook now, so neither fork may
+# evolution fires from the evolve-sweep Stop hook now, so the fork may not
 # dispatch agents. The write surface still belongs to procedure-evolver, which
 # the main session dispatches on the sweep's wake.
-# Both forks lose Write/Edit/Read-class tools outright: a fork inherits the
+# The fork loses Write/Edit/Read-class tools outright: a fork inherits the
 # parent toolset (fm.read-only-fork-writes-anyway), so prose boundaries are not
 # the control — this guard is.
 #
@@ -66,8 +62,10 @@ qsg_deny() {
 AGENT="$(printf '%s' "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null || true)"
 [ -n "$AGENT" ] || AGENT="${CLAUDE_CODE_AGENT:-}"
 
+# PLUGIN ADAPTATION (#135): procedures:work-reviewer is the sole audience —
+# how-do-i runs inline here, so it has no fork identity to guard.
 case "$AGENT" in
-    procedures:procedure-scout|procedures:work-reviewer) ;;
+    procedures:work-reviewer) ;;
     *) exit 0 ;;
 esac
 
@@ -123,7 +121,7 @@ SCAN="${SCAN//>\/dev\/null/ }"
 
 # Constructs that hide a segment from this scan deny outright.
 case "$SCAN" in
-    *'$('*|*'`'*|*'<('*|*$'\n'*) qsg_deny "QUERY-SHAPE-GUARD: command substitution hides a segment from the shape check — run the digest read, the pipeline, and the justfile probe as plain segments." ;;
+    *'$('*|*'`'*|*'<('*|*$'\n'*) qsg_deny "QUERY-SHAPE-GUARD: command substitution hides a segment from the shape check — run the pipeline and the justfile probe as plain segments." ;;
 esac
 # Output redirection to a FILE is a write.
 case "$SCAN" in *'>'*) qsg_deny "QUERY-SHAPE-GUARD: file redirection is a write — the forks read." ;; esac
@@ -149,7 +147,6 @@ while IFS= read -r stmt; do
         seg="${seg#"${seg%%[![:space:]]*}"}"; seg="${seg%"${seg##*[![:space:]]}"}"
         if [ "$IN_JQ" -eq 1 ]; then continue; fi   # tail of the quoted jq program
         case "$seg" in
-            *"session-digest-read.sh"*" --read "*) ;;
             *"how-do-i.sh"*" --question "*) ;;
             "command -v just"*) ;;
             "just "*) ;;
@@ -158,7 +155,7 @@ while IFS= read -r stmt; do
                     qsg_deny "QUERY-SHAPE-GUARD: jq is sanctioned only inside the justfile probe pipeline (just --dump | jq -r ...)."
                 fi ;;
             *)
-                qsg_deny "QUERY-SHAPE-GUARD: unsanctioned command segment in $AGENT — the contract allows exactly: session-digest-read.sh --read ..., how-do-i.sh --question '<question>', and (when the repo has one) the documented justfile probe. Offending segment: ${seg:0:120}" ;;
+                qsg_deny "QUERY-SHAPE-GUARD: unsanctioned command segment in $AGENT — the contract allows exactly: how-do-i.sh --question '<question>' and (when the repo has one) the documented justfile probe. Offending segment: ${seg:0:120}" ;;
         esac
     done <<EOF
 $(printf '%s' "$stmt" | sed -e 's/|/\n/g')
