@@ -25,8 +25,8 @@ this doc to restate them:
 
 ## Vendoring rule (`plugins/procedures`)
 
-The procedures plugin's machinery (skills, `procedure-scout`/`work-reviewer`
-agents, gate hooks + lib, the two-stage retrieval pipeline, `log-record.sh`,
+The procedures plugin's machinery (skills, the `work-reviewer` agent, gate
+hooks + lib, the two-stage retrieval pipeline, `log-record.sh`,
 linter, templates) is vendored from `orchard-codex@develop-sweatshop`.
 
 - Anything that isn't upstream must be marked `PLUGIN ADAPTATION: <why>` at

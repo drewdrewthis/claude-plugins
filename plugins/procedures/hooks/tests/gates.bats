@@ -496,3 +496,12 @@ headless_plugin() {
   [ ! -s "$GATE_FAILOPEN_LOG" ] \
     || { echo "a healthy install recorded a fail-open: $(cat "$GATE_FAILOPEN_LOG")"; false; }
 }
+
+@test "hooks.json: turn-state-record.sh is the sole PostToolUse:Skill hook" {
+  # The gates read the turn state this hook records; the registration is the
+  # contract's root. "Sole" is load-bearing: nothing else may ride the Skill
+  # matcher.
+  jq -e '.hooks.PostToolUse[] | select(.matcher == "Skill") | .hooks
+        | length == 1 and (.[0].command == "bash ${CLAUDE_PLUGIN_ROOT}/hooks/turn-state-record.sh")' \
+    "$HOOKS/hooks.json" >/dev/null
+}

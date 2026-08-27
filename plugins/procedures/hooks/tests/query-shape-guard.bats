@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
+# PLUGIN ADAPTATION (#135): the guard's sole audience is procedures:work-reviewer —
+# how-do-i runs inline here, so it has no fork identity to guard.
 # Policy tests for hooks/query-shape-guard.sh — the PreToolUse hook holding
-# the two gate forks to their one-shot contracts.
+# the work-reviewer gate fork to its one-shot contract.
 #
 # BOTH DIRECTIONS are asserted:
 #   FIRES  — budget violations and unsanctioned shapes get a deny decision
@@ -39,19 +41,14 @@ teardown() {
 
 # ---- payload builders (jq builds them so command quotes survive) ----
 
-scout_bash() {
-  jq -nc --arg sid "$SID" --arg c "$1" \
-    '{session_id:$sid, agent_type:"procedures:procedure-scout", tool_name:"Bash", tool_input:{command:$c}}'
-}
-
 reviewer_bash() {
   jq -nc --arg sid "$SID" --arg c "$1" \
     '{session_id:$sid, agent_type:"procedures:work-reviewer", tool_name:"Bash", tool_input:{command:$c}}'
 }
 
-scout_tool() {  # scout_tool <tool_name>
+reviewer_tool() {  # reviewer_tool <tool_name>
   jq -nc --arg sid "$SID" --arg t "$1" \
-    '{session_id:$sid, agent_type:"procedures:procedure-scout", tool_name:$t, tool_input:{path:"/tmp/x"}}'
+    '{session_id:$sid, agent_type:"procedures:work-reviewer", tool_name:$t, tool_input:{path:"/tmp/x"}}'
 }
 
 reviewer_write() {
@@ -89,18 +86,18 @@ allowed_silent() {
   [ -z "$output" ] || { echo "expected silence, got: $output"; false; }
 }
 
-PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '$SCRIPTS/how-do-i.sh' --question 'goal and terms here as one question'"
+PIPELINE_CALL="bash '$SCRIPTS/how-do-i.sh' --question 'goal and terms here as one question'"
 
 @test "a '|' inside the --question value is denied — prompts compose pipe-free questions" {
   # The guard splits statements on pipes without quote-awareness, by design.
   # That is why every prompt composes the question WITHOUT the caller's
   # GOAL|TERMS separator; this pins that the pipe-carrying form stays
   # denied so nobody "fixes" a prompt by reintroducing it.
-  run_guard "$(scout_bash "bash '$SCRIPTS/how-do-i.sh' --question 'goal | terms here'")"
+  run_guard "$(reviewer_bash "bash '$SCRIPTS/how-do-i.sh' --question 'goal | terms here'")"
   denied "unsanctioned"
 }
 
-# ---------- audience: anyone but the two forks is untouched ----------
+# ---------- audience: anyone but the work-reviewer fork is untouched ----------
 
 @test "a session with no fork identity is released untouched" {
   # The guard keys on .agent_type / CLAUDE_CODE_AGENT. A MAIN agent's Bash is
@@ -114,20 +111,20 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
   allowed_silent
 }
 
-@test "the scout is recognized through the CLAUDE_CODE_AGENT env fallback" {
+@test "the reviewer is recognized through the CLAUDE_CODE_AGENT env fallback" {
   # Payloads may lack .agent_type (older envelope shapes); the env var is the
   # documented fallback and must arm the guard, not bypass it.
   printf '%s' "$(jq -nc --arg sid "$SID" '{session_id:$sid, tool_name:"Read", tool_input:{path:"/tmp/x"}}')" > "$PF"
-  run env CLAUDE_CODE_AGENT=procedures:procedure-scout bash -c "bash '$GUARD' < '$PF'"
+  run env CLAUDE_CODE_AGENT=procedures:work-reviewer bash -c "bash '$GUARD' < '$PF'"
   denied "Read"
 }
 
-# ---------- write/read toolset: denied by name, both forks ----------
+# ---------- write/read toolset: denied by name ----------
 
-@test "the scout loses the read-class tools outright" {
+@test "the reviewer loses the read-class tools outright" {
   local t
   for t in Read Grep Glob; do
-    run_guard "$(scout_tool "$t")"
+    run_guard "$(reviewer_tool "$t")"
     denied "$t"
   done
 }
@@ -143,12 +140,12 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
 # ---------- Bash shape: the guard FIRES on violations ----------
 
 @test "an empty command is denied, not waved through" {
-  run_guard "$(scout_bash "")"
+  run_guard "$(reviewer_bash "")"
   denied "empty command"
 }
 
 @test "an unsanctioned segment is denied and named" {
-  run_guard "$(scout_bash "ls references/decisions/")"
+  run_guard "$(reviewer_bash "ls references/decisions/")"
   denied "unsanctioned"
   denied "ls references/decisions/"
 }
@@ -157,14 +154,12 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
   # The retired matcher's modes (keyword/cat/recall/id) died with their
   # script in the pipeline cutover. These assert the guard never blesses a
   # mode-flag shape on the scripts that remain: only the documented
-  # per-script flag passes (--read for the digest, --question for the
-  # pipeline).
+  # --question flag passes.
   local cmd
   for cmd in \
     "bash '$SCRIPTS/how-do-i.sh' --keyword quokka" \
-    "bash '$SCRIPTS/session-digest-read.sh' --recall quokka" \
     "bash '$SCRIPTS/compile-records.sh' --cat references/decisions/a.md"; do
-    run_guard "$(scout_bash "$cmd")"
+    run_guard "$(reviewer_bash "$cmd")"
     denied "unsanctioned"
   done
 }
@@ -172,62 +167,62 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
 @test "command substitution hides a segment and is denied outright" {
   local cmd
   for cmd in "bash '$SCRIPTS/how-do-i.sh' --question \$(echo terms)" "head -1 \`ls\`"; do
-    run_guard "$(scout_bash "$cmd")"
+    run_guard "$(reviewer_bash "$cmd")"
     denied "hides a segment"
   done
 }
 
 @test "a multiline command hides segments behind the newline and is denied" {
   local nl=$'\n'
-  run_guard "$(scout_bash "bash '$SCRIPTS/how-do-i.sh' --question 'terms'${nl}ls /")"
+  run_guard "$(reviewer_bash "bash '$SCRIPTS/how-do-i.sh' --question 'terms'${nl}ls /")"
   denied "hides a segment"
 }
 
 @test "file redirection is a write and is denied" {
-  run_guard "$(scout_bash "bash '$SCRIPTS/how-do-i.sh' --question 'terms' > /tmp/out.txt")"
+  run_guard "$(reviewer_bash "bash '$SCRIPTS/how-do-i.sh' --question 'terms' > /tmp/out.txt")"
   denied "file redirection is a write"
 }
 
 @test "jq outside the justfile-probe pipeline is denied" {
-  run_guard "$(scout_bash "jq -r '.keywords' /tmp/notes.json")"
+  run_guard "$(reviewer_bash "jq -r '.keywords' /tmp/notes.json")"
   denied "sanctioned only inside the justfile probe"
 }
 
 @test "a second retrieval call is denied after the budget is spent" {
-  run_guard "$(scout_bash "$PIPELINE_CHAIN")"
+  run_guard "$(reviewer_bash "$PIPELINE_CALL")"
   allowed_silent
   [ -f "$QUERY_GUARD_STATE_DIR/$SID.bash" ] || { echo "no budget marker written for an allowed call"; false; }
 
-  run_guard "$(scout_bash "bash '$SCRIPTS/how-do-i.sh' --question 'a different question entirely'")"
+  run_guard "$(reviewer_bash "bash '$SCRIPTS/how-do-i.sh' --question 'a different question entirely'")"
   denied "spent its one retrieval call"
 }
 
 @test "a denied shape spends nothing — the retry is still possible" {
   # The grace that makes a strict budget livable: an unsanctioned ATTEMPT
   # must not consume the one call, or a typo'd first command bricks the fork.
-  run_guard "$(scout_bash "grep -rn quokka references/")"
+  run_guard "$(reviewer_bash "grep -rn quokka references/")"
   denied "unsanctioned"
   [ ! -f "$QUERY_GUARD_STATE_DIR/$SID.bash" ] || { echo "a DENIED call consumed budget"; false; }
 
-  run_guard "$(scout_bash "$PIPELINE_CHAIN")"
+  run_guard "$(reviewer_bash "$PIPELINE_CALL")"
   allowed_silent
 }
 
 # ---------- Bash shape: SILENT on compliant one-query use ----------
 
-@test "the documented one-call chain — digest replay && pipeline — is allowed silently" {
-  run_guard "$(scout_bash "$PIPELINE_CHAIN")"
+@test "the documented one-call pipeline run is allowed silently" {
+  run_guard "$(reviewer_bash "$PIPELINE_CALL")"
   allowed_silent
 }
 
 @test "discarding output is not mistaken for a write: 2>/dev/null, >/dev/null, 2>&1" {
   local cmd i=0
   for cmd in \
-    "bash '$SCRIPTS/session-digest-read.sh' --read x 2>/dev/null && bash '$SCRIPTS/how-do-i.sh' --question 'terms' >/dev/null" \
+    "bash '$SCRIPTS/how-do-i.sh' --question 'terms' 2>/dev/null >/dev/null" \
     "bash '$SCRIPTS/how-do-i.sh' --question 'terms' 2>&1"; do
     i=$((i + 1))
     SID="${SID}-discard-$i"   # fresh budget per iteration: each shape is judged on ITS OWN first call
-    run_guard "$(scout_bash "$cmd")"
+    run_guard "$(reviewer_bash "$cmd")"
     allowed_silent
   done
 }
@@ -245,7 +240,7 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
   # Effect: a fork following its own prompt verbatim is denied on every repo
   # with a justfile. Fix: trim segments before matching, and judge the
   # pipe-tail of a "just --dump" producer together with it.
-  run_guard "$(scout_bash "command -v just >/dev/null && just --dump --dump-format json | jq -r '.recipes | to_entries[] | \"\\(.key)\\t\\(.value.doc // \"-\")\"'")"
+  run_guard "$(reviewer_bash "command -v just >/dev/null && just --dump --dump-format json | jq -r '.recipes | to_entries[] | \"\\(.key)\\t\\(.value.doc // \"-\")\"'")"
   allowed_silent
 }
 
@@ -253,25 +248,20 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
   # Documents the working subset under the deviation above: the sanctioned
   # shapes match when a segment starts the command, so a fork that writes the
   # probe without chaining still gets through.
-  run_guard "$(scout_bash "just --dump --dump-format json")"
+  run_guard "$(reviewer_bash "just --dump --dump-format json")"
   allowed_silent
 }
 
 @test "a non-Bash, non-Agent tool the guard does not police is released silently" {
-  run_guard "$(scout_tool "WebSearch")"
+  run_guard "$(reviewer_tool "WebSearch")"
   allowed_silent
 }
 
-# ---------- Agent tool: NEITHER fork dispatches agents (issue #130) ----------
+# ---------- Agent tool: the fork dispatches no agents (issue #130) ----------
 # The reviewer's one-dispatch allowance was removed with the evolution chain:
 # record evolution fires from the evolve-sweep Stop hook into
-# procedure-evolver, dispatched by the MAIN session. Both forks are denied,
+# procedure-evolver, dispatched by the MAIN session. The fork is denied,
 # always.
-
-@test "the scout gets NO Agent dispatch, ever" {
-  run_guard "$(jq -nc --arg sid "$SID" --arg s "procedures:procedure-evolver" '{session_id:$sid, agent_type:"procedures:procedure-scout", tool_name:"Agent", tool_input:{subagent_type:$s, prompt:"p"}}')"
-  denied "does not dispatch agents"
-}
 
 @test "the reviewer gets NO Agent dispatch — even procedure-evolver, even first" {
   run_guard "$(reviewer_dispatch "procedures:procedure-evolver")"
@@ -296,7 +286,7 @@ PIPELINE_CHAIN="bash '$SCRIPTS/session-digest-read.sh' --read \"$SID\" && bash '
 }
 
 @test "a jq-less machine fails open, silently, exit 0" {
-  printf '%s' "$(scout_bash "grep -rn quokka references/")" > "$PF"
+  printf '%s' "$(reviewer_bash "grep -rn quokka references/")" > "$PF"
   local EMPTY; EMPTY="$(mktemp -d)"
   # Absolute interpreter path: with PATH emptied, `bash` itself is
   # unresolvable, which would fail the rig rather than exercise the hook's
