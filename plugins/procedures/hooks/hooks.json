@@ -33,7 +33,6 @@
       {
         "hooks": [
           { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/am-i-done-gate.sh" },
-          { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/worklog-record.sh" },
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/evolve-sweep.sh",

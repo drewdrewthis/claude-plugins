@@ -15,9 +15,8 @@ name: worklog-tests
 on:
   pull_request:
     paths:
-      - 'plugins/procedures/hooks/worklog-record.sh'
+      - 'plugins/worklog/hooks/**'
       - 'plugins/procedures/hooks/lib/gate-failopen.sh'
-      - 'plugins/procedures/hooks/tests/worklog-record.bats'
       - 'plugins/procedures/hooks/tests/gate-failopen.bats'
       - '.github/workflows/worklog-tests.yml'
   push:
@@ -61,7 +60,7 @@ jobs:
           command -v perl && perl --version | sed -n 2p
 
       - name: worklog-record suite
-        run: bats plugins/procedures/hooks/tests/worklog-record.bats
+        run: bats plugins/worklog/hooks/tests/worklog-record.bats
 
       - name: gate-failopen suite
         run: bats plugins/procedures/hooks/tests/gate-failopen.bats
