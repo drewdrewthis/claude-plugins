@@ -19,16 +19,30 @@
 # install cannot resolve (hooks shipped, skills absent). Denying there is a hard
 # wedge: deny, retry, deny, with no exit. Releasing is the only safe branch, and
 # it must be loud — a silently ungated session looks exactly like a compliant one.
+# transcript-unreadable — a caller that reads the session transcript could not
+# get at it (missing, unreadable, or no python3 to parse it). Distinct from a
+# transcript that READS but holds nothing to record, which is a legitimate
+# decline: this one says the input surface is gone, that one says the surface
+# was fine and empty.
+# judgment-unavailable — a caller whose record has a mechanical half and a
+# model-judged half wrote the mechanical half but could not obtain the
+# judgment. The row exists and is short a field; the record says why, so a
+# model outage is not read later as a turn where nothing happened.
+# detach-failed — a caller that hands its work to a detached child could not
+# launch one (no temp file for the payload, an unwritable $TMPDIR). Kept
+# distinct from store-unwritable: the store is not touched on that path, and
+# naming it points whoever reads the log at the wrong directory.
 # non-object-payload — stdin parsed, but the top-level value is not an envelope
 # (a bare string, an array, a number). Kept distinct from malformed-payload:
 # that one says the transport is broken, this one says something is plumbing
 # the wrong event in. Both silently skip if unchecked, since indexing a
 # non-object yields empty and reads as "a different tool fired".
 #
-# NOT ONLY GATES. digest-record.sh records here too, under its own <gate> name.
-# It is a writer, not a gate, and its failures are not gate misses — group by
-# <gate> before computing any fail-open rate, which the per-caller naming rule
-# below already requires.
+# NOT ONLY GATES. digest-record.sh ("Fork-path session state" in the root
+# README) and worklog-record.sh ("Turn worklog") record here too, each under its
+# own <gate> name. They are writers, not gates, and their failures are not gate
+# misses — group by <gate> before computing any fail-open rate, which the
+# per-caller naming rule below already requires.
 # LEGITIMATE (never record): out-of-audience, the compliance-path allowlist, a
 # clean no-tool turn, sdk-cli, a non-Stop event — the gate DID evaluate and
 # correctly released. Blurring this line makes the log useless as a fail-open
@@ -88,6 +102,7 @@ gate_failopen() {
         no-jq|reset-hook-never-ran|activity-undetermined|lib-unreadable:*) ;;
         store-unwritable|payload-shape-unrecognized|malformed-payload) ;;
         non-object-payload|skill-unresolvable) ;;
+        transcript-unreadable|judgment-unavailable|detach-failed) ;;
         *) why="unrecognized:${why}" ;;
     esac
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \
