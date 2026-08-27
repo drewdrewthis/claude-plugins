@@ -43,11 +43,11 @@
 # the wrong event in. Both silently skip if unchecked, since indexing a
 # non-object yields empty and reads as "a different tool fired".
 #
-# NOT ONLY GATES. digest-record.sh ("Fork-path session state" in the root
-# README) and worklog-record.sh ("Turn worklog") record here too, each under its
-# own <gate> name. They are writers, not gates, and their failures are not gate
-# misses — group by <gate> before computing any fail-open rate, which the
-# per-caller naming rule below already requires.
+# PLUGIN ADAPTATION: NOT ONLY GATES. worklog-record.sh ("Turn worklog" in the
+# root README) records here too, under its own <gate> name — a plugin-local
+# writer with no upstream counterpart. It is a writer, not a gate, and
+# its failures are not gate misses — group by <gate> before computing any
+# fail-open rate, which the per-caller naming rule below already requires.
 # LEGITIMATE (never record): out-of-audience, the compliance-path allowlist, a
 # clean no-tool turn, sdk-cli, a non-Stop event — the gate DID evaluate and
 # correctly released. Blurring this line makes the log useless as a fail-open

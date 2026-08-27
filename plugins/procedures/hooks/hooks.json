@@ -11,8 +11,7 @@
       {
         "matcher": "Skill",
         "hooks": [
-          { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/turn-state-record.sh" },
-          { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/digest-record.sh" }
+          { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/turn-state-record.sh" }
         ]
       },
       {

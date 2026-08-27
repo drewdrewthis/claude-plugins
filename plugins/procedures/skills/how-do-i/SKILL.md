@@ -2,17 +2,11 @@
 name: how-do-i
 description: "The gateway to everything the codex knows. Use when you (or the user) ask 'is there a procedure for X', 'how do we do X', AND — equally — whenever you are ABOUT TO PERFORM a documented operation ('tag the issue', 'label this PR', 'cut a release', 'prune/launch/stop a session', 'drive boxd/fleet'). An imperative 'do X' is still a trigger: learn the procedure BEFORE executing. Invoke with TWO parts separated by '|': (1) GOAL — one concrete sentence stating what you are about to DO and where (repo/surface), not the question but the action; (2) TERMS — the full search vocabulary: every concept the answer might touch, each with 2–3 synonyms, corpus words included (proc, fm, evolve, squash), phrases hyphenated. The list must be COMPLETE because there is exactly one query. Never answer or execute github/slack/release/fleet/boxd operations from memory."
 user-invocable: true
-context: fork
-agent: procedure-scout
-# PLUGIN ADAPTATION: fork skills ignore their agent's model: — must match
-# agents/procedure-scout.md. See README "Fork-skill model pin".
-model: sonnet
-background: false
+# PLUGIN ADAPTATION: upstream forks this skill; here it runs inline —
+# no agent:/model:/background: keys. It shells to scripts/how-do-i.sh, whose
+# claude -p children carry independent token budgets.
+context: inline
 argument-hint: "<goal — what you're about to do> | <terms — full search vocabulary>"
-# PLUGIN ADAPTATION: "Fork-path agent prompt" (see README). A forked skill loads
-# THIS file as the prompt and takes `agent:` as identity only, so the retrieval
-# contract below lives here to bind at all. Whether this key reaches a fork is
-# undocumented — it is a best-effort second layer; the shape guard is the control.
 disallowed-tools: Read, Grep, Glob
 ---
 
@@ -57,20 +51,12 @@ cited to source paths, commands quoted byte-for-byte.
    carries NO `|`: the shape guard denies pipes, so join GOAL and terms with
    plain whitespace.
 
-2. **Run ONE Bash call** — digest replay, the pipeline, and (when they
-   apply) the justfile probe ride together:
+2. **Run ONE Bash call** — the pipeline, and (when it applies) the justfile
+   probe ride together:
 
    ```bash
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/session-digest-read.sh" --read "${CLAUDE_SESSION_ID}" \
-     && bash "${CLAUDE_SKILL_DIR}/../../scripts/how-do-i.sh" --question '<GOAL + merged term set, no separators>'
+   bash "${CLAUDE_SKILL_DIR}/../../scripts/how-do-i.sh" --question '<GOAL + merged term set, no separators>'
    ```
-
-   Anything the digest prints is your own earlier finding from a DIFFERENT
-   goal — label what it already carried `already established`, what this
-   run turns up `newly found`. A replayed digest is warm-start context,
-   never a search you can skip: run the query pass regardless of how much
-   the digest already carried. Empty digest means session-first pass — say
-   nothing about it and proceed cold.
 
 3. **If the repo has `just` and a justfile**, append the probe to the SAME
    call:
@@ -84,8 +70,7 @@ cited to source paths, commands quoted byte-for-byte.
    miss, never a reason to widen the search.
 
 4. **Return the pipeline's answer** — relay it verbatim (its citations and
-   verbatim commands are the product), then append your RECIPES section and
-   the `already established` / `newly found` tags against the digest. No
+   verbatim commands are the product), then append your RECIPES section. No
    preamble, no narration of the search. If the answer ends in `NOT FOUND`,
    emit that section with its `/update-records` line and stop — a miss is a
    finished answer, not a reason to run a second query.
@@ -145,10 +130,7 @@ means nobody has recorded a failure here yet, which is itself information.
 - **Every claim carries its source path**, or it is unverifiable and worthless.
 - **Read-only.** No edit, no create, no commit, nothing that changes state.
   ⚠ `Bash` can still mutate — `gh`, `git`, `rm` remain reachable, so read-only
-  is a rule you keep, not one the harness keeps for you. That includes the
-  digest store: the reader takes `--read` only, but raw `Bash` could write a
-  file into it, and a forged "prior digest" is read back next turn as
-  established fact.
+  is a rule you keep, not one the harness keeps for you.
 - Never act on the goal, invent a procedure not on disk, omit a trap because it
   looks unlikely, or flatten a contradiction between two records — report both
   and say they disagree.

@@ -49,19 +49,27 @@ fm_key() {
     || { echo "corpus has $expected context:fork skills but the loop checked $checked"; false; }
 }
 
-@test "both gate skills are among the context:fork skills checked above" {
+# PLUGIN ADAPTATION: how-do-i runs inline; the checks below pin that contract.
+@test "am-i-done is among the context:fork skills checked above" {
   # Pins WHICH skills the loop covers, so deleting a skill's `context: fork`
   # cannot quietly drop it from the invariant while the count still passes.
-  [ "$(fm_key "$SKILLS/how-do-i/SKILL.md" context)" = "fork" ]
   [ "$(fm_key "$SKILLS/am-i-done/SKILL.md" context)" = "fork" ]
+}
+
+# PLUGIN ADAPTATION: how-do-i runs inline, so AC-4 has one remaining checked fork.
+@test "how-do-i runs inline (context: inline), carrying none of the fork keys" {
+  # how-do-i runs on the main thread: it declares `context: inline` and none of
+  # the fork keys (`agent:`/`model:`/`background:`). A re-vendor that restores
+  # `context: fork` must fail here.
+  [ "$(fm_key "$SKILLS/how-do-i/SKILL.md" context)" = "inline" ]
+  [ -z "$(fm_key "$SKILLS/how-do-i/SKILL.md" agent)" ]
+  [ -z "$(fm_key "$SKILLS/how-do-i/SKILL.md" model)" ]
+  [ -z "$(fm_key "$SKILLS/how-do-i/SKILL.md" background)" ]
 }
 
 @test "the agent-side model declaration is still present (belt and braces)" {
   # Honoured on the Agent(subagent_type:) path even though the fork path ignores
-  # it — removing it would break direct dispatch of these agents.
-  # Asserted per file: `grep -c pat f1 f2` exits 0 when EITHER file matches, so a
-  # single grep over both would pass with one agent's declaration deleted.
-  [ -n "$(fm_key "$AGENTS/procedure-scout.md" model)" ]
+  # it — removing it would break direct dispatch of work-reviewer.
   [ -n "$(fm_key "$AGENTS/work-reviewer.md" model)" ]
 }
 
@@ -96,7 +104,9 @@ fm_key() {
     done
   done <<< "$declaring"
 
-  [ "$checked" -ge 2 ] || { echo "expected at least the two gate forks, checked $checked"; false; }
+  # am-i-done→work-reviewer is the model-pinned gate fork (recall forks with no
+  # agent: so it is not counted).
+  [ "$checked" -ge 1 ] || { echo "expected at least the am-i-done fork, checked $checked"; false; }
 }
 
 @test "AC-6: the README records fork-model inheritance as documented harness design" {

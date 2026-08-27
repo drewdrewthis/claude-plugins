@@ -1,6 +1,6 @@
 {
   "name": "procedures",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Procedural knowledge system: /how-do-i router, /update-records (procedure/decision/solution + templates), /am-i-done cold-read review, and the gate hooks — how-do-i-gate (PreToolUse) + am-i-done-gate (Stop) + evolve-sweep (async Stop detector that wakes the session to dispatch procedure-evolver), from orchard-codex develop-sweatshop.",
   "author": {
     "name": "Drü"
@@ -34,7 +34,7 @@
       "type": "boolean",
       "default": true,
       "title": "Enable the gate-fork shape guard",
-      "description": "Hold the how-do-i / am-i-done forks to their one-shot contracts: each may run exactly one retrieval call (the how-do-i.sh pipeline, plus digest replay and the justfile probe); neither fork may dispatch agents or write. Set false to turn this guard off; also settable per-invocation as PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=false."
+      "description": "Hold the am-i-done work-reviewer fork to its one-shot contract: exactly one retrieval call (the how-do-i.sh pipeline, plus the justfile probe); the fork may not dispatch agents or write. Set false to turn this guard off; also settable per-invocation as PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=false."
     }
   }
 }

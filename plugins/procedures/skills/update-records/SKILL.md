@@ -41,7 +41,7 @@ Resume the interrupted conversation immediately after — the four script-backed
 
 ## kind = mistake
 
-Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by the procedure-scout, which sweeps failure-modes + `mistakes.jsonl` per query.
+Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `/how-do-i`, which sweeps failure-modes + `mistakes.jsonl` per query.
 
 **Triggers:** user correction ("no", "wrong", "not that", a redirect); self-catch; after codifying a rule from a correction; manual `/update-records mistake <description>`.
 
@@ -121,7 +121,7 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = solution
 
-Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by the procedure-scout's pre-action sweep.
+Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by `/how-do-i`'s pre-action sweep.
 
 **Gather:** `slug` (kebab-case, ≤6 words, names the *problem* not the fix), `keywords` (problem domain, tool name, error class), `situation-tags` (lowercase situation class: `daemon`, `gh-cli`, `env-config`, …), `resolve-after` (~3 months out; env/version hacks expire faster), a one-line `summary` = the canonical resolution, and the prose `body` (Symptom / Rule / optional Check / optional Recipe — Recipe only when flags/order matter).
 
@@ -144,7 +144,7 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = failure-mode
 
-Writes `references/failure-modes/<slug>.md` (BARE slug filename, no `fm.` prefix; id `fm.<slug>`; `rule:` field = the one-sentence rule, whole and self-contained). Does NOT merge on re-run — see below. Consumed by the procedure-scout, which sweeps failure-modes + `mistakes.jsonl` per query.
+Writes `references/failure-modes/<slug>.md` (BARE slug filename, no `fm.` prefix; id `fm.<slug>`; `rule:` field = the one-sentence rule, whole and self-contained). Does NOT merge on re-run — see below. Consumed by `/how-do-i`, which sweeps failure-modes + `mistakes.jsonl` per query.
 
 **Triggers:** a mistake pattern reached **≥3** occurrences in `~/.claude/mistakes.jsonl` (the promotion bar, script-enforced); "promote this to a rule"; a FACE record nesting under a mega parent.
 
