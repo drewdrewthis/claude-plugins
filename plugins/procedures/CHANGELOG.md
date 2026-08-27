@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.10.0...procedures-v0.11.0) (2026-08-27)
+
+
+### Features
+
+* **procedures:** worklog-record Stop hook — one JSONL line per turn ([#95](https://github.com/drewdrewthis/claude-plugins/issues/95)) ([d7c1342](https://github.com/drewdrewthis/claude-plugins/commit/d7c1342dfe6caae2f8ef8af8fca7b2a59247996a))
+* **worklog:** record the turn as requests/outcomes/mistakes with per-entry evidence ([#104](https://github.com/drewdrewthis/claude-plugins/issues/104)) ([1f4ff06](https://github.com/drewdrewthis/claude-plugins/commit/1f4ff069c4f8a1a26e9e498434279109c3f22982))
+
+
+### Bug Fixes
+
+* **procedures:** run how-do-i inline and remove the orphaned procedure-scout agent ([#135](https://github.com/drewdrewthis/claude-plugins/issues/135)) ([88ea6f3](https://github.com/drewdrewthis/claude-plugins/commit/88ea6f36435ecc3d6e037a3752f55fc93da952e6))
+* **procedures:** run how-do-i inline to end the session-budget fork wedge ([#135](https://github.com/drewdrewthis/claude-plugins/issues/135)) ([#137](https://github.com/drewdrewthis/claude-plugins/issues/137)) ([88ea6f3](https://github.com/drewdrewthis/claude-plugins/commit/88ea6f36435ecc3d6e037a3752f55fc93da952e6))
+
 ## [0.10.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.9.1...procedures-v0.10.0) (2026-08-25)
 
 
