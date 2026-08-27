@@ -11,6 +11,7 @@ design record.
 ```
 /plugin marketplace add drewdrewthis/claude-plugins
 /plugin install procedures@drewdrewthis
+/plugin install worklog@drewdrewthis
 /plugin install delegation@drewdrewthis
 /plugin install about-my-person@drewdrewthis
 /plugin install take-note@drewdrewthis
