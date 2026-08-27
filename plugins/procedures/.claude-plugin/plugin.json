@@ -1,6 +1,6 @@
 {
   "name": "procedures",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Procedural knowledge system: /how-do-i router, /update-records (procedure/decision/solution + templates), /am-i-done cold-read review, and the gate hooks — how-do-i-gate (PreToolUse) + am-i-done-gate (Stop) + evolve-sweep (async Stop detector that wakes the session to dispatch procedure-evolver), from orchard-codex develop-sweatshop.",
   "author": {
     "name": "Drü"
