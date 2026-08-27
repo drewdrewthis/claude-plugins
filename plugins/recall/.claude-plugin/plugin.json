@@ -1,6 +1,6 @@
 {
   "name": "recall",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Session recall: /recall searches an incremental SQLite FTS5 index over your past Claude Code transcripts and synthesizes them into the current session. Bundles the indexer script and a SessionEnd hook that keeps the index warm.",
   "author": { "name": "Drü" }
 }

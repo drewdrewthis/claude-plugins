@@ -1,0 +1,55 @@
+name: heartbeats-tests
+
+# The heartbeats plugin splices into a live crontab, so its bats suite runs on
+# every change to it. Paths-filtered: nothing else in the repo can affect this
+# suite's result. Nothing here marks the check required — that is a branch
+# protection setting, not a workflow one.
+#
+# bats comes from apt, which on ubuntu-latest is currently 1.x below 1.5; the
+# suite deliberately avoids 1.5-only features (see the header of
+# scripts/tests/heartbeats.bats) rather than pinning a package version. It does
+# need >= 1.4 for $BATS_TEST_TMPDIR, which every test writes into; setup() fails
+# loudly on an older bats rather than scattering files through the checkout.
+#
+# Runs on pull_request AND on push to the default branch: a PR check that never
+# runs again after merge cannot tell you that main is green, and a merge queue
+# or a direct push can land a combination no single PR tested.
+on:
+  pull_request:
+    paths:
+      - "plugins/heartbeats/**"
+      - ".github/workflows/heartbeats-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/heartbeats/**"
+      - ".github/workflows/heartbeats-tests.yml"
+
+permissions:
+  contents: read
+
+# github.event.pull_request.number is empty on a push, which would collapse
+# every push run into one group that cancels itself; fall back to the ref.
+concurrency:
+  group: heartbeats-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bats:
+    runs-on: ubuntu-latest
+    # The suite is seconds of work with no network calls. A ten-minute ceiling
+    # turns a hang into a failed check instead of a job that burns the runner.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The suite reads the checkout and shells out to nothing networked,
+          # so the default persisted token would sit in .git/config for the
+          # whole job with no step that needs it.
+          persist-credentials: false
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run the heartbeats suite
+        working-directory: plugins/heartbeats
+        run: bats scripts/tests

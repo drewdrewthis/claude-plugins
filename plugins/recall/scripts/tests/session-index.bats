@@ -134,6 +134,49 @@ PY
   echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["removed"]==1, d; assert d["total"]==1, d'
 }
 
+@test "a deleted then restored transcript is pruned and then re-indexed, not left stale" {
+  # #73: the full lifecycle — index it, delete it (prune must drop the row),
+  # recreate the identical content (must re-index, not silently stay pruned).
+  # The trap this is written to catch: the restored file can land on the same
+  # (mtime, size) the pruned row USED to carry. That pair alone must not be
+  # enough to skip it, because the row itself is gone — `existing` no longer
+  # has an entry for this file_path once prune deletes it, so the incremental
+  # check at the top of build (`existing.get(f) == (mtime, size)`) reads None
+  # and always misses for a just-restored file.
+  #
+  # A second, unrelated survivor session is required, not optional set-dressing:
+  # deleting the ONLY transcript makes `files` empty while `existing` still
+  # holds a row, which trips the deliberate empty-scan safeguard a few lines
+  # above the prune loop (`if not files and existing: raise ...`) — build then
+  # returns a JSON error, not the counters dict, and every assertion below
+  # would KeyError. The survivor keeps `files` non-empty through the whole
+  # lifecycle so the safeguard never fires and the prune path under test
+  # actually runs.
+  local f="$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl"
+  write_session "-home-me-proj" "aaa" "" "the quokka migration notes are distinctive"
+  write_session "-home-me-other" "survivor" "" "unrelated durable content about capybaras"
+  python3 "$SCRIPT" build >/dev/null
+
+  run python3 "$SCRIPT" search "quokka"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1, "not indexed before delete"'
+
+  local content
+  content="$(cat "$f")"
+  rm "$f"
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["removed"]==1, d; assert d["total"]==1, d'
+
+  run python3 "$SCRIPT" search "quokka"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==0, "prune left a stale hit"'
+
+  printf '%s' "$content" >"$f"
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["indexed"]==1, d; assert d["total"]==2, d'
+
+  run python3 "$SCRIPT" search "quokka"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1, "restored file was not re-indexed"'
+}
+
 @test "one unreadable transcript does not abort the build" {
   # A dangling symlink stands in for the real trigger: a transcript pruned
   # between the glob and the stat. Aborting discarded every session already
@@ -271,7 +314,7 @@ import json,sys
 assert len(json.load(sys.stdin)) == 1, "the text block was dropped with the tool blocks"'
 }
 
-@test "first_prompt, last_prompt and message_count stay user-only" {
+@test "first_prompt, last_prompt and prompt_count stay user-only" {
   # Prompt-shaped fields the skill reports back to the human. An assistant reply
   # leaking in would be presented as something the human typed, and the count
   # would silently double.
@@ -286,7 +329,7 @@ import json,sys
 hit = json.load(sys.stdin)[0]
 assert hit["first_prompt"] == "the first thing the human asked about", hit["first_prompt"]
 assert hit["last_prompt"] == "the second thing the human asked about", hit["last_prompt"]
-assert hit["message_count"] == 2, hit["message_count"]'
+assert hit["prompt_count"] == 2, hit["prompt_count"]'
 }
 
 @test "search honours --limit" {
@@ -400,7 +443,7 @@ open(p,'wb').write(raw + b'\n')"
   python3 -c "
 import sqlite3
 db = sqlite3.connect('$SESSION_INDEX_DB')
-db.execute('CREATE TABLE sessions (session_id TEXT PRIMARY KEY, project TEXT, file_path TEXT, mtime REAL, message_count INTEGER, first_prompt TEXT, last_prompt TEXT)')
+db.execute('CREATE TABLE sessions (session_id TEXT PRIMARY KEY, project TEXT, file_path TEXT, mtime REAL, message_count INTEGER, first_prompt TEXT, last_prompt TEXT)')  # message_count is intentional: this is the OLD (pre-migration, v3-schema) column name, not a missed rename
 db.execute(\"CREATE VIRTUAL TABLE sessions_fts USING fts5(session_id, project, user_text, tokenize='porter unicode61')\")
 db.commit()"
   run python3 "$SCRIPT" build
@@ -430,7 +473,7 @@ db = sqlite3.connect(db_path)
 db.execute("""CREATE TABLE sessions (
     file_path TEXT PRIMARY KEY, session_id TEXT, project TEXT, cwd TEXT,
     mtime REAL, size INTEGER, message_count INTEGER,
-    first_prompt TEXT, last_prompt TEXT)""")
+    first_prompt TEXT, last_prompt TEXT)""")  # message_count: OLD (pre-migration, v3-schema) column name — deliberate, not a missed rename
 db.execute("CREATE VIRTUAL TABLE sessions_fts USING fts5("
            "file_path, session_id, project, user_text, tokenize='porter unicode61')")
 db.execute("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?)",
@@ -527,6 +570,82 @@ assert len(r) >= 1, "silently returned nothing"' || { echo "empty result for: $q
   python3 "$SCRIPT" build >/dev/null 2>&1
   [ -f "$SESSION_INDEX_DB.log" ]
   grep -q "skipped 1 unreadable transcript" "$SESSION_INDEX_DB.log"
+}
+
+@test "a transcript that parses cleanly but yields zero turns is surfaced, not silently indexed" {
+  # #68: every line filtered by iter_messages (too short, in this fixture) is
+  # a DIFFERENT failure mode than a raise — nothing in the existing `failed`
+  # counter would ever see it, and a naive INSERT would write prompt_count 0
+  # and then the incremental skip at the top of the next build would never
+  # look at the file again.
+  # A single noise-only file parsed alone stays below EMPTY_DRIFT_MIN_PARSED
+  # (3), so it must NOT trip the ratio-based drift warning by itself — only
+  # `empty` is a bookkeeping count, drift is a separate, floored signal.
+  local f="$SESSION_INDEX_PROJECTS/-home-me-proj/zzz.jsonl"
+  mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  python3 -c 'import json; print(json.dumps({"type": "user", "message": {"content": "hi"}}))' >"$f"
+  run python3 "$SCRIPT" build
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["empty"]==1, d; assert d["indexed"]==0, d; assert d["total"]==0, d; assert "warning" not in d, d'
+  # Not durably done: a second build with nothing changed on disk parses the
+  # same file again rather than marking it "skipped" (which would mean its
+  # (mtime, size) got recorded on the first pass).
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["empty"]==1, d; assert d["skipped"]==0, d'
+}
+
+@test "a zero-turn transcript does not cost an unrelated normal transcript its index entry" {
+  write_session "-home-me-proj" "aaa" "" "a perfectly ordinary indexable conversation"
+  local f="$SESSION_INDEX_PROJECTS/-home-me-proj/zzz.jsonl"
+  python3 -c 'import json; print(json.dumps({"type": "user", "message": {"content": "hi"}}))' >"$f"
+  run python3 "$SCRIPT" build
+  # parsed = empty(1) + indexed(1) = 2, still under EMPTY_DRIFT_MIN_PARSED (3)
+  # — the ratio would already exceed EMPTY_DRIFT_RATIO (0.5) at 1/2, so this
+  # is exactly the case the floor exists to suppress: no warning yet.
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["indexed"]==1, d; assert d["empty"]==1, d; assert d["total"]==1, d; assert "warning" not in d, d'
+  run python3 "$SCRIPT" search "ordinary"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==1'
+}
+
+@test "a genuinely empty transcript file does not trip the zero-turn canary" {
+  # size 0 is a legitimate empty session (e.g. created but nothing written
+  # yet), not extraction drift — must not be counted in `empty`.
+  mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  : >"$SESSION_INDEX_PROJECTS/-home-me-proj/zzz.jsonl"
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["empty"]==0, d; assert d["failed"]==0, d'
+}
+
+@test "most parsed files coming back empty past the ratio and floor raises a warning" {
+  # Exercises EMPTY_DRIFT_RATIO/EMPTY_DRIFT_MIN_PARSED actually firing: 3
+  # noise-only files and 1 real one in the SAME build gives parsed=4 (over
+  # the floor of 3) and empty/parsed=0.75 (over the 0.5 ratio) — this is the
+  # "broken extractor" shape the canary exists to catch.
+  mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  write_session "-home-me-proj" "aaa" "" "a perfectly ordinary indexable conversation"
+  for n in bbb ccc ddd; do
+    python3 -c 'import json; print(json.dumps({"type": "user", "message": {"content": "hi"}}))' \
+      >"$SESSION_INDEX_PROJECTS/-home-me-proj/$n.jsonl"
+  done
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["empty"]==3, d; assert d["indexed"]==1, d; assert "warning" in d, d'
+}
+
+@test "a lone empty file in an incremental build does not trip the drift canary" {
+  # #68's "ratio collapses" case, phrased the other way round: three healthy
+  # sessions are already indexed and skip on the second build (skipped
+  # doesn't count toward `parsed`), leaving parsed = empty(1) + indexed(0) =
+  # 1 for THIS build — under the EMPTY_DRIFT_MIN_PARSED floor even though the
+  # ratio alone (1/1) would read as 100% drift.
+  write_session "-home-me-proj" "aaa" "" "first ordinary session"
+  write_session "-home-me-proj" "bbb" "" "second ordinary session"
+  write_session "-home-me-proj" "ccc" "" "third ordinary session"
+  python3 "$SCRIPT" build >/dev/null
+
+  python3 -c 'import json; print(json.dumps({"type": "user", "message": {"content": "hi"}}))' \
+    >"$SESSION_INDEX_PROJECTS/-home-me-proj/zzz.jsonl"
+  run python3 "$SCRIPT" build
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["empty"]==1, d; assert d["indexed"]==0, d; assert d["skipped"]==3, d; assert "warning" not in d, d'
 }
 
 @test "a prefix term still matches" {
@@ -849,4 +968,281 @@ import json,sys
 r = json.load(sys.stdin)
 assert r[0]["cwd"] is None, r[0]["cwd"]
 assert r[0]["project"] == "-home-me-my-project", r[0]["project"]'
+}
+
+# ─── per-window rows, positioned hits (#66) ─────────────────────────────────
+
+# write_long_session <project-dir> <session-id> <needle>
+#
+# A session long enough that the needle CANNOT be reached by taking the tail:
+# 40 filler exchanges, the needle in the middle, 40 more after it. This is the
+# shape the whole-session-per-row index got wrong — the match was real, the
+# excerpt shown was the end of the file.
+write_long_session() {
+  local project="$1" sid="$2" needle="$3"
+  mkdir -p "$SESSION_INDEX_PROJECTS/$project"
+  python3 - "$SESSION_INDEX_PROJECTS/$project/$sid.jsonl" "$needle" <<'PY'
+import json, sys
+path, needle = sys.argv[1], sys.argv[2]
+def rec(role, text):
+    return json.dumps({"type": role, "message": {"content": text}}) + "\n"
+with open(path, "w") as fh:
+    for i in range(40):
+        fh.write(rec("user", "filler question number %d about ordinary matters" % i))
+        fh.write(rec("assistant", "filler answer number %d about ordinary matters" % i))
+    fh.write(rec("user", "and what about the %s question" % needle))
+    fh.write(rec("assistant", "the %s is settled: we cache it and move on" % needle))
+    for i in range(40):
+        fh.write(rec("user", "trailing question number %d about other matters" % i))
+        fh.write(rec("assistant", "trailing answer number %d about other matters" % i))
+PY
+}
+
+@test "one session produces several FTS windows, not one row" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 -c "
+import sqlite3
+db = sqlite3.connect('$SESSION_INDEX_DB')
+print(db.execute('select count(*) from sessions_fts').fetchone()[0])
+print(db.execute('select count(*) from sessions').fetchone()[0])"
+  [ "$status" -eq 0 ]
+  local windows sessions
+  windows="$(echo "$output" | sed -n 1p)"
+  sessions="$(echo "$output" | sed -n 2p)"
+  [ "$sessions" -eq 1 ]
+  [ "$windows" -gt 1 ] || { echo "the session was stored as $windows row(s)"; return 1; }
+}
+
+@test "a single message over WINDOW_CHARS is split into several windows on whitespace" {
+  # #66: this is _chunk_text's own case, distinct from the test above — one
+  # oversized message, not many small ones accumulating past the char budget.
+  # A needle placed mid-message proves the split lands cleanly (whitespace,
+  # not mid-word).
+  #
+  # The pieces do NOT all share one line_offset: iter_windows appends the
+  # FIRST piece to whatever window is already open, so that row's offset is
+  # the window's first message (the preceding user turn, line 1) — only the
+  # OVERFLOW pieces close their own window and start the next one at the
+  # assistant record's own line (2). Verified against a live build: rows
+  # come back as (1, 'kick things off', 'filler...') and (2, '', 'filler...').
+  mkdir -p "$SESSION_INDEX_PROJECTS/-home-me-proj"
+  python3 - "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" <<'PY'
+import json, sys
+path = sys.argv[1]
+words = ["filler"] * 250  # comfortably over WINDOW_CHARS (1200) once joined
+words[125] = "quokkatron"
+text = " ".join(words)
+with open(path, "w") as fh:
+    fh.write(json.dumps({"type": "user", "message": {"content": "kick things off"}}) + "\n")
+    fh.write(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": text}]}}) + "\n")
+PY
+  python3 "$SCRIPT" build >/dev/null
+
+  run python3 -c "
+import sqlite3
+db = sqlite3.connect('$SESSION_INDEX_DB')
+rows = db.execute('select line_offset, user_text, assistant_text from sessions_fts').fetchall()
+assert len(rows) > 1, 'the oversized message was stored as %d window(s)' % len(rows)
+overflow = [r for r in rows if r[1] == '']
+assert overflow, 'no overflow row (empty user_text) was produced: %r' % (rows,)
+for off, user_text, asst_text in rows:
+    # No piece may start or end with a partial word cut by the char budget —
+    # every boundary in the source is whitespace, so a piece's edges are too.
+    assert asst_text == asst_text.strip(), repr(asst_text)
+for off, user_text, asst_text in overflow:
+    # Every OVERFLOW piece starts its own window at the assistant record's
+    # own transcript line — only the first piece (sharing a window with the
+    # preceding user turn) reports that turn's line instead.
+    assert off == 2, 'overflow row has line_offset %r, want 2: %r' % (off, rows)
+print('OK')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "OK" ]
+
+  run python3 "$SCRIPT" search "quokkatron"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+hits = json.load(sys.stdin)
+assert hits, "the needle chunk did not match at all"
+# word 125 of 250 falls inside the FIRST piece (the whitespace cut lands
+# around word ~171 given WINDOW_CHARS=1200 and ~7 chars/word), which shares
+# its window with the preceding user turn at line 1 — but the exact cut
+# point is an implementation detail this test does not pin down, so accept
+# either the shared-window row (1) or an overflow row (2).
+assert hits[0]["line_offset"] in (1, 2), hits[0]'
+}
+
+@test "a search hit carries the line offset of the window that matched" {
+  # Without this the reader knows a session matched but not WHERE, which is
+  # why it fell back to the tail of the file.
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "quokkatron"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+hits = json.load(sys.stdin)
+assert hits, "the needle window did not match at all"
+off = hits[0]["line_offset"]
+assert isinstance(off, int), repr(off)
+# The needle sits after 40 exchanges (80 lines) and before the trailing 80.
+assert 75 <= off <= 90, "offset %r does not point at the needle window" % (off,)
+assert hits[0]["roles"] in ("user", "assistant", "user+assistant"), hits[0]["roles"]'
+}
+
+@test "every window row of a rebuilt transcript is replaced, not appended" {
+  # A shorter rewrite must not leave windows behind pointing at line offsets
+  # that no longer exist.
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  write_session "-home-me-proj" "aaa" "" "a much shorter conversation about quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 -c "
+import sqlite3
+db = sqlite3.connect('$SESSION_INDEX_DB')
+print(max(r[0] for r in db.execute('select line_offset from sessions_fts')))"
+  [ "$status" -eq 0 ]
+  [ "$output" -le 4 ] || { echo "stale windows survived: max offset $output"; return 1; }
+}
+
+@test "context --around centres the excerpt on the offset" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  python3 "$SCRIPT" build >/dev/null
+  local offset
+  offset="$(python3 "$SCRIPT" search "quokkatron" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["line_offset"])')"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --around "$offset" --tail 6
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert len(m) == 6, m
+assert any("quokkatron" in x["text"] for x in m), [x["text"] for x in m]
+assert any("filler" in x["text"] for x in m), "nothing BEFORE the hit was included"
+assert not any("trailing question number 39" in x["text"] for x in m), "this is the tail, not the excerpt"'
+}
+
+@test "context --around near the top of a transcript still returns tail turns" {
+  # `before` is short here, and the shortfall must be taken from after rather
+  # than silently returning half an excerpt.
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --around 1 --tail 6
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert len(m) == 6, m
+assert m[0]["line"] == 1, m[0]'
+}
+
+@test "context --match finds the passage in a long session" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --match "quokkatron" --tail 6
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert any("quokkatron" in x["text"] for x in m), [x["text"] for x in m]'
+}
+
+@test "context --match with no hit falls back to the tail rather than erroring" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --match "zzzznothinghere" --tail 3
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert len(m) == 3, m
+assert "trailing" in m[-1]["text"], m[-1]'
+}
+
+@test "context --tail still returns the end of the session" {
+  # Backward compatibility: the flag the skill used before --around existed.
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --tail 2
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+assert len(m) == 2, m
+assert "trailing answer number 39" in m[-1]["text"], m[-1]'
+}
+
+@test "context rejects --around together with --match" {
+  write_long_session "-home-me-proj" "aaa" "quokkatron"
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --around 5 --match "quokkatron"
+  [ "$status" -ne 0 ]
+}
+
+# ─── project scoping (#69) ──────────────────────────────────────────────────
+
+@test "search --project scopes to one project by encoded directory name" {
+  # `--project=<value>`, not `--project <value>`: an encoded directory name
+  # begins with a hyphen, which argparse would otherwise read as a flag.
+  write_session "-home-me-alpha" "aaa" "/home/me/alpha" "the tokenizer decision we made here"
+  write_session "-home-me-beta"  "bbb" "/home/me/beta"  "the tokenizer decision we made here"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer"
+  echo "$output" | python3 -c 'import json,sys; assert len(json.load(sys.stdin))==2, "fixture is wrong: both must match unscoped"'
+  run python3 "$SCRIPT" search "tokenizer" --project=-home-me-alpha
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert len(r) == 1, r
+assert r[0]["project"] == "-home-me-alpha", r[0]["project"]'
+}
+
+@test "search --project accepts a real path as well as the encoded name" {
+  write_session "-home-me-alpha" "aaa" "/home/me/alpha" "the tokenizer decision we made here"
+  write_session "-home-me-beta"  "bbb" "/home/me/beta"  "the tokenizer decision we made here"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer" --project "/home/me/beta"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert len(r) == 1, r
+assert r[0]["session_id"] == "bbb", r[0]'
+}
+
+@test "--cwd is accepted as the name for the same scoping flag" {
+  write_session "-home-me-alpha" "aaa" "/home/me/alpha" "the tokenizer decision we made here"
+  write_session "-home-me-beta"  "bbb" "/home/me/beta"  "the tokenizer decision we made here"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer" --cwd "/home/me/alpha"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert len(r) == 1 and r[0]["session_id"] == "aaa", r'
+}
+
+@test "a project scope that matches nothing returns an empty list, not an error" {
+  write_session "-home-me-alpha" "aaa" "/home/me/alpha" "the tokenizer decision we made here"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer" --project=-home-me-nowhere
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c 'import json,sys; assert json.load(sys.stdin) == []'
+}
+
+@test "scoping applies before --limit, not after" {
+  # Filtering the result list afterwards returns fewer rows than asked for
+  # whenever the unscoped top-N came from elsewhere.
+  local i
+  for i in $(seq 1 5); do
+    write_session "-home-me-beta" "b$i" "/home/me/beta" "tokenizer discussion number $i in beta"
+  done
+  write_session "-home-me-alpha" "a1" "/home/me/alpha" "tokenizer discussion number one in alpha"
+  write_session "-home-me-alpha" "a2" "/home/me/alpha" "tokenizer discussion number two in alpha"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "tokenizer" --project=-home-me-alpha --limit 2
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert len(r) == 2, "scope was applied after the limit: %r" % (r,)
+assert all(h["project"] == "-home-me-alpha" for h in r), r'
 }

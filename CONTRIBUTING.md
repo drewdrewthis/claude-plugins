@@ -1,7 +1,8 @@
 # Contributing
 
 This repo ships **machinery only** — plugins installed into agent sessions
-(`procedures`, `about-my-person`, `take-note`). Generated knowledge (records,
+(`about-my-person`, `delegation`, `heartbeats`, `just-recipes`, `procedures`,
+`recall`, `take-note`). Generated knowledge (records,
 notes, ABOUT_MY_PERSON.md) lives on the host under `~/.claude/references/**`
 or `~/workspace/**`, never in this repo. If a change would write a record
 file here, it's in the wrong place.
@@ -25,13 +26,19 @@ this doc to restate them:
 ## Vendoring rule (`plugins/procedures`)
 
 The procedures plugin's machinery (skills, `procedure-scout`/`work-reviewer`
-agents, gate hooks + lib, `query-records.sh`, `log-record.sh`, linter,
-templates) is vendored from `orchard-codex@develop-sweatshop`.
+agents, gate hooks + lib, the two-stage retrieval pipeline, `log-record.sh`,
+linter, templates) is vendored from `orchard-codex@develop-sweatshop`.
 
-- Anything that isn't upstream must be marked `# PLUGIN ADAPTATION: <why>` at
-  the point of divergence — the plugin-hosting context (data-root defaults,
-  `${CLAUDE_SKILL_DIR}` script paths) and harness dispatch-path differences
-  (the fork-skill `model:` pin) are the only legitimate reasons to diverge.
+- Anything that isn't upstream must be marked `PLUGIN ADAPTATION: <why>` at
+  the point of divergence, in whatever comment form the file's format allows
+  (`#` in shell, YAML, and agent/skill frontmatter; an HTML comment in a
+  Markdown body; JSON has no comment syntax, so a manifest divergence is
+  marked in the README class list alone) — the legitimate classes are the
+  plugin-hosting context (data-root defaults, `${CLAUDE_SKILL_DIR}` script paths), harness
+  dispatch-path differences (the fork-skill `model:` pin), machinery with no
+  upstream counterpart (sourced here, e.g. the retrieval pipeline, the
+  evolve-sweep detector), and owner-directed behavioral divergence from
+  upstream (e.g. issue #130's removal of evolution dispatch from am-i-done).
   See `README.md`'s documented adaptation classes for the pattern; adding a
   divergence means adding its class there in the same PR.
 - Everything else stays byte-close to upstream. A re-sync from
@@ -42,6 +49,7 @@ templates) is vendored from `orchard-codex@develop-sweatshop`.
 
 ```
 cd plugins/procedures && bats hooks/tests
+cd plugins/heartbeats && bats scripts/tests
 ```
 
 Must be green before any PR merges. New hook or script behavior — including

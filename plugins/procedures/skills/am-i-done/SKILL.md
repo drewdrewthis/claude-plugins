@@ -7,8 +7,16 @@ agent: work-reviewer
 # PLUGIN ADAPTATION: fork skills ignore their agent's model: — must match
 # agents/work-reviewer.md. See README "Fork-skill model pin".
 model: sonnet
+# PLUGIN ADAPTATION: diverged from upstream 2026-08-25 (issue #130): allowed
+# action 2 (one evolution dispatch to procedures:procedure-evolver) removed —
+# record evolution fires from the evolve-sweep Stop hook instead. Load-bearing:
+# a re-sync must not resurrect the dispatch the shape guard now denies.
 background: false
 argument-hint: "<the am-i-done report>"
+# PLUGIN ADAPTATION: the fork may inherit the parent toolset; this key is a
+# best-effort second layer. The reviewer needs only Bash (one pipeline run);
+# everything else is judgment over pasted text.
+disallowed-tools: Read, Grep, Glob, Write, Edit, NotebookEdit
 ---
 
 Review this am-i-done report and return findings.
@@ -20,8 +28,19 @@ $ARGUMENTS
 A claim without its command and output is "no evidence shown" — not something to
 go and check yourself.
 
-Route the report's "Procedures followed" section per your *Read "Procedures
-followed" as evolution input* step.
+Your ONE allowed action beyond reading the report (the shape guard enforces
+the budget; see agents/work-reviewer.md for the full contract):
+
+1. ONE corpus verification lookup, only when a finding hinges on what a record
+   says:
+
+   ```bash
+   bash "${CLAUDE_SKILL_DIR}/../../scripts/how-do-i.sh" --question '<the question the finding hinges on>'
+   ```
+
+Everything else is judged from the report alone. Record evolution is NOT part
+of this review — it fires from the evolve-sweep hook into
+procedures:procedure-evolver.
 
 If the report is empty or is not an am-i-done report, say so and return nothing
 else.

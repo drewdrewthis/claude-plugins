@@ -1,11 +1,13 @@
+<!-- Frontmatter mirrors templates/_frontmatter.partial.md (schema SSOT, itself mirroring specs/RECORD_FRONTMATTER.md) — edit there first, then here. -->
 ---
 id: proc.<category>.<name>
 kind: procedure
 date: YYYY-MM-DD
-keywords: [<the words someone would grep to find this — never empty>]
+keywords: [<named entities only — tools, commands, repos this procedure touches — never empty>]
 links: { procedures: [], principles: [], decisions: [], solutions: [] }
 mitigates: [<fm.id of any failure-mode these steps treat — omit if none>]
 status: active
+description: <One line, ~120 chars: what this procedure does and to what — the mechanism, not "steps for X".>
 ---
 
 # <name>

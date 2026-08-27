@@ -9,7 +9,7 @@ status: active
 
 # /create-reference
 
-Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.md` for top-level files). Consumed by skills and agents that link to it for durable knowledge. Discoverable via `query-records.sh` and keyword grep.
+Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.md` for top-level files). Consumed by skills and agents that link to it for durable knowledge. Discoverable via `/how-do-i`'s store-wide index and keyword grep.
 
 # Triggers
 
@@ -62,7 +62,7 @@ Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.
 
    Body is free-form. Use `## ` section headers for scanability. Lead with the conclusion or most-referenced fact. Prefer tables for 2+-dimensional content.
 
-4. **No index row.** No index files are maintained anywhere in the stores — do NOT create or append to one. Discovery is the record's frontmatter plus `scripts/query-records.sh` at the plugin root (the invoking skill's prompt carries the resolved path); the procedure-scout compiles any digest it needs per query.
+4. **No index row.** No index files are maintained anywhere in the stores — do NOT create or append to one. Discovery is the record's frontmatter (id, description, keywords) plus the `/how-do-i` index, which `build-record-index.sh` rebuilds from the stores on every query (the invoking skill's prompt carries the resolved path).
 
 5. Confirm the file path and report. Resume the interrupted conversation.
 

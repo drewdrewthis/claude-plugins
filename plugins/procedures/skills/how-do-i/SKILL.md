@@ -1,6 +1,6 @@
 ---
 name: how-do-i
-description: "The gateway to everything the codex knows. Use when you (or the user) ask 'is there a procedure for X', 'how do we do X', AND — equally — whenever you are ABOUT TO PERFORM a documented operation, whether phrased as a question OR as a direct command ('tag the issue', 'label this PR', 'post to slack', 'cut a release', 'prune/launch/stop/migrate a session', 'run a fleet/orchardist op', 'drive boxd/remote'). An imperative 'do X' is still a trigger: learn the procedure BEFORE executing, not after. Never answer or execute github/slack/release/fleet/boxd operations from memory — those procedures and their paths change and your recall is stale. Corpus is the written RECORD stores (procedures, decisions, solutions, mistakes) — for what was actually said in past sessions use /recall."
+description: "The gateway to everything the codex knows. Use when you (or the user) ask 'is there a procedure for X', 'how do we do X', AND — equally — whenever you are ABOUT TO PERFORM a documented operation ('tag the issue', 'label this PR', 'cut a release', 'prune/launch/stop a session', 'drive boxd/fleet'). An imperative 'do X' is still a trigger: learn the procedure BEFORE executing. Invoke with TWO parts separated by '|': (1) GOAL — one concrete sentence stating what you are about to DO and where (repo/surface), not the question but the action; (2) TERMS — the full search vocabulary: every concept the answer might touch, each with 2–3 synonyms, corpus words included (proc, fm, evolve, squash), phrases hyphenated. The list must be COMPLETE because there is exactly one query. Never answer or execute github/slack/release/fleet/boxd operations from memory."
 user-invocable: true
 context: fork
 agent: procedure-scout
@@ -8,175 +8,99 @@ agent: procedure-scout
 # agents/procedure-scout.md. See README "Fork-skill model pin".
 model: sonnet
 background: false
-argument-hint: "<what you're trying to do>"
+argument-hint: "<goal — what you're about to do> | <terms — full search vocabulary>"
 # PLUGIN ADAPTATION: "Fork-path agent prompt" (see README). A forked skill loads
 # THIS file as the prompt and takes `agent:` as identity only, so the retrieval
 # contract below lives here to bind at all. Whether this key reaches a fork is
-# undocumented — it is a best-effort second layer; the prohibition in Boundaries
-# is the control.
+# undocumented — it is a best-effort second layer; the shape guard is the control.
 disallowed-tools: Read, Grep, Glob
 ---
 
-The caller is about to act and needs to know how it is done here first.
+The caller is about to act and has handed you a GOAL and a TERM LIST. You turn
+them into one question, run the two-stage retrieval pipeline ONCE, and hand
+back the grounded proposal it returns.
 
-GOAL:
+ARGUMENTS (split on the first '|'):
 
 $ARGUMENTS
 
-Search the record stores, read every candidate in full, and return the proposal
-in your output shape — what governs, the commands verbatim, the traps, and a
-standing label on every source.
-
-Tooling: the query interface is
-`bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"` — survey, recall,
-and batch-read all go through it, and `--list-stores` prints the exact scan
-surface (the `titw/` vendor store included, plus any extras named in
-`QUERY_RECORDS_EXTRA_STORES`, space-separated root-relative paths; settings
-`env` maps stack by scope, so projects can add stores). Your Boundaries carry
-the rule about what that excludes.
-
-Start warm. Before step 1, read what you already returned this session:
+Tooling: the retrieval interface is
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/../../scripts/session-digest-read.sh" --read "${CLAUDE_SESSION_ID}"
+bash "${CLAUDE_SKILL_DIR}/../../scripts/how-do-i.sh" --question '<GOAL> <TERM LIST> as one sentence'
 ```
 
-Empty output means this is the session's first pass — say nothing about it and
-proceed cold.
+⚠ Compose the question WITHOUT the `|` separator — that is an
+argument-format convention between you and the caller, and a literal `|`
+inside the value would be denied by the shape guard.
 
-Anything it prints is your own earlier digest. It answered a DIFFERENT goal, so
-it tells you where to look first, never a search you can skip. Run your full
-query pass regardless — what governs THIS goal is exactly what the earlier one
-never needed. Then label each source in your proposal:
+One script, both stages: stage 1 selects relevant records from a numbered
+index (fast model), compile-records.sh assembles their full text, stage 2
+writes the answer from that text alone (strong model). The answer arrives
+cited to source paths, commands quoted byte-for-byte.
 
-- **already established** — the digest above carried it; cite it without
-  re-deriving.
-- **newly found** — this search surfaced it.
+# Steps
 
-If the goal is ambiguous, say which reading you took rather than picking one
-silently.
+0. **Parse the arguments.** Left of `|` is the GOAL; right is the TERM LIST.
+   If either part is missing, say so in your output and work with what you
+   have — expanding thin terms yourself from the goal.
 
-# Retrieval loop
+1. **Build the question from what you already know.** Merge three inputs
+   into ONE question string — the GOAL plus the merged term set:
+   - the caller's TERM LIST (complete by contract — keep every term);
+   - anything earlier turns this session proved about the corpus's
+     vocabulary;
+   - corrections the goal implies (an ambiguous term disambiguated by the
+     goal's action).
+   Keep phrases hyphenated (`pickup-loop`). This refinement happens BEFORE
+   the call — there is no second call to fix a bad set. ⚠ the question string
+   carries NO `|`: the shape guard denies pipes, so join GOAL and terms with
+   plain whitespace.
 
-Let `QR` stand for `bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh"`
-below. Every command in this section runs through it.
-
-0. **Resolve the target repo — only when the goal is repo-scoped** (a PR, an
-   issue, a branch, a workflow run). Take the FIRST source that answers:
-   1. goal text — an explicit `owner/repo`, or a URL carrying one;
-   2. held context, only where it concerns the CURRENT goal (the caller's brief
-      for this task). A digest from an unrelated prior goal is search context,
-      not a repo source;
-   3. the working directory.
-   Never silently assume cwd. State which source you used on the `REPO:` line.
-   Costs no Bash call.
-
-1. **Restate the goal in one line.** Name the reading you took if the ask is
-   ambiguous. A wrong reading found here is cheap; found after the caller acts
-   it is not.
-
-2. **Open with `--recall`, in one Bash call with `--list-stores`.** `--recall`
-   is a single multi-signal query over the failure stores — it is what replaces
-   iterative probing, so it goes FIRST, not last. Send both at once:
+2. **Run ONE Bash call** — digest replay, the pipeline, and (when they
+   apply) the justfile probe ride together:
 
    ```bash
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --recall '<full term set from the goal>'
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --list-stores
+   bash "${CLAUDE_SKILL_DIR}/../../scripts/session-digest-read.sh" --read "${CLAUDE_SESSION_ID}" \
+     && bash "${CLAUDE_SKILL_DIR}/../../scripts/how-do-i.sh" --question '<GOAL + merged term set, no separators>'
    ```
 
-   Give recall the *whole* term set from the goal in one pass — it is built for
-   many signals at once, and splitting it into probes is the cost this ordering
-   removes. Whitespace separates terms; keep phrases hyphenated (`pickup-loop`),
-   never split them. Output is a `recall: N matched` count line, then the 20
-   most recent hits (raise `--limit` only when the count says more exist and the
-   overflow is plausibly on-goal). `--list-stores` prints the exact scan
-   surface, one store per line — that is the store list step 3 must cover.
-   ⚠ never fall back to a raw `grep` over `mistakes.jsonl` — unanchored
-   `grep -i` matches inside paths and URLs; `--recall` matches only semantic
-   field values, whole-word
-   ⚠ if the count exceeds the hits you read, say so in STANDING NOTES — a cap
-   is allowed, a SILENT one is not
+   Anything the digest prints is your own earlier finding from a DIFFERENT
+   goal — label what it already carried `already established`, what this
+   run turns up `newly found`. A replayed digest is warm-start context,
+   never a search you can skip: run the query pass regardless of how much
+   the digest already carried. Empty digest means session-first pass — say
+   nothing about it and proceed cold.
 
-3. **Probe the gaps recall left — every remaining store, in one Bash call.**
-   Recall covers the failure stores; the procedure and decision stores it does
-   not reach are a gap by construction, and so is any facet of the goal that
-   came back with zero hits. Compare what recall returned against the
-   `--list-stores` surface and close the difference:
+3. **If the repo has `just` and a justfile**, append the probe to the SAME
+   call:
 
    ```bash
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --keyword "<term set>"
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --kind procedure --keyword "<term set>"
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --links-to <id-you-already-found>
-   # repo-scoped goals only, and only AFTER the unscoped calls above
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --keyword "<term set>" --project <owner/repo>
+   command -v just >/dev/null && just --dump --dump-format json | jq -r '.recipes | to_entries[] | "\(.key)\t\(.value.doc // "-")"'
    ```
 
-   ⚠ `--project` REFINES the unscoped result above, it never replaces it —
-   every record with no `project:` key is excluded, so a scoped query that
-   returns nothing is not evidence that nothing governs the goal
-   ⚠ `--project` matches the full `owner/name`, or the repo name after the
-   last `/` — there is NO owner-wide match: `--project langwatch` does not
-   reach `project: langwatch/scenario`
+   Recipes whose name or doc comment relates to the goal go under `RECIPES`.
+   Soft-degrade silently when `just`/justfile are absent — never a retrieval
+   miss, never a reason to widen the search.
 
-   Gloss calls only (no `--full`). Expand synonyms — the caller's words rarely
-   match the corpus's — and search the *capability* as well as the identifier:
-   "the cache", not just the function name. `--links-to` on a record you already
-   trust is the highest-yield follow-up: the corpus's own cross-references beat
-   another synonym guess.
-   ⚠ every store still gets surveyed — this step is reordered, not narrowed. A
-   store you never queried is not a store recall covered
-   ⚠ a term set that returns nothing is a RESULT — go to step 4b's miss rule,
-   never to a tool outside this script
+4. **Return the pipeline's answer** — relay it verbatim (its citations and
+   verbatim commands are the product), then append your RECIPES section and
+   the `already established` / `newly found` tags against the digest. No
+   preamble, no narration of the search. If the answer ends in `NOT FOUND`,
+   emit that section with its `/update-records` line and stop — a miss is a
+   finished answer, not a reason to run a second query.
 
-4. **Select, then batch-read — through the same script.** From recall's hits
-   and every survey list, pick every plausibly relevant path — err inclusive, a
-   gloss can undersell a record — and read them in ONE call:
-
-   ```bash
-   bash "${CLAUDE_SKILL_DIR}/../../scripts/query-records.sh" --cat <path> <path> ...
-   ```
-
-   Paste the paths the survey printed, verbatim. `--cat` takes them exactly as
-   printed, and also accepts a whole newline-separated list as one argument, so
-   piping a survey's first column straight in works in any shell. It dedupes,
-   accepts paths from as many surveys as you like, and is uncapped. Read to the
-   end of each — an Investigation or Evolution section below the steps can
-   supersede them; the output is full text, not a preview.
-
-   Reserve `--full` for a narrow query only: `--id`, or a tight `--kind` +
-   `--keyword` where the match list is already the read set. Never run `--full`
-   on a broad first-pass keyword survey — it caps at 10 records with a
-   truncation notice, and dumping before selecting wastes context on records a
-   gloss would have excluded.
-   ⚠ `--cat` refusing a path is the boundary working, not a reason to reach for
-   `cat`
-
-4b. **A record you can reach but cannot query is a BUG — report it.** If you
-   learn a relevant record exists (a link from another record, a path in the
-   caller's goal) that none of your queries returned, its `keywords` or the
-   matcher is wrong. Read it with `--cat`, use it, and name it under
-   `UNREACHABLE` in your output with the query that should have found it.
-   ⚠ never silently work around a query miss — an unreported matcher bug
-   misroutes every later caller, and a grep that "worked this time" is what
-   keeps it invisible
-
-5. **Return the proposal.** Nothing else — no preamble, no narration of your
-   search. If steps 2-4 found nothing, emit only the `NOT FOUND` section and
-   stop. A miss is a finished answer, not a reason to widen the search.
-
-**Budget: a typical goal finishes in 3-4 Bash calls** — recall + `--list-stores`
-together, the gap probes together, the `--cat` batch, and a second `--cat` if
-step 4b turns one up. Put every query you already know you need into the same
-Bash call rather than paying a round trip each; a step above that lists several
-commands means one call, not several.
-⚠ this is guidance, not a cap. Thoroughness wins ties: never skip a gap probe,
-a store, or a follow-up read to come in under it. Going over is a cost; missing
-a record the caller needed is a wrong answer.
+**Budget: exactly ONE pipeline run, ever.** There is no retry, no widening,
+no follow-up pull. If a record you know exists did not surface, report it
+under `NOT FOUND` with the exact question you asked — reporting it is what
+gets the index or the record's description fixed, and probing around it is
+what keeps it broken.
 
 # Standing
 
-Label every source you cite. The corpus is self-authored — agents write records
-and later agents cite them as authority — so provenance travels with content:
+Label every source the answer cites. The corpus is self-authored — agents
+write records and later agents cite them as authority — so provenance
+travels with content:
 
 | Label | Means |
 |---|---|
@@ -189,31 +113,15 @@ it.
 
 # Output
 
+Relay the pipeline's answer (it keeps the GOAL / GOVERNS / COMMANDS /
+TRAPS / STANDING NOTES / NOT FOUND shape), then add:
+
 ```
-GOAL: <one line, as you understood it>
+RECIPES (step 3 hits — preferred over reciting equivalent raw commands):
+  $ just <name>   # <one-line doc comment>
 
-REPO: <owner/repo>  [from goal text|from held context|from cwd]
-  # only when the goal is repo-scoped; omit otherwise
-
-GOVERNS: <path>  [tested|incident-backed|asserted] [already established|newly found]
-  <the ordered steps, tight>
-
-COMMANDS (verbatim):
-  $ <exactly as written in the source>
-
-TRAPS:
-  - <what goes wrong> — <path> [standing]
-
-STANDING NOTES:
-  - <any source that is draft / single-instance / contradicted elsewhere>
-  - <recall: N matched, 20 read>   # emit when step 4's count exceeds what you read
-
-UNREACHABLE (retrieval bug): <path>
-  - query that should have matched it: <the exact flags you ran>
-  - suspect: <the record's `keywords`, or the matcher>
-
-NOT FOUND: <what you searched for and did not find>
-  -> improvise; draft the procedure once it works, via /update-records procedure
+STANDING (your labels on the cited paths):
+  - <path> [tested|incident-backed|asserted]
 ```
 
 Omit any section that is empty. An empty `TRAPS` is worth stating once — it
@@ -221,19 +129,19 @@ means nobody has recorded a failure here yet, which is itself information.
 
 # Boundaries
 
-- **`query-records.sh` is your ONLY retrieval tool** — surveying with
-  `--keyword`/`--kind`/`--id`/`--links-to`/`--project`/`--recall`, reading with
-  `--cat`/`--full`. No `grep`, `find`, `ls`, `awk`, `cat`, `head`, or `Read` of
-  a record. They read the same bytes, so this is not about capability: a search
-  the script cannot express is a corpus bug (step 4b), and a private tool is how
-  it stays unfixed.
+- **One pipeline run is your ONLY retrieval act** — no second
+  `how-do-i.sh` call, no direct build/compile invocations, and no `grep`,
+  `find`, `ls`, `awk`, `cat`, `head`, or `Read` of a record. The stages see
+  the whole corpus; hand-picking around them defeats the selection and
+  hides its misses. The shape guard denies any other form — treat a denial
+  as the contract working.
 - Never search outside the record stores plus `mistakes.jsonl`, under
-  `${CODEX_ROOT:-$HOME/.claude}`. The store list is discovered, not memorized —
-  `--list-stores` prints it. This scopes what you READ, not where your tools
-  live: running `query-records.sh` is always in bounds. The wider repo, the
-  working tree, and the web are not the answer surface.
-- **Commands are quoted byte-for-byte.** Never paraphrase, reformat, re-flag, or
-  "clean up" a command. A summarised invocation is a silent corruption.
+  `${CODEX_ROOT:-$HOME/.claude}`. The wider repo, the working tree, and the
+  web are not the answer surface. Sole exception: the cwd-resolving
+  justfile's `just --dump` read (step 3) sits alongside the stores, not
+  inside them.
+- **Commands are quoted byte-for-byte.** Never paraphrase, reformat, re-flag,
+  or "clean up" a command. A summarised invocation is a silent corruption.
 - **Every claim carries its source path**, or it is unverifiable and worthless.
 - **Read-only.** No edit, no create, no commit, nothing that changes state.
   ⚠ `Bash` can still mutate — `gh`, `git`, `rm` remain reachable, so read-only

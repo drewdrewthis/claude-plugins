@@ -5,6 +5,28 @@ description: Use when running project commands/tasks in a repo that has a justfi
 
 # just-recipes
 
+## Enforcement model
+
+- A PreToolUse hook denies raw Bash wherever a justfile resolves from the project dir. Discover recipes with `just --list`; escape hatch: `just wrap "<cmd>"` — runs the command under timeout/output-cap guardrails and logs it to `$CODEX_ROOT/state/wrap.log`.
+  ⚠ fm.just-wrap-unwired — bare `just wrap` errors ("no such recipe") in any project whose own justfile lacks `wrap`: mounted module recipes stay namespaced and `set fallback` walks parent directories, not modules (verified on just 1.58.0). Always-resolving form: `just --justfile ~/.claude/just/justfile -d . wrap "<cmd>"` (`-d .` pins execution to the current dir). After the wiring below, `just global::wrap "<cmd>"` also works.
+- One-time project wiring — add to the project justfile to expose every global recipe as `global::<recipe>`:
+
+  ```just
+  mod global '~/.claude/just/justfile'
+  set fallback
+  ```
+
+- Parsing: commands are trimmed of surrounding whitespace, then segmented on shell control operators (`&&`, `||`, `;;`, `;`, `|`, newlines — quoted or backslash-escaped operators don't split). A lone segment passes when its first word is `just` or a read-only verb (`cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`); a multi-segment command passes only when EVERY segment is a `just` invocation. Command substitution (`$(...)`, backticks) is denied wherever the hook enforces.
+- Kill switch: `JUST_RECIPES_ENFORCE=off` (or `0`) disables enforcement. Repos without a resolvable justfile and machines without `just` pass everything through.
+
+## Habit loop
+
+Friction from a denied/wrapped command → write a script → add a recipe calling it, with a doc comment → discoverable via `just --list`. `just wrap-report` summarizes wrap.log — treat it as the recipe backlog.
+
+## Flat-recipe convention
+
+One kebab-case recipe per intent, flat namespace. Chooser stubs (e.g. `just log` printing which log-* recipes exist) are cheap — add them freely.
+
 ## Steps
 
 1. **Discover before composing.** Run `just --list` (and `just --list --list-submodules` if the justfile mounts modules) before writing any ad hoc shell command. If a listed recipe covers the intent, use it instead of assembling the equivalent shell yourself.

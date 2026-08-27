@@ -1,14 +1,15 @@
+<!-- Frontmatter mirrors templates/_frontmatter.partial.md (schema SSOT, itself mirroring specs/RECORD_FRONTMATTER.md) — edit there first, then here. -->
 ---
 id: std.<slug>
 kind: standard
 date: YYYY-MM-DD
-keywords: [<grep surface — never empty>]
+keywords: [<named entities only — tools, commands, repos this standard measures — never empty>]
 links: { standards: [], policies: [], procedures: [], decisions: [] }
 enforced_by: <path to the lint / reviewer / CI check that measures the bar, or `none-aspirational`>
 mitigates: [<fm.id of any failure-mode this bar treats — omit if none>]
 status: active
+description: <One line, ~120 chars: what class of work item this measures, and what the bar is.>
 title: <Title Case Name>
-purpose: <One line: what class of work item this measures, and what the bar is.>
 ---
 
 # <Title>

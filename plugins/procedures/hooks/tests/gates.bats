@@ -141,7 +141,12 @@ assistant_tool() {
   # argues with the invariant instead of clearing it. Pin the reason, not just
   # the instruction, or a later trim quietly restores the bare version.
   [[ "$output" == *"does not carry over"* ]]
-  [[ "$output" == *"bounded"* ]]
+  # The bounded-retrieval clause, post one-query redesign: the old "pass is
+  # bounded — 3-4 Bash calls" wording contradicted the guard's one-call budget,
+  # so the message now states the tighter bound directly ("exactly one query",
+  # which scout-retrieval.bats also pins on this gate). Same semantic, pinned
+  # where it now lives.
+  [[ "$output" == *"there is exactly one query"* ]]
 }
 
 @test "how-do-i-gate: a skill run in an EARLIER turn does not release this one" {
@@ -184,6 +189,14 @@ assistant_tool() {
   start_turn
   P="{\"session_id\":\"$SID\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/h/references/procedures/a/PROCEDURE.md\"}}"
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ -z "$output" ]
+}
+
+@test "how-do-i-gate: WebFetch is allowed while the gate is armed" {
+  start_turn
+  P="{\"session_id\":\"$SID\",\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"https://example.com\"}}"
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$P' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
 

@@ -156,6 +156,36 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
+@test "allowlist: WebFetch is read-only discovery and allowed" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path WebFetch '{"tool_input":{"url":"https://example.com"}}'
+  [ "$status" -eq 0 ]
+}
+
+@test "allowlist: WebSearch is read-only discovery and allowed" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path WebSearch '{"tool_input":{"query":"x"}}'
+  [ "$status" -eq 0 ]
+}
+
+@test "allowlist: WebFetch/WebSearch are unconditional — payload not inspected" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path WebFetch ''
+  [ "$status" -eq 0 ]
+  run gal_is_compliance_path WebSearch '{}'
+  [ "$status" -eq 0 ]
+}
+
+@test "allowlist: unknown tools still fall through to deny" {
+  source "$LIB/gate-allowlist.sh"
+  run gal_is_compliance_path Edit '{"tool_input":{"file_path":"/tmp/x"}}'
+  [ "$status" -eq 1 ]
+  run gal_is_compliance_path Write '{"tool_input":{"file_path":"/tmp/x"}}'
+  [ "$status" -eq 1 ]
+  run gal_is_compliance_path mcp__x__y '{}'
+  [ "$status" -eq 1 ]
+}
+
 # ---------- gate-allowlist: gate on ACT, not on LOOK (2026-08-09) ----------
 #
 # Six confirmed misfires on 2026-08-09: pure reads denied because the old
