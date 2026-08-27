@@ -1,0 +1,8 @@
+{
+  "name": "worklog",
+  "version": "0.1.0",
+  "description": "One JSONL line per turn telling the turn's story — requests, outcomes, mistakes — each entry anchored to transcript uuids with a quote sliced out of the cited line's own body, never the model's retyping. A Stop hook that never blocks: it detaches, claims the turn atomically, and fails open with a recorded reason.",
+  "author": {
+    "name": "Drü"
+  }
+}

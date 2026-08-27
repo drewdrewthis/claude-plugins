@@ -20,6 +20,13 @@
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     },
+    "plugins/worklog": {
+      "release-type": "simple",
+      "component": "worklog",
+      "extra-files": [
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
+    },
     "plugins/delegation": {
       "release-type": "simple",
       "component": "delegation",
