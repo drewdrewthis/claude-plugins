@@ -32,6 +32,11 @@
 # launch one (no temp file for the payload, an unwritable $TMPDIR). Kept
 # distinct from store-unwritable: the store is not touched on that path, and
 # naming it points whoever reads the log at the wrong directory.
+# no-timeout — a caller that bounds a subprocess with a wall-clock ceiling found
+# no way to enforce one (no `timeout`, `gtimeout`, or `perl`) and ran it
+# uncapped rather than skip it. NOT a failure: the work still happened and the
+# row is complete; the note only says this turn's model call was not time-boxed,
+# so a rare hang here is not later mistaken for a code regression.
 # non-object-payload — stdin parsed, but the top-level value is not an envelope
 # (a bare string, an array, a number). Kept distinct from malformed-payload:
 # that one says the transport is broken, this one says something is plumbing
@@ -103,6 +108,7 @@ gate_failopen() {
         store-unwritable|payload-shape-unrecognized|malformed-payload) ;;
         non-object-payload|skill-unresolvable) ;;
         transcript-unreadable|judgment-unavailable|detach-failed) ;;
+        no-timeout) ;;
         *) why="unrecognized:${why}" ;;
     esac
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \
