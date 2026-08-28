@@ -29,6 +29,9 @@
 #   2. Stage 1 (select): fast model + full index (cold) or a resumed session
 #      (warm) -> JSON array of selected record numbers.
 #   3. compile-records.sh turns the selected numbers into record text.
+#      An EMPTY selection short-circuits here: stage 1 saying "nothing is
+#      relevant" is an answer, so the run prints NOT FOUND and exits 0
+#      rather than handing compile-records.sh a selection it must reject.
 #   4. Stage 2 (answer): strong model + compiled records -> the answer.
 #
 # CACHING: priming (cold) call's session_id is captured from the response
@@ -54,10 +57,14 @@
 #                       Default: $XDG_CACHE_HOME/how-do-i-index (or ~/.cache/how-do-i-index).
 #
 # Output:
-#   Default    the stage-2 answer on stdout, nothing else.
+#   Default    the stage-2 answer on stdout, nothing else. On an empty
+#              selection, a NOT FOUND message instead (exit 0).
 #   --json     a JSON object: answer, selected_numbers, resolved_ids,
 #              stages.{select,answer} (model, mode, attempts, wall_ms,
 #              cli_duration_ms, api_ms, usage incl. cache read/creation).
+#              On an empty selection it additionally carries not_found:true,
+#              with empty selection arrays and stages.answer null (stage 2
+#              never ran). not_found is ABSENT on every other outcome.
 #   --timing   a stderr breakdown per stage/attempt: wall/boot/api/cache_*,
 #              always labeled mode=cold|warm|n/a. No-op under --dry-run
 #              (nothing was timed).
@@ -68,7 +75,8 @@
 #              live selection, which --dry-run never performs.
 #
 # Exit codes:
-#   0  succeeded (answer printed, or --dry-run printed its prompts)
+#   0  succeeded (answer printed, NOT FOUND printed on an empty selection,
+#      or --dry-run printed its prompts)
 #   1  fatal runtime error (binary/script not found, a stage failed or was
 #      unparseable after retry, empty output, compile-records.sh failed)
 #   2  usage error: unknown/missing/conflicting flags
@@ -131,7 +139,8 @@ Options:
   --answer-model NAME  model for stage 2. Default: sonnet.
   --expand-links       passed through to compile-records.sh.
   --json               print a JSON object instead of plain text — see
-                      the script header for the exact shape.
+                      the script header for the exact shape. An empty
+                      selection adds not_found:true and exits 0.
   --dry-run            build and print the prompt(s) that would be sent;
                       make no model calls. Requires an existing index.txt
                       (never builds one). Stage 2's prompt is a template.
@@ -200,10 +209,17 @@ resp_usage_field() {
 # --json-schema's structured_output when present; otherwise strips a
 # fenced code block (```json ... ``` or bare ```...```) from .result and
 # parses what remains as either a bare JSON array of numbers or an object
-# with a "selected" array (mirrors STAGE1_SCHEMA's shape). A reply that
-# doesn't reduce to one of those (e.g. prose) yields ok:false,
-# reason:"unparseable" — the caller retries this specific reason once. An
-# is_error response yields ok:false, reason:"is_error" — never retried.
+# with a "selected" array (mirrors STAGE1_SCHEMA's shape). Failing both,
+# it scavenges the FIRST well-formed JSON array of integers found anywhere
+# in the reply: the selector runs on a fast model told to emit only the
+# array, which in practice sometimes appends invented explanation after
+# it, and requiring the WHOLE reply to be bare JSON turned those replies
+# into spurious retry-then-die failures. Scavenging is deliberately LAST
+# so it can never pre-empt the object path on a reply that legitimately
+# carries {"selected": [...]}. A reply reducing to none of those (prose
+# with no array literal) yields ok:false, reason:"unparseable" — the
+# caller retries this specific reason once. An is_error response yields
+# ok:false, reason:"is_error" — never retried.
 parse_selection() {
     jq -c '
         if (.is_error == true) then
@@ -230,7 +246,22 @@ parse_selection() {
                     and (($parsed.selected) | type) == "array"
                     and (($parsed.selected) | all(type == "number")))
               then {ok: true, reason: "text-object", numbers: $parsed.selected}
-              else {ok: false, reason: "unparseable", numbers: null}
+              else
+                # Scavenge the first "[...]" holding only integers/commas/
+                # whitespace. The pattern admits nothing else, so prose like
+                # "[see record 3]" cannot match and stays unparseable.
+                # match/1 emits an EMPTY STREAM (not an error) when nothing
+                # matches, which would collapse this whole expression to no
+                # output at all — hence the array-wrap before indexing.
+                ($stripped
+                  | (try [match("\\[\\s*(-?[0-9]+\\s*(,\\s*-?[0-9]+\\s*)*)?\\]")] catch [])
+                  | if length == 0 then null else (.[0].string | try fromjson catch null) end
+                ) as $scavenged
+                | if ($scavenged != null and ($scavenged | type) == "array"
+                      and ($scavenged | all(type == "number")))
+                  then {ok: true, reason: "text", numbers: $scavenged}
+                  else {ok: false, reason: "unparseable", numbers: null}
+                  end
               end
         end
     ' "$1"
@@ -658,10 +689,28 @@ if [ "${#NUMBERS[@]}" -gt 0 ]; then
     done
 fi
 
-NUMS_CSV=""
-if [ "${#NUMBERS[@]}" -gt 0 ]; then
-    NUMS_CSV="$(IFS=,; echo "${NUMBERS[*]}")"
+# An empty selection is stage 1 ANSWERING "nothing here is relevant", not
+# failing. compile-records.sh rightly rejects an empty --nums (it has no
+# records to compile), so the short-circuit belongs here in the caller:
+# hand it nothing and the whole pipeline used to exit 1 on a correct result.
+if [ "${#NUMBERS[@]}" -eq 0 ]; then
+    NOT_FOUND_TEXT="NOT FOUND: no record in the index is relevant to this question.
+
+Nothing was compiled and no answer stage was run. Proceed without a codex
+record, or re-run with --rebuild if you expect the index to cover this (a
+stale or partially-built index selects nothing for questions it should match)."
+    if $JSON_OUT; then
+        jq -n \
+            --arg answer "$NOT_FOUND_TEXT" \
+            --argjson stage1 "$STAGE1_JSON" \
+            '{answer: $answer, not_found: true, selected_numbers: [], resolved_ids: [], stages: {select: $stage1, answer: null}}'
+    else
+        printf '%s\n' "$NOT_FOUND_TEXT"
+    fi
+    exit 0
 fi
+
+NUMS_CSV="$(IFS=,; echo "${NUMBERS[*]}")"
 
 COMPILE_SCRIPT="$SCRIPT_DIR/compile-records.sh"
 [ -f "$COMPILE_SCRIPT" ] || die "compile-records.sh not found at $COMPILE_SCRIPT (expected sibling script)"

@@ -16,12 +16,10 @@
 #
 # Tests that exercise session-cache invalidate/reuse (section h) and the
 # --timing real-run label (section i) deliberately make stage 1 return an
-# EMPTY selection ("[]"). That makes the run fail non-zero at the
-# compile-records.sh step regardless of whether that sibling script exists yet
-# (missing -> this script's own "not found" guard; present -> its own
-# documented "exits non-zero on empty selection" contract) — so those tests
-# assert only on session-cache artifacts and stub call args/stdin, never on
-# the run's final exit status, and stay valid either way.
+# EMPTY selection ("[]"), which short-circuits the run before stage 2 and
+# keeps them independent of compile-records.sh. They assert only on
+# session-cache artifacts and stub call args/stdin. Section (n) is what pins
+# the short-circuit itself.
 #
 # Run: bats hooks/tests/how-do-i.bats
 
@@ -303,9 +301,8 @@ STUB
   jq -n '{is_error: false, session_id: "new-session-xyz", result: "[]"}' > "$stub_dir/resp-1.json"
 
   run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir"
-  # Final status intentionally not asserted: with an empty selection this run
-  # fails downstream at the compile-records.sh step either way (see file
-  # header). What's under test here is the session-cache behavior only.
+  # What's under test here is the session-cache behavior only; the empty
+  # selection just keeps the run short (see section n).
 
   [ -f "$stub_dir/call-1.args" ]
   ! grep -q -- '--resume' "$stub_dir/call-1.args"
@@ -494,4 +491,208 @@ EOF
   [ "$(sed -n '2p' "$log")" = "orwrap claude" ]
   # and it must not have fallen back to raw claude a second time
   [ "$(grep -c 'raw-claude' "$log")" -eq 1 ]
+}
+
+# ---------- (l) stage-1 replies with trailing prose still yield a selection ----------
+#
+# The selector runs on a fast model instructed to reply with ONLY a JSON array;
+# in practice it sometimes appends invented explanation after the array. Parsing
+# must key off the first well-formed JSON array of integers in the reply rather
+# than requiring the whole reply to be bare JSON.
+
+@test "internal-parse-selection: an empty array followed by trailing prose parses to zero numbers, ok" {
+  resp="$TMP/resp.json"
+  jq -n '{is_error: false, result: "[]\n\nNone of the records in the index are relevant to this question."}' > "$resp"
+  run bash "$SCRIPT" --internal-parse-selection "$resp"
+  [ "$status" -eq 0 ]
+  [[ "$output" == OK* ]]
+  [[ "$output" != *[0-9]* ]]
+}
+
+@test "internal-parse-selection: a populated array followed by trailing prose parses to that array" {
+  resp="$TMP/resp.json"
+  jq -n '{is_error: false, result: "[4, 8]\n\nThese two records cover the procedure you asked about."}' > "$resp"
+  run bash "$SCRIPT" --internal-parse-selection "$resp"
+  [ "$status" -eq 0 ]
+  [ "$output" = "OK 4 8" ]
+}
+
+@test "internal-parse-selection: a fenced array followed by trailing prose parses to that array" {
+  resp="$TMP/resp.json"
+  jq -n '{is_error: false, result: "```json\n[7]\n```\n\nRecord 7 is the only relevant one."}' > "$resp"
+  run bash "$SCRIPT" --internal-parse-selection "$resp"
+  [ "$status" -eq 0 ]
+  [ "$output" = "OK 7" ]
+}
+
+@test "internal-parse-selection: prose with no JSON array at all is still unparseable" {
+  resp="$TMP/resp.json"
+  jq -n '{is_error: false, result: "I need to read this carefully before responding."}' > "$resp"
+  run bash "$SCRIPT" --internal-parse-selection "$resp"
+  [ "$status" -eq 1 ]
+  [ "$output" = "FAIL unparseable" ]
+}
+
+# ---------- (m) reason-code regression guard for every accepted/rejected shape ----------
+#
+# Reason codes are load-bearing: the stage-1 retry loop branches on them
+# ("is_error" dies immediately; everything else consumes the retry budget).
+# These pin the reason strings and branch ORDER byte-for-byte.
+
+@test "internal-parse-selection: object-with-selected in text still takes the text-object path" {
+  resp="$TMP/resp.json"
+  jq -n '{is_error: false, result: "{\"selected\": [5, 6]}"}' > "$resp"
+  run bash "$SCRIPT" --internal-parse-selection "$resp"
+  [ "$status" -eq 0 ]
+  # Not "OK 5" — the object path must win over scavenging the first array
+  # literal out of the same text.
+  [ "$output" = "OK 5 6" ]
+}
+
+@test "internal-parse-selection: malformed structured_output.selected still reports structured_output-shape" {
+  resp="$TMP/resp.json"
+  jq -n '{is_error: false, result: "[1, 2]", structured_output: {selected: "not-an-array"}}' > "$resp"
+  run bash "$SCRIPT" --internal-parse-selection "$resp"
+  [ "$status" -eq 1 ]
+  # structured_output is preferred over .result and its malformed-ness is NOT
+  # rescued by the text path, however parseable .result happens to be.
+  [ "$output" = "FAIL structured_output-shape" ]
+}
+
+@test "internal-parse-selection: is_error still reports exactly is_error, ahead of every other branch" {
+  resp="$TMP/resp.json"
+  jq -n '{is_error: true, result: "[1, 2]", structured_output: {selected: [1, 2]}}' > "$resp"
+  run bash "$SCRIPT" --internal-parse-selection "$resp"
+  [ "$status" -eq 1 ]
+  [ "$output" = "FAIL is_error" ]
+}
+
+# ---------- (n) an empty selection is a valid "nothing relevant" answer, not a failure ----------
+#
+# Regression (fm.how-do-i-corpus-index-blind): stage 1 correctly selecting
+# nothing used to build an empty --nums and hand it to compile-records.sh, whose
+# own contract rightly rejects an empty selection — so the whole pipeline exited
+# 1 on a legitimate "no relevant records" result. The guard belongs in the
+# CALLER; compile-records.sh's contract is unchanged.
+
+# Copies how-do-i.sh into an isolated scripts dir next to a SENTINEL
+# compile-records.sh that logs its argv. SCRIPT_DIR is resolved from
+# BASH_SOURCE at runtime, so the copy looks for siblings here — which makes
+# "compile-records.sh was never invoked" directly observable rather than
+# inferred.
+make_sentinel_scripts_dir() {
+  local dir="$1" log="$2"
+  mkdir -p "$dir"
+  cp "$SCRIPT" "$dir/how-do-i.sh"
+  cat > "$dir/compile-records.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$log"
+echo "=== compiled record text ==="
+EOF
+  chmod +x "$dir/compile-records.sh"
+}
+
+@test "an empty stage-1 selection exits 0 with a NOT FOUND answer and never invokes compile-records.sh" {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: some record\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  scripts_dir="$TMP/scripts"
+  compile_log="$TMP/compile.log"
+  make_sentinel_scripts_dir "$scripts_dir" "$compile_log"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT FOUND"* ]]
+  [ ! -f "$compile_log" ]
+  # stage 2 is skipped too: exactly the one stage-1 call was made.
+  [ "$(cat "$stub_dir/count")" = "1" ]
+}
+
+@test "an empty stage-1 selection produced by trailing prose also exits 0, not a stage-1 death" {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: some record\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]\n\nNothing in the index is relevant."}' > "$stub_dir/resp-1.json"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT FOUND"* ]]
+  # One call only: no retry was consumed, so the trailing prose never made it
+  # look unparseable.
+  [ "$(cat "$stub_dir/count")" = "1" ]
+}
+
+@test "--json on an empty selection reports not_found with empty selection arrays and a null answer stage" {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: some record\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]", duration_ms: 400, duration_api_ms: 150, usage: {input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}' > "$stub_dir/resp-1.json"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir" --json
+
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.not_found == true' >/dev/null
+  echo "$output" | jq -e '.selected_numbers == []' >/dev/null
+  echo "$output" | jq -e '.resolved_ids == []' >/dev/null
+  echo "$output" | jq -e '.answer | test("NOT FOUND")' >/dev/null
+  # stage 1 metadata is still reported; stage 2 never ran.
+  echo "$output" | jq -e '.stages.select.attempts == 1' >/dev/null
+  echo "$output" | jq -e '.stages.answer == null' >/dev/null
+}
+
+@test "a NON-empty selection still invokes compile-records.sh with the selected numbers" {
+  # Guards the short-circuit against over-triggering.
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: some record\n2 :: another record\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n2\tid-two\tpath/two\n' > "$index_dir/map.tsv"
+
+  jq -n '{is_error: false, session_id: "s1", result: "[2, 1]"}' > "$stub_dir/resp-1.json"
+  jq -n '{is_error: false, session_id: "s2", result: "The answer, per id-two."}' > "$stub_dir/resp-2.json"
+
+  scripts_dir="$TMP/scripts"
+  compile_log="$TMP/compile.log"
+  make_sentinel_scripts_dir "$scripts_dir" "$compile_log"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "The answer, per id-two." ]
+  [ -f "$compile_log" ]
+  grep -q -- '--nums' "$compile_log"
+  grep -q '^2,1$' "$compile_log"
 }
