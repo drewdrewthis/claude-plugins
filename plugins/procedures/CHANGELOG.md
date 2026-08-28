@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.12.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.11.0...procedures-v0.12.0) (2026-08-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **worklog:** procedures no longer ships the worklog-record Stop hook; install the worklog plugin to keep per-turn logging.
+
+### Features
+
+* **worklog:** extract the worklog Stop hook into its own plugin ([#138](https://github.com/drewdrewthis/claude-plugins/issues/138)) ([2c39512](https://github.com/drewdrewthis/claude-plugins/commit/2c395121e6f6228cb83d6cf79f655cc2d1c1003b))
+
+
+### Bug Fixes
+
+* **procedures:** treat an empty how-do-i selection as an answer, not a failure ([#142](https://github.com/drewdrewthis/claude-plugins/issues/142)) ([0d72b78](https://github.com/drewdrewthis/claude-plugins/commit/0d72b7848d0f10091cb1e7e8bbf6c3f36844cf69))
+
 ## [0.11.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.10.0...procedures-v0.11.0) (2026-08-27)
 
 
