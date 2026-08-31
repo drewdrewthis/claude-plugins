@@ -11,6 +11,11 @@
       "description": "Procedural knowledge system: /how-do-i, /update-records (+templates), /am-i-done, the how-do-i/am-i-done gate hooks with turn-state wiring, and the evolve-sweep Stop hook that dispatches post-turn record evolution."
     },
     {
+      "name": "agent-governance",
+      "source": "./plugins/agent-governance",
+      "description": "Compiles a per-session governing document from the records corpus and injects it at session start."
+    },
+    {
       "name": "worklog",
       "source": "./plugins/worklog",
       "description": "One JSONL line per turn telling the turn's story — requests, outcomes, mistakes — each entry anchored to transcript uuids with a quote sliced out of the cited line's own body. A Stop hook that never blocks: detaches, claims the turn atomically, fails open with a recorded reason."

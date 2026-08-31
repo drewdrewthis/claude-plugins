@@ -1,0 +1,16 @@
+{
+  "name": "agent-governance",
+  "version": "0.1.0",
+  "description": "Compiles a per-session governing document from the records corpus and injects it at UserPromptSubmit (issue #143).",
+  "author": {
+    "name": "Drü"
+  },
+  "userConfig": {
+    "enable_agent_governance": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enable agent governance compilation",
+      "description": "Compile and inject the governing document at UserPromptSubmit. Set false to turn this off; also settable per-invocation as AGENT_GOVERNANCE_ENABLE_AGENT_GOVERNANCE=false."
+    }
+  }
+}
