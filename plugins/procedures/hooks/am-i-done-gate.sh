@@ -35,13 +35,15 @@ SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 
 # PLUGIN ADAPTATION: this gate's own off-switch — userConfig
-# `enable_am_i_done_gate`, on by default. See lib/gate-escape.sh. Sourced here,
-# CALLED at the block point, so the escape record means "a gate was released"
-# rather than "a hook process started". EXCEPTION: on degenerate paths (no jq,
-# unreadable lib) the switch is asked FIRST, before audience filtering — a set
-# switch is a better explanation of a release than blindness, and without jq the
-# audience cannot be known. Those rows are not audience-filtered. An unreadable
-# lib leaves the gate ARMED.
+# `enable_am_i_done_gate`, OFF by default (soft gate: nudge.sh reminds instead
+# of this gate blocking). See lib/gate-escape.sh. Sourced here, CALLED at the
+# block point: an explicit `true`/`1` arms it, recorded as an escape
+# (armed_by) rather than "a hook process started". EXCEPTION: on degenerate
+# paths (no jq, unreadable lib) the switch is asked FIRST, before audience
+# filtering — a set switch is a better explanation of a release than
+# blindness, and without jq the audience cannot be known. Those rows are not
+# audience-filtered. An unreadable lib leaves the gate ARMED (the declare -F
+# guard below is undefined, so the hardcoded block fires).
 # shellcheck source=lib/gate-escape.sh
 . "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
 
@@ -101,9 +103,10 @@ esac
 [ -r "$SCRIPT_DIR/../skills/am-i-done/SKILL.md" ] \
     || gate_failopen "am-i-done" "skill-unresolvable" "$SID"
 
-# Everything above said this turn WOULD be blocked. Only now does the switch
-# matter, so only now is a release worth recording — and the mark is not set,
-# because a released turn was never asked.
+# Everything above said this turn WOULD be blocked (absent an arm). Only now
+# does the switch matter: unarmed (default), release silently, mark stays
+# unset because a released turn was never asked; explicitly armed (true/1),
+# the arm was just recorded and the block below fires as intended.
 if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "AM_I_DONE_GATE"; then exit 0; fi
 
 ts_mark "$SID" am_i_done_asked

@@ -28,13 +28,16 @@ orchard-codex `develop-sweatshop`):
 
 | piece | what |
 |---|---|
-| `/how-do-i` | the gateway to everything the codex knows — runs the two-stage retrieval pipeline (`scripts/how-do-i.sh`): stage 1 (`record-selector`, fast model) picks relevant records from a numbered index built by `build-record-index.sh` over every store, `compile-records.sh` assembles their full text, stage 2 (`how-do-i-answerer`, strong model) writes the answer — governing procedure, verbatim commands, traps, cited to source paths. One pipeline run per invocation; a record it should have surfaced is reported as a selection gap rather than worked around |
+| `/what-do-i-know` | the gateway to everything the codex knows — procedures, decisions, solutions, references, principles, research, not procedures alone — runs the two-stage retrieval pipeline (`scripts/how-do-i.sh`): stage 1 (fast model, prompt inlined in the script) picks relevant records from a numbered index built by `build-record-index.sh` over every store, `compile-records.sh` assembles their full text, stage 2 (strong model, prompt inlined in the script) writes the answer — governing record, verbatim commands, traps, cited to source paths. One pipeline run per invocation; a record it should have surfaced is reported as a selection gap rather than worked around |
+| `/how-do-i` | deprecated alias for `/what-do-i-know` — same script, same contract; kept functional so a session naming `Skill(procedures:how-do-i)` (old habit, or a re-armed `enable_how_do_i_gate`) still gets a correct answer |
 | `/update-records` | THE single entry point for every knowledge artifact — there is no separate create command. Script-backed via `scripts/log-record.sh`: mistake / decision / solution / failure-mode. Written by hand from `skills/update-records/templates/`: procedure, evolution, and the four rule shapes — principle, invariant, policy, standard. Written by following the longhand procedures in `skills/update-records/references/`: procedure, reference, skill. Carries the test for choosing among the rule kinds |
 | record stores | ten, one per GRC artifact class: `failure-modes` (risk register), `decisions` (governance choices), `solutions` (control patterns), `procedures` (control implementations), `research` (evidence), `plans` (roadmap), `principles` (judgment rules), `invariants` (absolute constraints), `policies` (standing authority), `standards` (control objectives). Defined once in `scripts/lib/stores.sh`; `build-record-index.sh` discovers them at runtime, never by enumerating them in prose |
-| `/am-i-done` | cold-read review of an am-i-done report by the `work-reviewer` agent before calling work done — findings only; record evolution is the evolve-sweep hook's job, not the review's |
+| `/adherence-check` | cold-read review of an adherence-check report by the `work-reviewer` agent — self-invoked whenever you want a second, skeptical pass before calling work done; not a gate obligation. Findings only; record evolution is the evolve-sweep hook's job, not the review's |
+| `/am-i-done` | deprecated alias for `/adherence-check` — same fork, same contract; kept functional so a session naming `Skill(procedures:am-i-done)` (old habit, or a re-armed `enable_am_i_done_gate`) still gets a correct review |
 | `/evolve-procedure` | patch an EXISTING procedure from a correction, incident, or friction — deviation, missing step, or stale/broken ref; procedures only, every material patch appends a dated line to that procedure dir's `EVOLUTION.md` |
-| `how-do-i-gate` (PreToolUse) | blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded; off-switch `enable_how_do_i_gate` |
-| `am-i-done-gate` (Stop) | requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once; off-switch `enable_am_i_done_gate` |
+| `how-do-i-gate` (PreToolUse) | OFF by default (`enable_how_do_i_gate`) — `nudge` (below) reminds instead. Armed, it blocks tool calls until `Skill(procedures:how-do-i)` has run this turn; fail-open, blind fail-opens recorded |
+| `am-i-done-gate` (Stop) | OFF by default (`enable_am_i_done_gate`) — `nudge` (below) reminds instead. Armed, it requires one `Skill(procedures:am-i-done)` review on any turn that called tools; asks at most once |
+| `nudge` (UserPromptSubmit) | ON by default (`enable_nudge`) — one reminder line per turn that `/what-do-i-know` and `/adherence-check` exist; main-session turns only, silent for subagents; suppressing it is still recorded like any other switch flip |
 | `worklog-record` (Stop, `worklog` plugin) | appends one JSONL line per turn telling the turn's story — what was asked, what came of it, what went wrong: the mechanical half (`session`, `ask_uuid`, `end_uuid`) read from the transcript, and three judged arrays `requests[]`, `outcomes[]`, `mistakes[]` from a cheap model. Every entry is `{text, quote, uuid}` (`mistakes` carries `uuids[]`, needing the offense AND the correction): `text` is the model's summary, capped at 100 characters; `quote` is the evidence it rests on, capped at 120, stored as a run SLICED OUT of the cited candidate's body — located by the model's string, never copied from it. The model may only COPY uuids from a candidate list, and an entry whose quote does not appear in the body of the line it cites is DROPPED WHOLE, never stored quote-less. The caps are a readability bound, not a measured one. Never blocks and never emits a `decision`; runs detached so it cannot serialize a finishing worker. One row per turn, keyed on `ask_uuid`, because `am-i-done-gate` blocking the first Stop and releasing the next makes two Stop fires per turn the normal path. Both fires DETACH, so they overlap: the second starts while the first is still inside its judgment call and has written nothing. A store scan alone would therefore miss and duplicate, so the turn is claimed atomically with `mkdir` before the model call (`WORKLOG_CLAIM_TTL_SECS`, default settle + model timeout + 60s, after which a marker left by a killed fire is stealable — so a crash costs at most that turn's row, never a permanent hole). Store `WORKLOG_JSONL` (default `$HOME/.claude/worklog/<project-slug>.jsonl` — deliberately NOT under `~/.claude/projects/`, which other tools glob for session files); `WORKLOG_SETTLE_SECS` (default 3, the transcript tail lags Stop), `WORKLOG_WINDOW` (candidate records offered to the model, default 60), `WORKLOG_MODEL` (default `claude-haiku-4-5-20251001`), `WORKLOG_MODEL_TIMEOUT` (default 120s), `WORKLOG_DEDUP_SCAN` (rows scanned for the dedup key, default 500), `WORKLOG_CLAIM_TTL_SECS` (above), `WORKLOG_SYNC=1` (run inline instead of detached, for tests — note it also hides the concurrency the claim exists for, so it is not the shape to test ordering in), `WORKLOG_DISABLE` (any non-empty value = off; also the child's re-entrancy guard). A non-numeric value on any count falls back to its default rather than erroring. `WORKLOG_WINDOW`, `WORKLOG_MODEL_TIMEOUT`, `WORKLOG_DEDUP_SCAN` and `WORKLOG_CLAIM_TTL_SECS` also reject `0` — for `WORKLOG_DEDUP_SCAN` that is a correctness boundary, because `tail -n 0` succeeds silently and a zero scan would switch the one-row-per-turn dedup off, and for `WORKLOG_CLAIM_TTL_SECS` because a zero TTL makes every claim instantly stealable, which is the race with an extra step. `WORKLOG_SETTLE_SECS` accepts `0` deliberately, so tests can skip the settle wait |
 | `evolve-sweep` (Stop, async) | after each tool-using turn, one cheap-model triage over the final assistant message decides whether the turn looks evolvable; when it does, wakes the session once (`asyncRewake`) to dispatch `procedure-evolver`, which reviews the full turn transcript and updates records itself. Detector only — never writes a record, never stages a file; silent-degrades on triage failure (no failopen spam); no `stop_hook_active` guard so gate-blocked turns are still swept; off-switch `enable_evolve_sweep` |
 | `turn-state-reset` (UserPromptSubmit) / `turn-state-record` (PostToolUse:Skill) | the turn-boundary state the gates read (`$TURN_STATE_DIR`, default `/tmp/claude-turn-state`) |
@@ -88,9 +91,10 @@ adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
 - **No upstream counterpart (the retrieval pipeline is sourced here):**
   orchard-codex#268 removed its query machinery from the codex, and this
   plugin's own `query-records.sh` matcher was dropped in favour of the
-  two-stage index pipeline (`how-do-i.sh` + `build-record-index.sh` +
-  `compile-records.sh` + the `record-selector`/`how-do-i-answerer` agents) —
-  all plugin-local, nothing upstream to stay byte-close to.
+  two-stage index pipeline (`how-do-i.sh`, both stages' prompts inlined in
+  the script rather than dispatched as agents — see its own header — plus
+  `build-record-index.sh` and `compile-records.sh`) — all plugin-local,
+  nothing upstream to stay byte-close to.
 
 - **No upstream counterpart (post-turn evolution detector):** `hooks/evolve-sweep.sh`
   and its `enable_evolve_sweep` switch are new machinery, not vendored — a port of
@@ -173,10 +177,21 @@ adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
 
 - **Configuration surface:** `hooks/lib/gate-escape.sh` and the `userConfig`
   block in `.claude-plugin/plugin.json` have no upstream counterpart. In a
-  checkout you silence a gate by editing it; installed as a plugin you cannot,
-  and the only alternative is uninstalling the whole plugin. One boolean per
-  gate, on by default, read by that gate alone, and recorded to
-  `gate-escape.jsonl` when it releases.
+  checkout you change a gate's behavior by editing it; installed as a plugin
+  you cannot, and the only alternative is uninstalling the whole plugin. Six
+  booleans, read by their own hook alone, each recorded to `gate-escape.jsonl`
+  on any explicit flip away from its default:
+
+  - **Default OFF** (soft — `nudge` reminds instead of enforcing):
+    `enable_how_do_i_gate`, `enable_am_i_done_gate`, `enable_query_shape_guard`.
+    Explicitly setting one `true` arms it, recorded as `armed_by`.
+  - **Default ON:** `enable_frontmatter_check`, `enable_evolve_sweep`,
+    `enable_nudge`. Explicitly setting one `false` releases it, recorded as
+    `released_by`.
+
+  Both directions share one `ge_enabled` function and one log; only the
+  per-key default differs, so a hook's own `ge_enabled "$KEY"` call site never
+  changes when a key's default polarity does.
 
   Two channels, and **only one of them is trusted**. The userConfig option
   (`CLAUDE_PLUGIN_OPTION_ENABLE_*`) resolves from user/managed settings only
@@ -191,7 +206,8 @@ adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
 Host-neutral wording in place of codex-internal file/hook references is a
 further, prose-only adaptation class and is not individually marked.
 
-To verify a checkout end-to-end, run the gate cycle under
+To verify a checkout end-to-end, arm the gates (`enable_how_do_i_gate` /
+`enable_am_i_done_gate`, off by default) and run the cycle under
 `claude --plugin-dir`: `tool_input.skill` must arrive as the bare skill name,
 the reset hook stamp the turn, the record hook mark `how_do_i` / `am_i_done`,
 and the `am-i-done` fork dispatch the plugin's own `work-reviewer`.
