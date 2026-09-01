@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.12.0...procedures-v0.13.0) (2026-09-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **procedures:** soft gates by default; what-do-i-know + adherence-check skills ([#144](https://github.com/drewdrewthis/claude-plugins/issues/144))
+
+### Features
+
+* **procedures:** librarian single-writer intake + multi-root index ([#145](https://github.com/drewdrewthis/claude-plugins/issues/145)) ([586be3b](https://github.com/drewdrewthis/claude-plugins/commit/586be3b8e1d4f7687a8ee2c0195759cac56f599e))
+* **procedures:** soft gates by default; what-do-i-know + adherence-check skills ([#144](https://github.com/drewdrewthis/claude-plugins/issues/144)) ([82eb2e5](https://github.com/drewdrewthis/claude-plugins/commit/82eb2e558c55b794d6aca88ed495dca686185741))
+
 ## [0.12.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.11.0...procedures-v0.12.0) (2026-08-28)
 
 
