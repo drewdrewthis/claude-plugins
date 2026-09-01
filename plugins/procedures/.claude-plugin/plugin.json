@@ -1,7 +1,7 @@
 {
   "name": "procedures",
   "version": "0.12.0",
-  "description": "Knowledge system: /what-do-i-know router (any record kind — procedures, decisions, solutions, references), /update-records (procedure/decision/solution + templates), /adherence-check cold-read review, a nudge that reminds both exist, and soft-by-default gate hooks — how-do-i-gate (PreToolUse) + am-i-done-gate (Stop), off unless armed — plus evolve-sweep (async Stop detector that wakes the session to dispatch procedure-evolver), from orchard-codex develop-sweatshop.",
+  "description": "Knowledge system: /what-do-i-know router (any record kind — procedures, decisions, solutions, references), /update-records (procedure/decision/solution + templates), /adherence-check cold-read review, a nudge that reminds both exist, and soft-by-default gate hooks — how-do-i-gate (PreToolUse) + am-i-done-gate (Stop), off unless armed — plus librarian-poke (async Stop hook that wakes a librarian agent to drain session transcripts into the knowledge store; supersedes evolve-sweep, kept but disabled by default), from orchard-codex develop-sweatshop.",
   "author": {
     "name": "Drü"
   },
@@ -26,9 +26,15 @@
     },
     "enable_evolve_sweep": {
       "type": "boolean",
+      "default": false,
+      "title": "Enable the evolve sweep (deprecated)",
+      "description": "DEPRECATED: superseded by librarian (enable_librarian) — evolve-sweep's per-turn triage-and-wake path is retired in favor of the librarian's transcript-cursor drain. Kept for rollback; off by default. Set true to re-enable; also settable per-invocation as PROCEDURES_ENABLE_EVOLVE_SWEEP=true."
+    },
+    "enable_librarian": {
+      "type": "boolean",
       "default": true,
-      "title": "Enable the evolve sweep",
-      "description": "After each tool-using turn, triage the turn's final message with a cheap model and wake the session once when it looks evolvable, so procedure-evolver reviews the full turn and updates records. Set false to turn this off; also settable per-invocation as PROCEDURES_ENABLE_EVOLVE_SWEEP=false."
+      "title": "Enable the librarian poke",
+      "description": "After each tool-using turn, wake a librarian agent to drain new transcript lines into the knowledge store (mistakes, decisions, solutions, procedure corrections), single-writer per store root. Set false to turn this off; also settable per-invocation as PROCEDURES_ENABLE_LIBRARIAN=false."
     },
     "enable_query_shape_guard": {
       "type": "boolean",

@@ -26,24 +26,21 @@
 #                      REQUIRED_STORES below). Assumes CWD is already the
 #                      corpus root — callers `cd "$ROOT"` before sourcing
 #                      this (see lint-frontmatter.sh / build-record-index.sh).
+#                      CWD-dependent and single-root: a multi-root caller
+#                      loops STORE_ROOTS (below), `cd`s into each, and calls
+#                      _stores_discover again per iteration to repopulate
+#                      STORES for that root (build-record-index.sh does this).
 #   STORES_ALT       — pipe-separated alternation for grep -E / sed -E patterns
 #                      e.g. "references/failure-modes|references/decisions|..."
+#   STORE_ROOTS      — bash array of absolute store-root directories (see
+#                      CODEX_STORE_ROOTS below). Pure string parsing, CWD-
+#                      independent, safe to use before any `cd`.
 #
 # NOTE: hooks run as subprocesses; source via a path derived from the script's
 # own ${BASH_SOURCE[0]}, NOT from $CLAUDE_PROJECT_DIR (not exported to hooks).
 
 # Every directory found one level under RECORDS_ROOT becomes a store.
 RECORDS_ROOT="references"
-
-# Vendor stores (titw-managed, DECISIONS D23 in drewdrewthis/titw): queried by
-# build-record-index.sh but NOT linted/backfilled — vendored records are validated
-# by `titw check` at publish time, not by the consumer's lint. Excluded from
-# discovery below by basename, so a vendor directory landing under
-# RECORDS_ROOT is still never treated as a lintable store.
-# shellcheck disable=SC2034  # consumed by sourcing scripts (build-record-index.sh)
-VENDOR_STORES=(
-    titw
-)
 
 # GRC rule stores: kept explicit, not directory-derived. These four must stay
 # declared even before their directory exists on disk — invariant (absolute)
@@ -74,7 +71,7 @@ _stores_add() {
 
 _stores_discover() {
     STORES=()
-    local d base v skip
+    local d
 
     for d in "${REQUIRED_STORES[@]}"; do
         _stores_add "$d"
@@ -87,24 +84,44 @@ _stores_discover() {
         for d in "$RECORDS_ROOT"/*/; do
             [ -d "$d" ] || continue
             d="${d%/}"
-            base="${d##*/}"
-            skip=0
-            for v in ${VENDOR_STORES[@]+"${VENDOR_STORES[@]}"}; do
-                if [ "$base" = "$v" ]; then
-                    skip=1
-                    break
-                fi
-            done
-            [ "$skip" -eq 1 ] && continue
             _stores_add "$d"
         done
     fi
 }
 _stores_discover
 
+# CODEX_STORE_ROOTS — colon-separated absolute roots to scan for stores,
+# supporting more than one knowledge-store repo (e.g. a personal codex plus a
+# team/vendor root). Default: this process's own ${CODEX_ROOT:-$HOME/.claude}
+# — the same default build-record-index.sh already used as a single root, so
+# a caller that never opts in sees an unchanged single-root STORE_ROOTS.
+#
+# Pure string parsing, no filesystem access, no CWD dependency — safe to
+# compute at source time regardless of what CWD happens to be. A caller that
+# has its OWN root override (a --root flag, a *_ROOT test env var, e.g.
+# lint-frontmatter.sh's LINT_FRONTMATTER_ROOT) should call
+# _stores_split_roots again with its own resolved default so that override
+# still wins over the generic one computed here.
+#
+# Discovery itself stays per-root and CWD-relative (_stores_discover, above,
+# unchanged): iterating STORE_ROOTS and re-running _stores_discover per root
+# is the caller's job (build-record-index.sh, lint-frontmatter.sh).
+_stores_split_roots() {
+    STORE_ROOTS=()
+    local spec="${1:-}" _raw=() _r
+    IFS=':' read -r -a _raw <<< "$spec"
+    for _r in ${_raw[@]+"${_raw[@]}"}; do
+        [ -n "$_r" ] && STORE_ROOTS+=("$_r")
+    done
+}
+_stores_split_roots "${CODEX_STORE_ROOTS:-${CODEX_ROOT:-$HOME/.claude}}"
+
 # QUERY_RECORDS_EXTRA_STORES — optional, space-separated, root-relative store
-# paths a survey tool may append to its scan list. A SEPARATE array from
-# VENDOR_STORES: extras are runtime config, so they are neither linted nor part
+# paths a survey tool may append to its scan list. Subsumed for the
+# cross-repo case by CODEX_STORE_ROOTS above (add a whole extra root instead
+# of one store within the current root) but kept as-is for the narrower
+# same-root, runtime-config case it already serves. A SEPARATE array from
+# STORE_ROOTS: extras are runtime config, so they are neither linted nor part
 # of the drift-tested doc contract. Env-based on purpose: settings `env` maps
 # stack by scope (user -> project -> local), so a project can add a store
 # without a plugin release. Entries are literal relative paths — absolute

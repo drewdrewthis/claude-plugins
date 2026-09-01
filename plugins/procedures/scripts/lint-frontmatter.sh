@@ -63,6 +63,37 @@ cd "$ROOT"
 # SSOT store list — sourced from scripts/lib/stores.sh (defines STORES array).
 # shellcheck source=scripts/lib/stores.sh
 source "$SCRIPT_DIR/lib/stores.sh"
+
+# CODEX_STORE_ROOTS — other configured store roots, for the links-RESOLVE
+# leniency below only. Deliberately NOT stores.sh's own default (which
+# falls back to ${CODEX_ROOT:-$HOME/.claude} independent of
+# LINT_FRONTMATTER_ROOT) — re-split with THIS script's own $ROOT as the
+# default, so an unset CODEX_STORE_ROOTS always yields an empty OTHER_ROOTS
+# here (every existing test sets only LINT_FRONTMATTER_ROOT, never
+# CODEX_STORE_ROOTS or CODEX_ROOT — this keeps their behavior unchanged).
+# What gets LINTED (corpus_files, is_record_file, TARGETS, id uniqueness)
+# stays single-root and untouched: pre-commit runs inside one repo, so
+# multi-root has nothing to add there.
+_stores_split_roots "${CODEX_STORE_ROOTS:-$ROOT}"
+OTHER_ROOTS=()
+for _r in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do
+    _rabs="$(cd "$_r" 2>/dev/null && pwd)" || continue
+    [ "$_rabs" = "$ROOT" ] && continue
+    OTHER_ROOTS+=("$_rabs")
+done
+unset _r _rabs
+
+# _id_exists_in_root <root> <id> — best-effort probe: does any record under
+# <root> declare this id? Grep-based, not a full frontmatter parse — used
+# only to decide whether an unresolved link is plausibly a cross-root
+# reference (downgrades an error to a warning); never authoritative, and a
+# miss here still leaves the link merely unresolved-noted, not silently
+# dropped.
+_id_exists_in_root() {
+    local root="$1" id="$2"
+    grep -RlF -- "id: ${id}" "$root/references" "$root/plans" 2>/dev/null | grep -q .
+}
+
 # SSOT frontmatter readers — frontmatter_block() and fm_value(). Shared with
 # scripts/lint-agent-files.sh, which used to carry byte-identical copies.
 # shellcheck source=scripts/lib/frontmatter.sh
@@ -344,7 +375,17 @@ for f in "${TARGETS[@]:-}"; do
         [ -n "$lid" ] || continue
         [ "$lid" = "~" ] && continue
         if [ -z "${FILE_OF_ID[$lid]+x}" ]; then
-            err "$f: links target '$lid' resolves to no record id in the corpus"
+            resolved_elsewhere=0
+            for _or in ${OTHER_ROOTS[@]+"${OTHER_ROOTS[@]}"}; do
+                if _id_exists_in_root "$_or" "$lid"; then resolved_elsewhere=1; break; fi
+            done
+            if [ "$resolved_elsewhere" -eq 1 ]; then
+                :   # resolves in another configured root -- not an error
+            elif [ "${#OTHER_ROOTS[@]}" -gt 0 ]; then
+                warn "$f: links target '$lid' resolves to no record id in any configured root (grooming-queue material -- verify or fix)"
+            else
+                err "$f: links target '$lid' resolves to no record id in the corpus"
+            fi
         fi
     done
 done

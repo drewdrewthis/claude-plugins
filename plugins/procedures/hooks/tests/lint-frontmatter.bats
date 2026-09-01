@@ -612,16 +612,30 @@ EOF
   [[ "$output" == *"missing required key 'status:'"* ]] || [[ "$stderr" == *"missing required key 'status:'"* ]]
 }
 
-@test "vendored stores are still excluded from lint even as a records-root subdirectory" {
-  # "titw" is VENDOR_STORES in scripts/lib/stores.sh: scanned by
-  # build-record-index.sh but never linted (titw check validates it at publish
-  # time). Give it a deliberately-broken record — no frontmatter at all — and
-  # confirm the whole-corpus run neither counts nor fails on it.
+@test "titw retirement: a records-root subdirectory named titw is now a normal, linted store" {
+  # Vendored-store exclusion (VENDOR_STORES=(titw) in scripts/lib/stores.sh) was
+  # retired along with the single-root era: titw is no longer special-cased, so
+  # a directory named titw under references/ is discovered and linted exactly
+  # like any other store. A well-formed record in it is counted; a malformed
+  # one fails the run — the inverse of this test's former assertion.
   mkdir -p "$FIX/references/titw"
-  printf '# not a record, no frontmatter at all\n' > "$FIX/references/titw/vendored.md"
+  cat > "$FIX/references/titw/good.md" <<'EOF'
+---
+id: sol.titw-good
+kind: solution
+date: 2026-06-12
+keywords: [titw]
+links: {}
+status: active
+---
+# A well-formed record living under a store literally named titw.
+EOF
+  printf '# not a record, no frontmatter at all
+' > "$FIX/references/titw/bad.md"
   run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"frontmatter-lint: linted 2 file(s)"* ]]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"references/titw/bad.md: missing frontmatter block"* ]]
+  [[ "$output" == *"frontmatter-lint: linted 4 file(s)"* ]]
 }
 
 # ---- command frontmatter (user-invocable:): not records, exempt from linting ----
