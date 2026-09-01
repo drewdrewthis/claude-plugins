@@ -1,30 +1,24 @@
 ---
-name: am-i-done
-description: "DEPRECATED — use /adherence-check instead. Kept only as a functional alias for a session that still names Skill(procedures:am-i-done) (an old habit, or a re-armed enable_am_i_done_gate) — same fork, same contract, full write-up at skills/adherence-check/SKILL.md."
+name: adherence-check
+description: "A cold, skeptical read on finished work before calling it done. Write the adherence-check report (template in this skill's templates/ directory), then invoke this with it — a reviewer reads it and returns findings tagged BLOCKING / FOLLOW-UP / BACKGROUND / LEAVE. Self-invoked, not a gate obligation — reach for it whenever you want a second pass: before a PR, after a risky or wide-reaching change, before the closing TL;DR. Use before the TL;DR, not instead of it."
 user-invocable: true
 context: fork
 agent: work-reviewer
 # PLUGIN ADAPTATION: fork skills ignore their agent's model: — must match
 # agents/work-reviewer.md. See README "Fork-skill model pin".
 model: sonnet
-# PLUGIN ADAPTATION: diverged from upstream 2026-08-25 (issue #130): allowed
-# action 2 (one evolution dispatch to procedures:procedure-evolver) removed —
-# record evolution fires from the evolve-sweep Stop hook instead. Load-bearing:
-# a re-sync must not resurrect the dispatch the shape guard now denies.
+# By design, no evolution-dispatch action here — the shape guard permits
+# exactly one Bash call (the how-do-i.sh lookup below) and nothing else.
+# Record evolution fires from the evolve-sweep Stop hook, not from this fork.
 background: false
-argument-hint: "<the am-i-done report>"
+argument-hint: "<the adherence-check report>"
 # PLUGIN ADAPTATION: the fork may inherit the parent toolset; this key is a
 # best-effort second layer. The reviewer needs only Bash (one pipeline run);
 # everything else is judgment over pasted text.
 disallowed-tools: Read, Grep, Glob, Write, Edit, NotebookEdit
 ---
 
-**DEPRECATED — use `/adherence-check` instead.** This alias exists so a
-session that names `Skill(procedures:am-i-done)` (an old habit, or a re-armed
-`enable_am_i_done_gate`) still gets a correct review. Same fork, same
-contract — see `skills/adherence-check/SKILL.md` for the full write-up.
-
-Review this am-i-done report and return findings.
+Review this adherence-check report and return findings.
 
 REPORT:
 
@@ -47,5 +41,5 @@ Everything else is judged from the report alone. Record evolution is NOT part
 of this review — it fires from the evolve-sweep hook into
 procedures:procedure-evolver.
 
-If the report is empty or is not an am-i-done report, say so and return nothing
-else.
+If the report is empty or is not an adherence-check report, say so and return
+nothing else.

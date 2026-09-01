@@ -16,6 +16,10 @@
 # wildcard: an unrelated `evil:how-do-i` must not satisfy the invariant, so only
 # THIS plugin's namespace ("procedures") is accepted, not `*:how-do-i`.
 #
+# OLD NAMES TOO. what-do-i-know/adherence-check are the current skill names;
+# how-do-i/am-i-done are deprecated functional aliases (see their SKILL.md) and
+# still mark the same KEY — either name satisfies the same per-turn invariant.
+#
 # FAIL-OPEN: no jq, unparseable payload, unwritable state => exit 0 silently.
 # A failed record means a gate asks again, which is recoverable; a crash here
 # is not.
@@ -30,8 +34,8 @@ TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '(.tool_name // .tool) // empty' 2>/de
 
 SKILL="$(printf '%s' "$INPUT" | jq -r '(.tool_input.skill // .input.skill) // empty' 2>/dev/null || true)"
 case "$SKILL" in
-    how-do-i|procedures:how-do-i)   KEY="how_do_i" ;;
-    am-i-done|procedures:am-i-done) KEY="am_i_done" ;;
+    how-do-i|procedures:how-do-i|what-do-i-know|procedures:what-do-i-know) KEY="how_do_i" ;;
+    am-i-done|procedures:am-i-done|adherence-check|procedures:adherence-check) KEY="am_i_done" ;;
     *) exit 0 ;;
 esac
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # gate-escape.sh — one question: is this gate still on? Plus the record that
-# says when one was switched off.
+# says when one was switched off (or, for a default-off gate, switched on).
 #
 # PLUGIN ADAPTATION: no upstream counterpart in orchard-codex. An installed
 # plugin cannot be edited to silence a gate the way a checkout can, so the
@@ -10,10 +10,11 @@
 # release the gate, read turn state, or decide anything else — the caller does.
 #
 # ONE NAMED SWITCH PER GATE — no list grammar, no wildcard, and deliberately no
-# central registry of the switches: each hook passes its own key and nothing
+# central registry of switch VALUES: each hook passes its own key and nothing
 # enumerates the set. An enumerated list is the ts_reset bug in ADR-016 (the
 # enumerated version omitted a key and read as correct in source), and a parsed
-# spec would make one typo disarm every gate at once.
+# spec would make one typo disarm every gate at once. ge__default_off below is
+# a narrower exception: it names which keys default off, not their values.
 #
 # Each key is declared as a userConfig option in .claude-plugin/plugin.json and
 # reaches this process two ways:
@@ -33,26 +34,33 @@
 #     relying on "a repo cannot switch my gates off" must say
 #     CLAUDE_PLUGIN_OPTION_* specifically; the claim is false of this channel.
 #
-# EITHER saying false turns the gate off; neither is authoritative over the
-# other. Precedence would make the plain var dead on an installed plugin: the
-# option carries `"default": true`, so the harness exports it on every hook
-# invocation, and a `PROCEDURES_ENABLE_<KEY>=false` losing to it could never be
-# observed — the one-off override would work only in a bare checkout, which is
-# the case that does not need it.
+# EITHER saying the deviation value turns a gate against its own default;
+# neither channel is authoritative over the other. Precedence would make the
+# plain var dead on an installed plugin: a default-on option carries
+# `"default": true`, so the harness exports it on every hook invocation, and a
+# PROCEDURES_ENABLE_<KEY> override losing to it could never be observed — the
+# one-off override would work only in a bare checkout, which is the case that
+# does not need it.
 #
-# DEFAULT ON. Only an explicit `false` or `0` turns a gate off; unset, empty, or
-# unrecognised keeps it armed — the fail-safe direction for an off-switch is off.
+# MIXED DEFAULT, PER KEY (see ge__default_off). FRONTMATTER_CHECK and
+# EVOLVE_SWEEP default ON: unset/empty/unrecognised keeps them armed, and only
+# an explicit `false`/`0` turns one off (a release, recorded as released_by).
+# HOW_DO_I_GATE, AM_I_DONE_GATE, and QUERY_SHAPE_GUARD default OFF (soft: they
+# remind via nudge.sh rather than deny): unset/empty/unrecognised keeps them
+# off, and only an explicit `true`/`1` turns one on (an arm, recorded as
+# armed_by). Either direction, the fail-safe reading of an unrecognised value
+# is "stay at this key's own default".
 #
 # NOT TAMPER-EVIDENT. GATE_ESCAPE_LOG is a plain env var and the append is
 # best-effort, so whoever can set a switch can also send the record to
-# /dev/null. This log exists to show you a gate you left off months ago — not
-# to catch an adversary, which it cannot do.
+# /dev/null. This log exists to show you a gate you left off (or on) months
+# ago — not to catch an adversary, which it cannot do.
 #
-# RECORDED, in its OWN log. A switched-off gate is not a fail-open and must
-# never enter gate-failopen.jsonl — that log means "a gate released without
-# deciding", and blurring it destroys the fail-open rate it exists to carry. But
-# an unrecorded off-switch is invisible: nothing distinguishes an owner
-# debugging for an hour from a session spawned as
+# RECORDED, in its OWN log. A gate deviating from ITS OWN default is not a
+# fail-open and must never enter gate-failopen.jsonl — that log means "a gate
+# released without deciding", and blurring it destroys the fail-open rate it
+# exists to carry. But an unrecorded deviation is invisible: nothing
+# distinguishes an owner debugging for an hour from a session spawned as
 # `PROCEDURES_ENABLE_AM_I_DONE_GATE=false claude -p …` to dodge review. Both
 # reviewers of this change flagged that gap independently. So: a separate
 # gate-escape.jsonl, never merged with the other.
@@ -74,16 +82,36 @@ ge__off() {
     esac
 }
 
-# ge__record <gate-key> <source> — append one line, best effort. Fields are
-# sanitized before they reach printf: the record is built without jq, so an
-# unescaped %s is one forgetful caller away from a forged key that still parses
-# (same class of defect as gate_failopen's, same defence).
+# ge__on <value> — 0 if this value is an explicit on.
+ge__on() {
+    case "$1" in
+        1 | [Tt][Rr][Uu][Ee] ) return 0 ;;
+        * ) return 1 ;;
+    esac
+}
+
+# ge__default_off <GATE_KEY> — 0 if this gate key's own default is OFF (the
+# three soft gates); 1 otherwise (default ON).
+ge__default_off() {
+    case "$1" in
+        HOW_DO_I_GATE | AM_I_DONE_GATE | QUERY_SHAPE_GUARD ) return 0 ;;
+        * ) return 1 ;;
+    esac
+}
+
+# ge__record <gate-key> <source> [field] — append one line, best effort. Field
+# defaults to "released_by"; a default-off gate's arm event passes "armed_by"
+# so the row self-describes which direction deviated. Fields are sanitized
+# before they reach printf: the record is built without jq, so an unescaped
+# %s is one forgetful caller away from a forged key that still parses (same
+# class of defect as gate_failopen's, same defence).
 ge__record() {
-    local gate="${1:-unknown}" src="${2:-unknown}"
+    local gate="${1:-unknown}" src="${2:-unknown}" field="${3:-released_by}"
     gate="${gate//[^A-Za-z0-9_.:-]/_}"
     src="${src//[^A-Za-z0-9_.:-]/_}"
-    printf '{"ts":"%s","gate":"%s","released_by":"%s"}\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" "$gate" "$src" \
+    field="${field//[^A-Za-z0-9_.:-]/_}"
+    printf '{"ts":"%s","gate":"%s","%s":"%s"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" "$gate" "$field" "$src" \
         >> "$GATE_ESCAPE_LOG" 2>/dev/null || true
 }
 
@@ -91,10 +119,10 @@ ge__record() {
 # release that is about to happen anyway.
 #
 # Every degenerate path (no jq, unreadable lib, unwired reset hook) releases the
-# gate via gate_failopen, which never returns. A switched-off gate reaching one
-# of those paths would therefore be filed as a BLIND fail-open — inflating the
-# very rate that log exists to measure, one row per tool call for a whole
-# session. The switch is the better explanation when it is set, so ask it first.
+# gate via gate_failopen, which never returns. A gate already off by its own
+# default (explicitly or not) reaching one of those paths would therefore be
+# filed as a BLIND fail-open — inflating the very rate that log exists to
+# measure, one row per tool call for a whole session. Ask the switch first.
 # Both arms exit; neither returns.
 ge_release_or_failopen() {
     if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "$1"; then exit 0; fi
@@ -105,13 +133,20 @@ ge_release_or_failopen() {
     gate_failopen "$@"
 }
 
-# ge_enabled <GATE_KEY> — 0 if the gate is on (the default), 1 if either switch
-# turned it off. GATE_KEY is the uppercased option suffix, e.g. HOW_DO_I_GATE.
-# Recording lives here, at the single site that can answer "off", so no caller
-# can forget it.
+# ge_enabled <GATE_KEY> — 0 if the gate is on, 1 if off. Polarity is per key
+# (ge__default_off). A default-ON gate is on unless explicitly released
+# (false/0). A default-OFF gate is off unless explicitly armed (true/1).
+# Recording lives here, at the single site that can answer either question, so
+# no caller can forget it.
 ge_enabled() {
-    local opt="CLAUDE_PLUGIN_OPTION_ENABLE_$1" plain="PROCEDURES_ENABLE_$1"
-    if ge__off "${!opt:-}"; then ge__record "$1" "$opt"; return 1; fi
-    if ge__off "${!plain:-}"; then ge__record "$1" "$plain"; return 1; fi
+    local key="$1"
+    local opt="CLAUDE_PLUGIN_OPTION_ENABLE_$key" plain="PROCEDURES_ENABLE_$key"
+    if ge__default_off "$key"; then
+        if ge__on "${!opt:-}"; then ge__record "$key" "$opt" armed_by; return 0; fi
+        if ge__on "${!plain:-}"; then ge__record "$key" "$plain" armed_by; return 0; fi
+        return 1
+    fi
+    if ge__off "${!opt:-}"; then ge__record "$key" "$opt"; return 1; fi
+    if ge__off "${!plain:-}"; then ge__record "$key" "$plain"; return 1; fi
     return 0
 }

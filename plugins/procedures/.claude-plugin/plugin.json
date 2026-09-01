@@ -1,22 +1,22 @@
 {
   "name": "procedures",
   "version": "0.12.0",
-  "description": "Procedural knowledge system: /how-do-i router, /update-records (procedure/decision/solution + templates), /am-i-done cold-read review, and the gate hooks — how-do-i-gate (PreToolUse) + am-i-done-gate (Stop) + evolve-sweep (async Stop detector that wakes the session to dispatch procedure-evolver), from orchard-codex develop-sweatshop.",
+  "description": "Knowledge system: /what-do-i-know router (any record kind — procedures, decisions, solutions, references), /update-records (procedure/decision/solution + templates), /adherence-check cold-read review, a nudge that reminds both exist, and soft-by-default gate hooks — how-do-i-gate (PreToolUse) + am-i-done-gate (Stop), off unless armed — plus evolve-sweep (async Stop detector that wakes the session to dispatch procedure-evolver), from orchard-codex develop-sweatshop.",
   "author": {
     "name": "Drü"
   },
   "userConfig": {
     "enable_how_do_i_gate": {
       "type": "boolean",
-      "default": true,
+      "default": false,
       "title": "Enable the how-do-i gate",
-      "description": "Require Skill(how-do-i) before a main agent acts. Set false to turn this gate off; also settable per-invocation as PROCEDURES_ENABLE_HOW_DO_I_GATE=false."
+      "description": "Require Skill(how-do-i) before a main agent acts. OFF by default — nudge.sh reminds instead of this gate denying. Set true to enforce; also settable per-invocation as PROCEDURES_ENABLE_HOW_DO_I_GATE=true."
     },
     "enable_am_i_done_gate": {
       "type": "boolean",
-      "default": true,
+      "default": false,
       "title": "Enable the am-i-done gate",
-      "description": "Require one Skill(am-i-done) review before a turn that used tools ends. Set false to turn this gate off; also settable per-invocation as PROCEDURES_ENABLE_AM_I_DONE_GATE=false."
+      "description": "Require one Skill(am-i-done) review before a turn that used tools ends. OFF by default — nudge.sh reminds instead of this gate blocking. Set true to enforce; also settable per-invocation as PROCEDURES_ENABLE_AM_I_DONE_GATE=true."
     },
     "enable_frontmatter_check": {
       "type": "boolean",
@@ -32,9 +32,15 @@
     },
     "enable_query_shape_guard": {
       "type": "boolean",
-      "default": true,
+      "default": false,
       "title": "Enable the gate-fork shape guard",
-      "description": "Hold the am-i-done work-reviewer fork to its one-shot contract: exactly one retrieval call (the how-do-i.sh pipeline, plus the justfile probe); the fork may not dispatch agents or write. Set false to turn this guard off; also settable per-invocation as PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=false."
+      "description": "Hold the am-i-done work-reviewer fork to its one-shot contract: exactly one retrieval call (the how-do-i.sh pipeline, plus the justfile probe); the fork may not dispatch agents or write. OFF by default, following the two gates above. Set true to enforce; also settable per-invocation as PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=true."
+    },
+    "enable_nudge": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enable the discovery nudge",
+      "description": "Print one reminder per turn that /what-do-i-know and /adherence-check exist. ON by default. Set false to turn this off; also settable per-invocation as PROCEDURES_ENABLE_NUDGE=false."
     }
   }
 }

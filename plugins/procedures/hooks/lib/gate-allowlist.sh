@@ -68,7 +68,7 @@ gal_is_compliance_path() {
                 | [(.subagent_type // ""), (.description // ""), (.prompt // "")]
                 | join(" ")' 2>/dev/null || true)"
             case "$ap" in
-                *how-do-i*|*am-i-done*|*procedures*) return 0 ;;
+                *how-do-i*|*am-i-done*|*what-do-i-know*|*adherence-check*|*procedures*) return 0 ;;
             esac
             return 1 ;;
     esac

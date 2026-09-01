@@ -31,13 +31,16 @@ SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 
 # PLUGIN ADAPTATION: this gate's own off-switch — userConfig
-# `enable_how_do_i_gate`, on by default. See lib/gate-escape.sh. Sourced here,
-# CALLED at the deny point, so the escape record means "a gate was released"
-# rather than "a hook process started". EXCEPTION: on degenerate paths (no jq,
-# unreadable lib) the switch is asked FIRST, before audience or allowlist
-# filtering — a set switch is a better explanation of a release than blindness,
-# and without jq the audience cannot be known. Those rows are therefore not
-# audience-filtered. An unreadable lib leaves the gate ARMED.
+# `enable_how_do_i_gate`, OFF by default (soft gate: nudge.sh reminds instead
+# of this gate denying). See lib/gate-escape.sh. Sourced here, CALLED at the
+# deny point: an explicit `true`/`1` arms it, recorded as an escape
+# (armed_by) rather than "a hook process started". EXCEPTION: on degenerate
+# paths (no jq, unreadable lib) the switch is asked FIRST, before audience or
+# allowlist filtering — a set switch is a better explanation of a release than
+# blindness, and without jq the audience cannot be known. Those rows are
+# therefore not audience-filtered. An unreadable lib leaves the gate ARMED
+# (the declare -F guard below is undefined, so the hardcoded deny fires — see
+# that guard's own comment).
 # shellcheck source=lib/gate-escape.sh
 . "$SCRIPT_DIR/lib/gate-escape.sh" 2>/dev/null || true
 
@@ -93,8 +96,10 @@ ts_is_marked "$SID" how_do_i && exit 0
 [ -r "$SCRIPT_DIR/../skills/how-do-i/SKILL.md" ] \
     || gate_failopen "how-do-i" "skill-unresolvable" "$SID"
 
-# Everything above said this call WOULD be denied. Only now does the switch
-# matter, so only now is a release worth recording.
+# Everything above said this call WOULD be denied (absent an arm). Only now
+# does the switch matter: unarmed (default), release silently, no record;
+# explicitly armed (true/1), the arm was just recorded and the deny below
+# fires as intended.
 if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "HOW_DO_I_GATE"; then exit 0; fi
 
 # The reason string is the ONLY channel this gate has to the blocked agent —
