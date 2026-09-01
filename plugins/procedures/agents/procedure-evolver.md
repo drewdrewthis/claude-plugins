@@ -1,6 +1,7 @@
 ---
 name: procedure-evolver
 description: "Record-hygiene executor called by the evolve-sweep flow: reviews a finished turn's FULL transcript slice against the sweep's triage candidates and performs the actual record writes — procedure patches + EVOLUTION.md lines, new draft records, mistake/solution/decision logs. Dispatched by the main session when the evolve-sweep hook wakes it. Touches ONLY the record stores."
+# DEPRECATED: superseded by agents/librarian.md, woken by hooks/librarian-poke.sh (off by default; see plugin.json enable_evolve_sweep / enable_librarian). Kept for rollback, not further developed.
 # PLUGIN ADAPTATION: vendored from orchard-codex; diverged 2026-08-25 (issue
 # #130) — dispatch source moved from the work-reviewer review path to the
 # evolve-sweep Stop-hook flow, and the executor now reads the full turn

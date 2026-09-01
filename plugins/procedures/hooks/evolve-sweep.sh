@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # evolve-sweep.sh — Stop hook (async).
 #
+# DEPRECATED: superseded by librarian-poke.sh + agents/librarian.md (off by
+# default; see plugin.json enable_evolve_sweep / enable_librarian). Kept for
+# rollback, not further developed.
+#
 # PLUGIN ADAPTATION: not upstream — new machinery, class "Post-turn evolution
 # detector" in the root README. Port of the Hermes post-turn background-review
 # pattern (res.2045 rec #2): the evolution executor chain exists
