@@ -26,10 +26,29 @@
 setup() {
   SCRIPT="$BATS_TEST_DIRNAME/../../scripts/how-do-i.sh"
   TMP="$(mktemp -d)"
+  # Isolates how-do-i.sh's CURRENT_ROOTS resolution from whatever
+  # CODEX_STORE_ROOTS/CODEX_ROOT happen to be set in the ambient
+  # environment: seed_roots_stamp (below) writes a roots.stamp that must
+  # match this exactly, or the roots/staleness invalidation gate (section o)
+  # wrongly treats every fixture as stale and triggers a real,
+  # non-deterministic rebuild.
+  unset CODEX_STORE_ROOTS
+  export CODEX_ROOT="$TMP/default-root"
+  mkdir -p "$CODEX_ROOT"
 }
 
 teardown() {
   rm -rf "$TMP"
+}
+
+# Pre-seeds a roots.stamp in $1 matching how-do-i.sh's CURRENT_ROOTS under
+# this setup()'s isolated CODEX_ROOT, so the roots/staleness invalidation
+# gate (section o) treats an already-built index as fresh. Every fixture
+# that pre-seeds index.txt/map.tsv to skip the build path calls this too,
+# now that a missing stamp alone forces a rebuild.
+seed_roots_stamp() {
+  local index_dir="$1"
+  printf '%s\n%s\n' "${CODEX_STORE_ROOTS:-${CODEX_ROOT:-$HOME/.claude}}" "$(date +%s)" > "$index_dir/roots.stamp"
 }
 
 # Generic HOWDOI_CLAUDE_BIN stub. Writes an executable at $1. Its behavior at
@@ -211,6 +230,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: some record\n2 :: another record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n2\tid-two\tpath/two\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "what is x" --index-dir "$index_dir"
   [ "$status" -eq 1 ]
@@ -234,6 +254,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "what is x" --index-dir "$index_dir"
   [ "$status" -eq 1 ]
@@ -295,6 +316,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: new content v2\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
   echo "stale-session-id" > "$index_dir/session.id"
   echo "deadbeef-not-matching-anything" > "$index_dir/session.fingerprint"
 
@@ -324,6 +346,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: stable content\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   fp="$(shasum -a 256 "$index_dir/index.txt" | awk '{print $1}')"
   echo "reused-session-123" > "$index_dir/session.id"
@@ -355,6 +378,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: stable content\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   fp="$(shasum -a 256 "$index_dir/index.txt" | awk '{print $1}')"
   echo "original-session-id" > "$index_dir/session.id"
@@ -385,6 +409,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   jq -n '{is_error: false, session_id: "s1", result: "[]", duration_ms: 900, duration_api_ms: 300, usage: {cache_read_input_tokens: 0, cache_creation_input_tokens: 500}}' > "$stub_dir/resp-1.json"
 
@@ -403,6 +428,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
   fp="$(shasum -a 256 "$index_dir/index.txt" | awk '{print $1}')"
   echo "warm-sess" > "$index_dir/session.id"
   printf '%s' "$fp" > "$index_dir/session.fingerprint"
@@ -447,6 +473,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
   nonexistent="$TMP/does-not-exist/claude"
 
   run env HOWDOI_CLAUDE_BIN="$nonexistent" bash "$SCRIPT" --question "q" --index-dir "$index_dir"
@@ -465,6 +492,7 @@ STUB
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   bin="$TMP/bin"; mkdir -p "$bin"
   log="$TMP/spawn.log"
@@ -575,15 +603,17 @@ EOF
 # 1 on a legitimate "no relevant records" result. The guard belongs in the
 # CALLER; compile-records.sh's contract is unchanged.
 
-# Copies how-do-i.sh into an isolated scripts dir next to a SENTINEL
-# compile-records.sh that logs its argv. SCRIPT_DIR is resolved from
-# BASH_SOURCE at runtime, so the copy looks for siblings here — which makes
-# "compile-records.sh was never invoked" directly observable rather than
-# inferred.
+# Copies how-do-i.sh — plus the real lib/stores.sh, so its roots/staleness
+# probe (section o) resolves — into an isolated scripts dir next to a
+# SENTINEL compile-records.sh that logs its argv. SCRIPT_DIR is resolved
+# from BASH_SOURCE at runtime, so the copy looks for siblings here — which
+# makes "compile-records.sh was never invoked" directly observable rather
+# than inferred.
 make_sentinel_scripts_dir() {
   local dir="$1" log="$2"
-  mkdir -p "$dir"
+  mkdir -p "$dir/lib"
   cp "$SCRIPT" "$dir/how-do-i.sh"
+  cp "$(dirname "$SCRIPT")/lib/stores.sh" "$dir/lib/stores.sh"
   cat > "$dir/compile-records.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >> "$log"
@@ -602,6 +632,7 @@ EOF
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
 
@@ -629,6 +660,7 @@ EOF
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   jq -n '{is_error: false, session_id: "s1", result: "[]\n\nNothing in the index is relevant."}' > "$stub_dir/resp-1.json"
 
@@ -652,6 +684,7 @@ EOF
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   jq -n '{is_error: false, session_id: "s1", result: "[]", duration_ms: 400, duration_api_ms: 150, usage: {input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}' > "$stub_dir/resp-1.json"
 
@@ -679,6 +712,7 @@ EOF
   mkdir -p "$index_dir"
   printf '1 :: some record\n2 :: another record\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n2\tid-two\tpath/two\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
 
   jq -n '{is_error: false, session_id: "s1", result: "[2, 1]"}' > "$stub_dir/resp-1.json"
   jq -n '{is_error: false, session_id: "s2", result: "The answer, per id-two."}' > "$stub_dir/resp-2.json"
@@ -695,4 +729,127 @@ EOF
   [ -f "$compile_log" ]
   grep -q -- '--nums' "$compile_log"
   grep -q '^2,1$' "$compile_log"
+}
+
+# ---------- (o) roots/staleness cache invalidation ----------
+#
+# Regression: how-do-i.sh used to rebuild the index only when index.txt/
+# map.tsv were MISSING, never on a CODEX_STORE_ROOTS change or on new/changed
+# record files — so a split-store cutover kept answering from a stale
+# single-root index indefinitely, even after the env var was set and the
+# cache had already been rebuilt at least once. seed_roots_stamp (setup(),
+# above) keeps every OTHER fixture's roots.stamp matching CURRENT_ROOTS so
+# its behavior is unchanged; these three pin the new gate itself.
+
+# Copies how-do-i.sh — plus the real lib/stores.sh, needed by its
+# roots/staleness probe — into an isolated scripts dir next to a SENTINEL
+# build-record-index.sh that logs its argv to $2 and writes a minimal valid
+# index.txt/map.tsv under whatever --out DIR it receives, so "a rebuild was
+# attempted" is observable via $2's existence rather than inferred from
+# index.txt content alone.
+make_build_sentinel_scripts_dir() {
+  local dir="$1" log="$2"
+  mkdir -p "$dir/lib"
+  cp "$SCRIPT" "$dir/how-do-i.sh"
+  cp "$(dirname "$SCRIPT")/lib/stores.sh" "$dir/lib/stores.sh"
+  cat > "$dir/build-record-index.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$log"
+out="\$2"
+mkdir -p "\$out"
+printf '1 :: rebuilt content\n' > "\$out/index.txt"
+printf '1\tid-one\tpath/one\n' > "\$out/map.tsv"
+EOF
+  chmod +x "$dir/build-record-index.sh"
+}
+
+@test "a roots.stamp recording different roots than CODEX_ROOT forces a rebuild" {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: stale content\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  # Stamp names a DIFFERENT roots string than CODEX_ROOT resolves to.
+  printf '%s\n%s\n' "/some/old/roots" "1000000000" > "$index_dir/roots.stamp"
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  scripts_dir="$TMP/scripts"
+  build_log="$TMP/build.log"
+  make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [ -f "$build_log" ]
+  grep -q -- '--out' "$build_log"
+  grep -q "rebuilt content" "$index_dir/index.txt"
+  [ "$(sed -n '1p' "$index_dir/roots.stamp")" = "$CODEX_ROOT" ]
+}
+
+@test "a *.md under CODEX_ROOT newer than index.txt forces a rebuild even with a matching roots.stamp" {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: stale content\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  touch -t 202001010000 "$index_dir/index.txt"
+  seed_roots_stamp "$index_dir"
+
+  # A record file that changed after the index was built.
+  printf '# changed record\n' > "$CODEX_ROOT/changed.md"
+  touch -t 202501010000 "$CODEX_ROOT/changed.md"
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  scripts_dir="$TMP/scripts"
+  build_log="$TMP/build.log"
+  make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [ -f "$build_log" ]
+  grep -q "rebuilt content" "$index_dir/index.txt"
+}
+
+@test "an up-to-date index with a matching roots.stamp and no newer records is reused, not rebuilt" {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: fresh content\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  touch -t 202501010000 "$index_dir/index.txt"
+  seed_roots_stamp "$index_dir"
+
+  # A record file that predates the index — must NOT trigger a rebuild.
+  printf '# old record\n' > "$CODEX_ROOT/old.md"
+  touch -t 202001010000 "$CODEX_ROOT/old.md"
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  scripts_dir="$TMP/scripts"
+  build_log="$TMP/build.log"
+  make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [ ! -f "$build_log" ]
+  grep -q "fresh content" "$index_dir/index.txt"
 }
