@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.13.0...procedures-v0.13.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* **procedures:** invalidate the how-do-i index cache on roots/record changes ([#147](https://github.com/drewdrewthis/claude-plugins/issues/147)) ([4bb9bbf](https://github.com/drewdrewthis/claude-plugins/commit/4bb9bbfc5ee0ac37351827ece87b2b2936b30911))
+
 ## [0.13.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.12.0...procedures-v0.13.0) (2026-09-01)
 
 
