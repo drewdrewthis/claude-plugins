@@ -26,6 +26,12 @@
 #
 # Pipeline:
 #   1. Resolve/build the record index (build-record-index.sh --out DIR).
+#      Invalidation: a roots.stamp next to index.txt records the roots
+#      string the index was built from. A rebuild is forced by --rebuild, a
+#      missing index/map/stamp, a roots.stamp that no longer matches the
+#      current CODEX_STORE_ROOTS/CODEX_ROOT resolution, or any *.md under
+#      those roots newer than index.txt — otherwise the existing index is
+#      reused as-is.
 #   2. Stage 1 (select): fast model + full index (cold) or a resumed session
 #      (warm) -> JSON array of selected record numbers.
 #   3. compile-records.sh turns the selected numbers into record text.
@@ -55,6 +61,11 @@
 #                       the test suite. Default: claude (resolved via PATH).
 #   HOWDOI_INDEX_DIR    default for --index-dir when the flag is omitted.
 #                       Default: $XDG_CACHE_HOME/how-do-i-index (or ~/.cache/how-do-i-index).
+#   CODEX_STORE_ROOTS   colon-separated record-store roots (see lib/stores.sh)
+#                       — drives cache invalidation (above) as well as what
+#                       build-record-index.sh itself scans.
+#   CODEX_ROOT          single-root fallback when CODEX_STORE_ROOTS is unset.
+#                       Default for both: $HOME/.claude.
 #
 # Output:
 #   Default    the stage-2 answer on stdout, nothing else. On an empty
@@ -486,11 +497,56 @@ INDEX_TXT="$INDEX_DIR/index.txt"
 MAP_TSV="$INDEX_DIR/map.tsv"
 SESSION_ID_FILE="$INDEX_DIR/session.id"
 SESSION_FP_FILE="$INDEX_DIR/session.fingerprint"
+ROOTS_STAMP_FILE="$INDEX_DIR/roots.stamp"
+
+# Single source of truth for "what roots are currently configured" — the
+# SAME default expression stores.sh and build-record-index.sh resolve, so
+# the stamp written below can never drift from what a rebuild actually
+# scans.
+CURRENT_ROOTS="${CODEX_STORE_ROOTS:-${CODEX_ROOT:-$HOME/.claude}}"
 
 if $DRY_RUN; then
     [ -f "$INDEX_TXT" ] || die "--dry-run needs an existing index at $INDEX_TXT (run without --dry-run first to build one, or point --index-dir at an existing index)"
 else
-    if $REBUILD || [ ! -f "$INDEX_TXT" ] || [ ! -f "$MAP_TSV" ]; then
+    # Cache invalidation: --rebuild, a missing index/map/stamp, a
+    # roots.stamp recording a DIFFERENT root set than CURRENT_ROOTS, or any
+    # *.md under the current roots newer than index.txt all force a
+    # rebuild. Before this, the gate below only checked file existence, so
+    # an index built before CODEX_STORE_ROOTS was set (or before it
+    # changed) never invalidated on its own — a split-store cutover kept
+    # answering from a stale single-root index indefinitely, even after the
+    # env var was set and the cache had already been rebuilt at least once.
+    NEED_BUILD=false
+    if $REBUILD || [ ! -f "$INDEX_TXT" ] || [ ! -f "$MAP_TSV" ] || [ ! -f "$ROOTS_STAMP_FILE" ]; then
+        NEED_BUILD=true
+    elif [ "$(sed -n '1p' "$ROOTS_STAMP_FILE" 2>/dev/null || true)" != "$CURRENT_ROOTS" ]; then
+        NEED_BUILD=true
+    else
+        # Cheap staleness probe, sourced lazily (only reached once the
+        # stamp+roots already match, so a legacy --index-dir with no stamp,
+        # or a roots change, never pays for this): lib/stores.sh is the
+        # single source of truth for root-string -> path-array splitting
+        # (also used by build-record-index.sh and lint-frontmatter.sh) —
+        # sourcing it here rather than re-parsing CURRENT_ROOTS inline is
+        # what keeps this probe's path list from ever diverging from what a
+        # rebuild itself scans.
+        STORES_LIB="$SCRIPT_DIR/lib/stores.sh"
+        [ -f "$STORES_LIB" ] || die "lib/stores.sh not found at $STORES_LIB (expected sibling of build-record-index.sh)"
+        # shellcheck source=lib/stores.sh
+        source "$STORES_LIB"
+        _stores_split_roots "$CURRENT_ROOTS"
+        EXISTING_ROOTS=()
+        for _root in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do
+            [ -d "$_root" ] && EXISTING_ROOTS+=("$_root")
+        done
+        unset _root
+        if [ "${#EXISTING_ROOTS[@]}" -gt 0 ] && \
+           [ -n "$(find "${EXISTING_ROOTS[@]}" -name '*.md' -newer "$INDEX_TXT" -print -quit 2>/dev/null)" ]; then
+            NEED_BUILD=true
+        fi
+    fi
+
+    if $NEED_BUILD; then
         BUILD_SCRIPT="$SCRIPT_DIR/build-record-index.sh"
         [ -f "$BUILD_SCRIPT" ] || die "build-record-index.sh not found at $BUILD_SCRIPT (expected sibling script)"
         mkdir -p "$INDEX_DIR"
@@ -499,6 +555,7 @@ else
         [ "$build_status" -eq 0 ] || die "build-record-index.sh failed (exit $build_status)"
         [ -f "$INDEX_TXT" ] || die "build-record-index.sh did not produce $INDEX_TXT"
         [ -f "$MAP_TSV" ] || die "build-record-index.sh did not produce $MAP_TSV"
+        printf '%s\n%s\n' "$CURRENT_ROOTS" "$(date +%s 2>/dev/null || echo 0)" > "$ROOTS_STAMP_FILE"
     fi
 fi
 
