@@ -121,8 +121,20 @@ _stores_split_roots() {
 # never drift from what a rebuild actually scans).
 #
 # Precedence: $CODEX_STORE_ROOTS (real env) > settings.json
-# (.env.CODEX_STORE_ROOTS) > $CODEX_ROOT (legacy explicit single-root override)
-# > hardcoded ${CLAUDE_CONFIG_DIR:-$HOME/.claude}.
+# (.env.CODEX_STORE_ROOTS) > ~/.knowledge/config.json `modules` (array of
+# module names and/or absolute paths; reads $KNOWLEDGE_HOME/config.json when
+# that env is set, else $HOME/.knowledge/config.json) > auto-discovered
+# ${KNOWLEDGE_HOME:-$HOME/.knowledge}/modules/*/ git repos (sorted) > $CODEX_ROOT
+# (legacy explicit single-root override) > hardcoded
+# ${CLAUDE_CONFIG_DIR:-$HOME/.claude}.
+# The two ~/.knowledge tiers sit BELOW settings.json/env (an explicit
+# CODEX_STORE_ROOTS still wins) but ABOVE the legacy CODEX_ROOT single-root:
+# the knowledge home is the modern multi-repo layout and, once present, should
+# outrank a legacy single-root guess. config.json `modules`, when a non-empty
+# array, REPLACES auto-discovery — it is the explicit ordered manifest; a bare
+# name resolves under $KNOWLEDGE_HOME/modules/<name>, an absolute path is used
+# as-is. Both ~/.knowledge tiers require jq and fail open (missing file, no
+# `modules` key, invalid JSON, no jq) to the next tier down.
 # The settings.json step ranks before CODEX_ROOT because a long-lived session
 # (or an out-of-session shell) started before CODEX_STORE_ROOTS was added to
 # settings.json's `env` block never has the var in its process env — without
@@ -148,6 +160,58 @@ _stores_resolve_roots_spec() {
             return
         fi
     fi
+
+    # NEW: ~/.knowledge/config.json `modules` — an explicit ordered manifest of
+    # store roots. Each entry is either an absolute path (used verbatim) or a
+    # bare module name (resolved under $KNOWLEDGE_HOME_DEFAULT/modules/<name>).
+    # When present and non-empty this REPLACES the auto-discovery tier below —
+    # the manifest is authoritative. Reads .modules straight to one-value-per-
+    # line via jq (array-typed only; a non-array or absent key yields nothing).
+    # jq-guarded and fail-open: a missing file, no key, invalid JSON, or no jq
+    # all leave $spec empty and fall through to the next tier.
+    local khome_default cfg spec
+    khome_default="${KNOWLEDGE_HOME:-$HOME/.knowledge}"
+    cfg="$khome_default/config.json"
+    if [ -f "$cfg" ] && command -v jq >/dev/null 2>&1; then
+        local _modules_raw _m
+        _modules_raw="$(jq -r '.modules // empty | if type=="array" then .[] else empty end' "$cfg" 2>/dev/null || true)"
+        spec=""
+        while IFS= read -r _m; do
+            [ -n "$_m" ] || continue
+            case "$_m" in
+                /*) spec="${spec:+$spec:}$_m" ;;
+                *)  spec="${spec:+$spec:}$khome_default/modules/$_m" ;;
+            esac
+        done <<< "$_modules_raw"
+        if [ -n "$spec" ]; then
+            [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: roots from ~/.knowledge/config.json modules" >&2
+            printf '%s' "$spec"
+            return
+        fi
+    fi
+
+    # NEW: auto-discover — every immediate subdir of
+    # $KNOWLEDGE_HOME_DEFAULT/modules/ that carries a `.git` entry (dir OR file:
+    # worktrees use a `.git` file, hence -e not -d) becomes a root. The glob
+    # `modules/*/` is already lexically sorted by bash, so roots come out in
+    # alphabetical order with no explicit sort. Only used when at least one such
+    # subdir is found; otherwise fall through to the legacy tiers.
+    if [ -d "$khome_default/modules" ]; then
+        spec=""
+        local _d
+        for _d in "$khome_default"/modules/*/; do
+            [ -d "$_d" ] || continue
+            _d="${_d%/}"
+            [ -e "$_d/.git" ] || continue
+            spec="${spec:+$spec:}$_d"
+        done
+        if [ -n "$spec" ]; then
+            [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: roots from ~/.knowledge/modules/ auto-discovery" >&2
+            printf '%s' "$spec"
+            return
+        fi
+    fi
+
     if [ -n "${CODEX_ROOT:-}" ]; then
         [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: roots from \$CODEX_ROOT env (legacy)" >&2
         printf '%s' "$CODEX_ROOT"
@@ -199,3 +263,67 @@ for _s in "${STORES[@]}"; do
     STORES_BASENAME_ALT="${STORES_BASENAME_ALT:+${STORES_BASENAME_ALT}|}${_b}"
 done
 unset _s _b
+
+# _stores_knowledge_config_get <key> — prints the raw jq value at .<key> in
+# $KNOWLEDGE_HOME/config.json (default $HOME/.knowledge/config.json), or
+# nothing if the file/key is absent, invalid JSON, or jq is unavailable.
+# Caller checks for empty output. No filesystem writes, fail-open on every
+# missing piece — config.json is optional by design. (The roots resolver reads
+# .modules inline rather than through this helper, since it wants array
+# elements one-per-line, not a single value.)
+_stores_knowledge_config_get() {
+    local key="$1" khome cfg
+    khome="${KNOWLEDGE_HOME:-$HOME/.knowledge}"
+    cfg="$khome/config.json"
+    [ -f "$cfg" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    jq -r ".${key} // empty" "$cfg" 2>/dev/null || true
+}
+
+# procedures_state_dir — per-machine LIBRARIAN RUNTIME STATE directory, prints
+# the path (no filesystem access beyond an optional config.json read, no CWD
+# dependency, safe at any time).
+#
+# This is deliberately NOT a store. Everything above lives under a git-tracked
+# corpus root and is scanned by lint-frontmatter/build-record-index; this is
+# local, per-machine runtime state — the librarian's read cursors, its
+# grooming queue, its single-writer lock — that must NEVER be committed. It
+# previously sat inside ~/.claude (itself a tracked repo), where a `git add -A`
+# staged thousands of per-machine churn files (~2900 cursor files on one box).
+# So it moves out of the corpus entirely, onto the XDG state-dir convention
+# (state, not config/cache: mutable data that outlives a process but is not
+# user-configured and is safe to lose).
+#
+# Precedence is now ~/.knowledge-aware (four tiers, highest first):
+#   1. $PROCEDURES_STATE_DIR — explicit override (e.g. tests), always wins.
+#   2. ~/.knowledge/config.json key `state_dir` — a plain absolute-path string
+#      (jq-guarded; a missing file / key / jq falls through).
+#   3. ${KNOWLEDGE_HOME:-$HOME/.knowledge}/state — but ONLY if that ~/.knowledge
+#      directory itself EXISTS on disk. Merely having KNOWLEDGE_HOME set is not
+#      enough: a box that never opted into the knowledge home must not have its
+#      librarian state silently relocated under a directory that isn't there.
+#   4. hardcoded ${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian —
+#      the XDG state-dir fallback, unchanged, for every box without ~/.knowledge.
+# So this no longer merely mirrors the $CLAUDE_CONFIG_DIR pattern above — it
+# also reads config.json and probes for the knowledge home's existence.
+#
+# Exported (export -f) so a caller can `source stores.sh` and invoke it.
+procedures_state_dir() {
+    if [ -n "${PROCEDURES_STATE_DIR:-}" ]; then
+        printf '%s' "$PROCEDURES_STATE_DIR"
+        return
+    fi
+    local from_config khome
+    from_config="$(_stores_knowledge_config_get state_dir)"
+    if [ -n "$from_config" ]; then
+        printf '%s' "$from_config"
+        return
+    fi
+    khome="${KNOWLEDGE_HOME:-$HOME/.knowledge}"
+    if [ -d "$khome" ]; then
+        printf '%s' "$khome/state"
+        return
+    fi
+    printf '%s' "${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian"
+}
+export -f procedures_state_dir 2>/dev/null || true

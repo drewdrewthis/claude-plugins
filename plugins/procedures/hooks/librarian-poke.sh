@@ -56,6 +56,22 @@ SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 SELF="$SCRIPT_DIR/${BASH_SOURCE[0]##*/}"
 
+# --- state dir --------------------------------------------------------------
+# Per-machine librarian runtime state (lock, cursors, grooming queue) lives
+# OUTSIDE the git-tracked corpus, on the XDG state-dir convention — see
+# scripts/lib/stores.sh procedures_state_dir for the full why. Source it for
+# the resolver; if the lib is unreadable, fall open to the same formula inline
+# so a missing resolver never breaks the poke (this hook fails open).
+# shellcheck source=../scripts/lib/stores.sh
+. "$SCRIPT_DIR/../scripts/lib/stores.sh" 2>/dev/null || true
+lp_state_dir() {
+    if declare -F procedures_state_dir >/dev/null 2>&1; then
+        procedures_state_dir
+        return
+    fi
+    printf '%s' "${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}"
+}
+
 # --- tunables --------------------------------------------------------------
 LIBRARIAN_SETTLE_SECS="${LIBRARIAN_SETTLE_SECS:-3}"
 case "$LIBRARIAN_SETTLE_SECS" in ''|*[!0-9]*) LIBRARIAN_SETTLE_SECS=3 ;; esac
@@ -63,7 +79,7 @@ case "$LIBRARIAN_SETTLE_SECS" in ''|*[!0-9]*) LIBRARIAN_SETTLE_SECS=3 ;; esac
 LIBRARIAN_CLAIM_TTL_SECS="${LIBRARIAN_CLAIM_TTL_SECS:-900}"
 case "$LIBRARIAN_CLAIM_TTL_SECS" in ''|*[!0-9]*|0) LIBRARIAN_CLAIM_TTL_SECS=900 ;; esac
 
-LIBRARIAN_LOCK="${LIBRARIAN_LOCK:-$HOME/.claude/librarian.lock}"
+LIBRARIAN_LOCK="${LIBRARIAN_LOCK:-$(lp_state_dir)/librarian.lock}"
 LIBRARIAN_LOCK_DIR="${LIBRARIAN_LOCK_DIR:-${LIBRARIAN_LOCK}.d}"
 
 # --- the poke, and its portable claim fallback ------------------------------
@@ -126,6 +142,68 @@ lp_worker() {
     fi
     return 0
 }
+
+# --- one-time state migration ----------------------------------------------
+# Move librarian runtime state (cursors, grooming queue) out of the git-tracked
+# ~/.claude repo, AND the how-do-i index cache out of ~/.cache, into the
+# resolved state dir ($(lp_state_dir) — ~/.knowledge/state when the knowledge
+# home exists, else the XDG state dir). Runs on EVERY invocation (both the
+# gating call and the --worker re-entry) — the checks are cheap and each move
+# is idempotent: once the new location is populated that block no-ops. FAIL-
+# OPEN, mv-ONLY (never rm): nothing is deleted, every step is guarded so a
+# failure never blocks the poke, and a marker is left in each OLD location
+# pointing at the new one. It only ever touches the OLD ~/.claude/librarian/*
+# and ~/.cache/how-do-i-index locations — never modules/ or anything else under
+# $KNOWLEDGE_HOME, which are git clones that must not be auto-moved.
+lp_migrate_legacy_state() {
+    local legacy="$HOME/.claude/librarian"
+    local legacy_cursors="$legacy/cursors"
+    local legacy_queue="$legacy/grooming-queue.md"
+    local state new_cursors
+    state="$(lp_state_dir)"
+    new_cursors="$state/cursors"
+
+    # Cursors: move only when legacy has files AND the new dir is not already
+    # populated (absent or empty) — so a machine already migrated is a no-op.
+    if [ -d "$legacy_cursors" ] && [ -n "$(ls -A "$legacy_cursors" 2>/dev/null)" ]; then
+        if [ ! -d "$new_cursors" ] || [ -z "$(ls -A "$new_cursors" 2>/dev/null)" ]; then
+            if mkdir -p "$new_cursors" 2>/dev/null; then
+                mv "$legacy_cursors"/* "$new_cursors"/ 2>/dev/null || true
+                # Filename can't hold slashes, so the sanitized path names the
+                # marker and the literal path is its contents — a human/agent
+                # looking in the old dir sees exactly where the state went.
+                printf 'librarian state moved to: %s\n' "$state" \
+                    > "$legacy/MIGRATED-to-${state//\//-}" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # Grooming queue: move only if the new one does not already exist.
+    if [ -f "$legacy_queue" ] && [ ! -f "$state/grooming-queue.md" ]; then
+        mkdir -p "$state" 2>/dev/null || true
+        mv "$legacy_queue" "$state/grooming-queue.md" 2>/dev/null || true
+    fi
+
+    # How-do-i index cache: same guard shape as cursors above — move the
+    # CONTENTS (never the dir) only when the legacy dir has files AND the new
+    # one is absent-or-empty, so a machine already migrated is a no-op. The
+    # index moved off ~/.cache onto the state dir so a single location holds
+    # ALL per-machine librarian runtime state.
+    local legacy_index new_index
+    legacy_index="${XDG_CACHE_HOME:-$HOME/.cache}/how-do-i-index"
+    new_index="$state/how-do-i-index"
+    if [ -d "$legacy_index" ] && [ -n "$(ls -A "$legacy_index" 2>/dev/null)" ]; then
+        if [ ! -d "$new_index" ] || [ -z "$(ls -A "$new_index" 2>/dev/null)" ]; then
+            if mkdir -p "$new_index" 2>/dev/null; then
+                mv "$legacy_index"/* "$new_index"/ 2>/dev/null || true
+                printf 'how-do-i index moved to: %s\n' "$new_index" \
+                    > "$legacy_index/MIGRATED-to-${new_index//\//-}" 2>/dev/null || true
+            fi
+        fi
+    fi
+    return 0
+}
+lp_migrate_legacy_state
 
 # --- worker re-entry ---------------------------------------------------
 # The detached child calls back into this same script with --worker, stdin
