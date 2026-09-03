@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.3](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.13.2...procedures-v0.13.3) (2026-09-03)
+
+
+### Bug Fixes
+
+* **procedures:** settings.json store roots outrank legacy CODEX_ROOT ([#151](https://github.com/drewdrewthis/claude-plugins/issues/151)) ([3f8c059](https://github.com/drewdrewthis/claude-plugins/commit/3f8c059e020055f37e9e13ef5fa0e310ce7f08c6))
+
 ## [0.13.2](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.13.1...procedures-v0.13.2) (2026-09-03)
 
 
