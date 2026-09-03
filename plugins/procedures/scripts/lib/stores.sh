@@ -114,7 +114,48 @@ _stores_split_roots() {
         [ -n "$_r" ] && STORE_ROOTS+=("$_r")
     done
 }
-_stores_split_roots "${CODEX_STORE_ROOTS:-${CODEX_ROOT:-$HOME/.claude}}"
+
+# _stores_resolve_roots_spec — single source of truth for the
+# CODEX_STORE_ROOTS spec string, used by stores.sh's own default below,
+# build-record-index.sh, and how-do-i.sh's roots.stamp (so the stamp can
+# never drift from what a rebuild actually scans).
+#
+# Precedence: $CODEX_STORE_ROOTS (real env) > $CODEX_ROOT (explicit
+# single-root override) > this process's own settings.json
+# (.env.CODEX_STORE_ROOTS) > hardcoded ${CLAUDE_CONFIG_DIR:-$HOME/.claude}.
+# The settings.json step exists because a long-lived session (or an
+# out-of-session shell) started before CODEX_STORE_ROOTS was added to
+# settings.json's `env` block never has the var in its process env — without
+# this fallback such a session silently scans the wrong root and, since
+# roots.stamp still records the (unchanged) wrong value, never self-repairs.
+#
+# Set CODEX_STORE_ROOTS_DEBUG=1 to log the winning source to stderr.
+_stores_resolve_roots_spec() {
+    if [ -n "${CODEX_STORE_ROOTS:-}" ]; then
+        [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: roots from \$CODEX_STORE_ROOTS" >&2
+        printf '%s' "$CODEX_STORE_ROOTS"
+        return
+    fi
+    if [ -n "${CODEX_ROOT:-}" ]; then
+        [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: roots from \$CODEX_ROOT" >&2
+        printf '%s' "$CODEX_ROOT"
+        return
+    fi
+    local settings_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+    if [ -f "$settings_file" ] && command -v jq >/dev/null 2>&1; then
+        local from_settings
+        from_settings="$(jq -r '.env.CODEX_STORE_ROOTS // empty' "$settings_file" 2>/dev/null || true)"
+        if [ -n "$from_settings" ]; then
+            [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: roots from settings.json ($settings_file)" >&2
+            printf '%s' "$from_settings"
+            return
+        fi
+    fi
+    [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: roots from hardcoded default" >&2
+    printf '%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+}
+
+_stores_split_roots "$(_stores_resolve_roots_spec)"
 
 # QUERY_RECORDS_EXTRA_STORES — optional, space-separated, root-relative store
 # paths a survey tool may append to its scan list. Subsumed for the
