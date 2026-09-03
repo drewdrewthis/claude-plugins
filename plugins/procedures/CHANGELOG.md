@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.13.1...procedures-v0.13.2) (2026-09-03)
+
+
+### Bug Fixes
+
+* fall back to settings.json for CODEX_STORE_ROOTS when env unset ([#149](https://github.com/drewdrewthis/claude-plugins/issues/149)) ([5299eb9](https://github.com/drewdrewthis/claude-plugins/commit/5299eb99f5f7af2e2524061584cda6066b077dc3))
+
 ## [0.13.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.13.0...procedures-v0.13.1) (2026-09-02)
 
 
