@@ -21,7 +21,10 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 # Steps
 
 1. **Find your cursors.** `${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}/cursors/<slug>.line` holds an integer line
-   count already processed for one transcript. `slug` is that transcript's own filename
+   count already processed for one transcript (that path is the librarian state
+   dir — see `scripts/lib/stores.sh` `procedures_state_dir` for the full
+   ~/.knowledge-aware precedence: config.json `state_dir`, then `~/.knowledge/state`,
+   then this XDG fallback). `slug` is that transcript's own filename
    with `.jsonl` stripped (its session id — a UUID, already collision-free across
    projects, so the project directory need not be encoded too). No cursor file means
    start at 0.
@@ -43,7 +46,12 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    conventions (`${CLAUDE_PLUGIN_ROOT}/skills/update-records/`). Store roots come from
    `CODEX_STORE_ROOTS` (colon-separated absolute paths; split it yourself, default
    `$HOME/.claude` when unset) — the same variable `scripts/lib/stores.sh` and
-   `build-record-index.sh --root` consume.
+   `build-record-index.sh --root` consume. `CODEX_STORE_ROOTS` is now just the
+   top of a longer precedence chain: when it is unset the roots come from
+   settings.json, then `~/.knowledge/config.json` `modules`, then auto-discovered
+   `~/.knowledge/modules/*` git repos, then the legacy `$CODEX_ROOT`/`$HOME/.claude`.
+   `scripts/lib/stores.sh` `_stores_resolve_roots_spec` is the source of truth for
+   that order — read it there rather than reconstructing it here.
 
    | Kind | Your write |
    |---|---|
@@ -69,7 +77,7 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    5. `git -C <root> push`. On rejection: `git -C <root> pull --rebase` and retry the push
       ONCE. If that still fails (a real conflict, not a fast-forward gap), run
       `git -C <root> rebase --abort`, leave the repo clean, and append a note — root,
-      files, what happened — to `${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}/grooming-queue.md` instead of forcing
+      files, what happened — to `${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}/grooming-queue.md` (that state dir now resolves ~/.knowledge-aware — see `scripts/lib/stores.sh` `procedures_state_dir`) instead of forcing
       anything through.
 
 7. **Advance a transcript's cursor only after every store root its writes touched is

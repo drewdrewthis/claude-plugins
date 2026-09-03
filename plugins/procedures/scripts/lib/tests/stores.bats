@@ -1,22 +1,38 @@
 #!/usr/bin/env bats
 # stores.sh resolver tests.
 #
-# Proves procedures_state_dir's precedence: PROCEDURES_STATE_DIR (explicit
-# override) > XDG_STATE_HOME/procedures/librarian > $HOME/.local/state/...
-# — the per-machine runtime-state dir the librarian keeps OUT of the corpus.
+# Proves two resolvers, both now ~/.knowledge-aware:
+#   procedures_state_dir — PROCEDURES_STATE_DIR (explicit override) >
+#     ~/.knowledge/config.json `state_dir` > ~/.knowledge/state (only when that
+#     dir exists) > XDG_STATE_HOME/procedures/librarian > $HOME/.local/state/...
+#   STORE_ROOTS (via _stores_resolve_roots_spec) — env/settings > config.json
+#     `modules` > auto-discovered ~/.knowledge/modules/* git repos > legacy.
+# HOME is a fresh mktemp dir with no ~/.knowledge, so the pre-existing state-dir
+# tests below still take the XDG/hardcoded fallback path unchanged.
 #
 # Run: bats scripts/lib/tests/stores.bats
 
 setup() {
   STORES_SH="$BATS_TEST_DIRNAME/../stores.sh"
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/stores-home.XXXXXX")"
-  unset PROCEDURES_STATE_DIR XDG_STATE_HOME
+  # A stray CLAUDE_CONFIG_DIR/settings.json or an inherited CODEX_STORE_ROOTS in
+  # the ambient env would outrank the ~/.knowledge tiers under test, so clear
+  # every higher- and lower-precedence source and let HOME alone decide.
+  unset PROCEDURES_STATE_DIR XDG_STATE_HOME \
+        CODEX_STORE_ROOTS CODEX_ROOT KNOWLEDGE_HOME CLAUDE_CONFIG_DIR
 }
 
 teardown() { rm -rf "$HOME" 2>/dev/null || true; }
 
 # Source stores.sh in a clean subshell and print the resolved state dir.
 resolve() { bash -c 'source "$1"; procedures_state_dir' _ "$STORES_SH"; }
+
+# Source stores.sh in a clean subshell and print STORE_ROOTS, one per line.
+# STORE_ROOTS is populated at source time by
+# `_stores_split_roots "$(_stores_resolve_roots_spec)"`.
+resolve_roots() {
+  bash -c 'source "$1"; for r in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do printf "%s\n" "$r"; done' _ "$STORES_SH"
+}
 
 @test "procedures_state_dir defaults to \$HOME/.local/state/procedures/librarian" {
   run resolve
@@ -37,4 +53,60 @@ resolve() { bash -c 'source "$1"; procedures_state_dir' _ "$STORES_SH"; }
   run resolve
   [ "$status" -eq 0 ]
   [ "$output" = "$HOME/custom/place" ]
+}
+
+# --- store-root resolution -------------------------------------------------
+
+@test "auto-discovery finds two fake ~/.knowledge/modules in alphabetical order" {
+  mkdir -p "$HOME/.knowledge/modules/alpha/.git"
+  mkdir -p "$HOME/.knowledge/modules/beta/.git"
+  run resolve_roots
+  [ "$status" -eq 0 ]
+  # Exactly the two module dirs, alphabetical (bash glob order), nothing else.
+  [ "${lines[0]}" = "$HOME/.knowledge/modules/alpha" ]
+  [ "${lines[1]}" = "$HOME/.knowledge/modules/beta" ]
+  [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "config.json modules overrides auto-discovery: config order wins, unlisted module excluded" {
+  # Discovery WOULD find all three if config.json were absent.
+  mkdir -p "$HOME/.knowledge/modules/alpha/.git"
+  mkdir -p "$HOME/.knowledge/modules/beta/.git"
+  mkdir -p "$HOME/.knowledge/modules/gamma/.git"
+  # Reversed order, gamma deliberately omitted.
+  printf '{"modules": ["beta", "alpha"]}\n' > "$HOME/.knowledge/config.json"
+  run resolve_roots
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$HOME/.knowledge/modules/beta" ]
+  [ "${lines[1]}" = "$HOME/.knowledge/modules/alpha" ]
+  [ "${#lines[@]}" -eq 2 ]   # gamma excluded, discovery not consulted
+}
+
+# --- state-dir ~/.knowledge precedence (three-way) -------------------------
+# The pre-existing tests above cover the case where ~/.knowledge is absent
+# entirely (XDG/hardcoded fallback); these three cover it present.
+
+@test "state_dir: PROCEDURES_STATE_DIR wins over config.json state_dir and ~/.knowledge/state" {
+  mkdir -p "$HOME/.knowledge"
+  printf '{"state_dir": "%s/from-config"}\n' "$HOME" > "$HOME/.knowledge/config.json"
+  export PROCEDURES_STATE_DIR="$HOME/from-env"
+  run resolve
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/from-env" ]
+}
+
+@test "state_dir: config.json state_dir wins over the ~/.knowledge/state default" {
+  mkdir -p "$HOME/.knowledge"
+  printf '{"state_dir": "%s/from-config"}\n' "$HOME" > "$HOME/.knowledge/config.json"
+  run resolve
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/from-config" ]
+}
+
+@test "state_dir: falls to ~/.knowledge/state when the dir exists and config has no state_dir" {
+  mkdir -p "$HOME/.knowledge"
+  printf '{"modules": ["x"]}\n' > "$HOME/.knowledge/config.json"   # no state_dir key
+  run resolve
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/.knowledge/state" ]
 }

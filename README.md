@@ -58,6 +58,20 @@ adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
   `MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`, `FAILURE_MODES_DIR`,
   `LINT_FRONTMATTER_ROOT`, `TURN_STATE_DIR`,
   `KNOWLEDGE_ROOT` for the frontmatter hook).
+- **Knowledge home layout:** `${KNOWLEDGE_HOME:-$HOME/.knowledge}` is the
+  optional multi-repo root — `modules/<name>/` (one git clone per knowledge
+  store), an optional `config.json` (`modules`: ordered list of module
+  names/absolute paths, overrides auto-discovery; `state_dir`: override), and
+  `state/` (librarian cursors/lock/grooming-queue plus the how-do-i index
+  cache). `scripts/lib/stores.sh` resolves store roots as `$CODEX_STORE_ROOTS`
+  env > settings.json `.env.CODEX_STORE_ROOTS` > `~/.knowledge/config.json`
+  `modules` > auto-discovered `~/.knowledge/modules/*` (git repos, sorted) >
+  `$CODEX_ROOT` > `~/.claude`; state dir as `$PROCEDURES_STATE_DIR` >
+  config.json `state_dir` > `~/.knowledge/state` (when that dir exists) > the
+  XDG state-dir fallback. A one-time migration in `hooks/librarian-poke.sh`
+  moves legacy librarian cursors/queue (`~/.claude/librarian/`) and the legacy
+  how-do-i index cache (`~/.cache/how-do-i-index/`) into `state/`; module
+  clones are never auto-moved.
 - **Script paths in skill/agent bodies:** the skills and agents reference the
   plugin-shipped scripts via `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}`
   (substituted by Claude Code in skill and agent markdown) instead of

@@ -144,12 +144,17 @@ lp_worker() {
 }
 
 # --- one-time state migration ----------------------------------------------
-# Move librarian runtime state out of the git-tracked ~/.claude repo into the
-# XDG state dir. Runs on EVERY invocation (both the gating call and the
-# --worker re-entry) — the checks are cheap and the move is idempotent: once
-# the new cursors dir is populated it no-ops. FAIL-OPEN, mv-ONLY (never rm):
-# nothing is deleted, every step is guarded so a failure never blocks the
-# poke, and a marker is left in the OLD location pointing at the new one.
+# Move librarian runtime state (cursors, grooming queue) out of the git-tracked
+# ~/.claude repo, AND the how-do-i index cache out of ~/.cache, into the
+# resolved state dir ($(lp_state_dir) — ~/.knowledge/state when the knowledge
+# home exists, else the XDG state dir). Runs on EVERY invocation (both the
+# gating call and the --worker re-entry) — the checks are cheap and each move
+# is idempotent: once the new location is populated that block no-ops. FAIL-
+# OPEN, mv-ONLY (never rm): nothing is deleted, every step is guarded so a
+# failure never blocks the poke, and a marker is left in each OLD location
+# pointing at the new one. It only ever touches the OLD ~/.claude/librarian/*
+# and ~/.cache/how-do-i-index locations — never modules/ or anything else under
+# $KNOWLEDGE_HOME, which are git clones that must not be auto-moved.
 lp_migrate_legacy_state() {
     local legacy="$HOME/.claude/librarian"
     local legacy_cursors="$legacy/cursors"
@@ -177,6 +182,24 @@ lp_migrate_legacy_state() {
     if [ -f "$legacy_queue" ] && [ ! -f "$state/grooming-queue.md" ]; then
         mkdir -p "$state" 2>/dev/null || true
         mv "$legacy_queue" "$state/grooming-queue.md" 2>/dev/null || true
+    fi
+
+    # How-do-i index cache: same guard shape as cursors above — move the
+    # CONTENTS (never the dir) only when the legacy dir has files AND the new
+    # one is absent-or-empty, so a machine already migrated is a no-op. The
+    # index moved off ~/.cache onto the state dir so a single location holds
+    # ALL per-machine librarian runtime state.
+    local legacy_index new_index
+    legacy_index="${XDG_CACHE_HOME:-$HOME/.cache}/how-do-i-index"
+    new_index="$state/how-do-i-index"
+    if [ -d "$legacy_index" ] && [ -n "$(ls -A "$legacy_index" 2>/dev/null)" ]; then
+        if [ ! -d "$new_index" ] || [ -z "$(ls -A "$new_index" 2>/dev/null)" ]; then
+            if mkdir -p "$new_index" 2>/dev/null; then
+                mv "$legacy_index"/* "$new_index"/ 2>/dev/null || true
+                printf 'how-do-i index moved to: %s\n' "$new_index" \
+                    > "$legacy_index/MIGRATED-to-${new_index//\//-}" 2>/dev/null || true
+            fi
+        fi
     fi
     return 0
 }

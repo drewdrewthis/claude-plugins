@@ -60,7 +60,10 @@
 #                       at a fixture stub so no real model is ever called by
 #                       the test suite. Default: claude (resolved via PATH).
 #   HOWDOI_INDEX_DIR    default for --index-dir when the flag is omitted.
-#                       Default: $XDG_CACHE_HOME/how-do-i-index (or ~/.cache/how-do-i-index).
+#                       Default: $(procedures_state_dir)/how-do-i-index — i.e.
+#                       ~/.knowledge/state/how-do-i-index when ~/.knowledge exists,
+#                       else the XDG state-dir fallback (see lib/stores.sh
+#                       procedures_state_dir).
 #   CODEX_STORE_ROOTS   colon-separated record-store roots (see lib/stores.sh
 #                       _stores_resolve_roots_spec) — drives cache
 #                       invalidation (above) as well as what
@@ -129,6 +132,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { printf 'how-do-i: %s\n' "$1" >&2; exit 1; }
 
+# Single source of truth for "what roots are currently configured" —
+# _stores_resolve_roots_spec (lib/stores.sh), the SAME resolver
+# build-record-index.sh calls for its own root list, so the stamp written
+# below can never drift from what a rebuild actually scans. Sourced HERE,
+# high up (before usage() and before INDEX_DIR's default below), not lazily:
+# both INDEX_DIR's default — via procedures_state_dir — and CURRENT_ROOTS
+# (further down) now depend on this lib being loaded.
+STORES_LIB="$SCRIPT_DIR/lib/stores.sh"
+[ -f "$STORES_LIB" ] || die "lib/stores.sh not found at $STORES_LIB (expected sibling of build-record-index.sh)"
+# shellcheck source=lib/stores.sh
+source "$STORES_LIB"
+
 usage() {
     cat <<'EOF'
 Usage: how-do-i.sh [--question TEXT | --question-file PATH] [--index-dir DIR]
@@ -146,7 +161,9 @@ Required (exactly one):
 Options:
   --index-dir DIR    where index.txt/map.tsv/session.id/session.fingerprint
                       live. Default: $HOWDOI_INDEX_DIR or
-                      $XDG_CACHE_HOME/how-do-i-index (or ~/.cache/how-do-i-index).
+                      $(procedures_state_dir)/how-do-i-index — i.e.
+                      ~/.knowledge/state/how-do-i-index when ~/.knowledge exists,
+                      else the XDG state-dir fallback (see lib/stores.sh).
   --rebuild           force a fresh build-record-index.sh run even if an
                       index already exists. Rejected together with
                       --dry-run (exit 2).
@@ -167,7 +184,9 @@ Env:
   HOWDOI_CLAUDE_BIN   override the `claude` binary (tests point this at a
                       stub). Default: claude, resolved via PATH.
   HOWDOI_INDEX_DIR    default for --index-dir. Default:
-                      $XDG_CACHE_HOME/how-do-i-index (or ~/.cache/how-do-i-index).
+                      $(procedures_state_dir)/how-do-i-index — i.e.
+                      ~/.knowledge/state/how-do-i-index when ~/.knowledge exists,
+                      else the XDG state-dir fallback (see lib/stores.sh).
 
 Exit codes: 0 succeeded, 1 fatal runtime error, 2 usage error.
 EOF
@@ -448,7 +467,7 @@ esac
 # --- main flag parsing ---
 QUESTION_TEXT=""
 QUESTION_FILE=""
-INDEX_DIR="${HOWDOI_INDEX_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/how-do-i-index}"
+INDEX_DIR="${HOWDOI_INDEX_DIR:-$(procedures_state_dir)/how-do-i-index}"
 REBUILD=false
 SELECT_MODEL="haiku"
 ANSWER_MODEL="sonnet"
@@ -502,16 +521,6 @@ MAP_TSV="$INDEX_DIR/map.tsv"
 SESSION_ID_FILE="$INDEX_DIR/session.id"
 SESSION_FP_FILE="$INDEX_DIR/session.fingerprint"
 ROOTS_STAMP_FILE="$INDEX_DIR/roots.stamp"
-
-# Single source of truth for "what roots are currently configured" —
-# _stores_resolve_roots_spec (lib/stores.sh), the SAME resolver
-# build-record-index.sh calls for its own root list, so the stamp written
-# below can never drift from what a rebuild actually scans. Sourced here
-# (not lazily) because CURRENT_ROOTS itself now depends on it.
-STORES_LIB="$SCRIPT_DIR/lib/stores.sh"
-[ -f "$STORES_LIB" ] || die "lib/stores.sh not found at $STORES_LIB (expected sibling of build-record-index.sh)"
-# shellcheck source=lib/stores.sh
-source "$STORES_LIB"
 CURRENT_ROOTS="$(_stores_resolve_roots_spec)"
 
 if $DRY_RUN; then

@@ -187,3 +187,34 @@ claude_never_ran() { [ ! -f "$CLAUDE_LOG" ]; }
   [ -f "$STATE/cursors/aaa.line" ]
   [ -f "$STATE/cursors/bbb.line" ]
 }
+
+# Same isolation as the cursors test: HOME is a mktemp dir with no ~/.knowledge,
+# so the default resolver lands the state dir (and thus the index cache's new
+# home) at $HOME/.local/state/procedures/librarian.
+@test "one-time migration moves the legacy how-do-i index cache into state/, marks the old location, then no-ops" {
+  local STATE="$HOME/.local/state/procedures/librarian"
+  local LEGACY="$HOME/.cache/how-do-i-index"
+  mkdir -p "$LEGACY"
+  printf 'idx line\n' > "$LEGACY/index.txt"
+  printf 'a\tb\n'      > "$LEGACY/map.tsv"
+
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+
+  # index files moved to the new state dir, contents intact
+  [ -f "$STATE/how-do-i-index/index.txt" ]
+  [ -f "$STATE/how-do-i-index/map.tsv" ]
+  [ "$(cat "$STATE/how-do-i-index/index.txt")" = "idx line" ]
+  # a marker is left in the OLD location pointing at where the cache went
+  ls "$LEGACY/"MIGRATED-to-* >/dev/null 2>&1
+  grep -q "$STATE/how-do-i-index" "$LEGACY/"MIGRATED-to-*
+
+  # Idempotent: a NEW file dropped into the legacy dir after migration is NOT
+  # swept a second time, because the new dir is now populated. Replay the same
+  # payload (same turn => gating releases, but migration still runs first).
+  printf 'late\n' > "$LEGACY/late.txt"
+  LIBRARIAN_SYNC=1 run bash "$HOOKS/librarian-poke.sh" < "$TURN_STATE_DIR/payload.json"
+  [ "$status" -eq 0 ]
+  [ ! -f "$STATE/how-do-i-index/late.txt" ]   # not migrated again
+  [ -f "$LEGACY/late.txt" ]                    # left where it was
+}
