@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.13.3...procedures-v0.14.0) (2026-09-03)
+
+
+### Features
+
+* **procedures:** ~/.knowledge home — module auto-discovery, config.json, state dir ([#154](https://github.com/drewdrewthis/claude-plugins/issues/154)) ([a0a028e](https://github.com/drewdrewthis/claude-plugins/commit/a0a028e209fb600adc3e61b75ca95db11f729152))
+
 ## [0.13.3](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.13.2...procedures-v0.13.3) (2026-09-03)
 
 
