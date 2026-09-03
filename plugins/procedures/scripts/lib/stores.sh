@@ -199,3 +199,26 @@ for _s in "${STORES[@]}"; do
     STORES_BASENAME_ALT="${STORES_BASENAME_ALT:+${STORES_BASENAME_ALT}|}${_b}"
 done
 unset _s _b
+
+# procedures_state_dir — per-machine LIBRARIAN RUNTIME STATE directory, prints
+# the path (no filesystem access, no CWD dependency, safe at any time).
+#
+# This is deliberately NOT a store. Everything above lives under a git-tracked
+# corpus root and is scanned by lint-frontmatter/build-record-index; this is
+# local, per-machine runtime state — the librarian's read cursors, its
+# grooming queue, its single-writer lock — that must NEVER be committed. It
+# previously sat inside ~/.claude (itself a tracked repo), where a `git add -A`
+# staged thousands of per-machine churn files (~2900 cursor files on one box).
+# So it moves out of the corpus entirely, onto the XDG state-dir convention
+# (state, not config/cache: mutable data that outlives a process but is not
+# user-configured and is safe to lose).
+#
+# Precedence mirrors the config-dir pattern above ($CLAUDE_CONFIG_DIR):
+# $PROCEDURES_STATE_DIR (explicit override, e.g. tests) > $XDG_STATE_HOME/procedures/librarian
+# > hardcoded $HOME/.local/state/procedures/librarian.
+#
+# Exported (export -f) so a caller can `source stores.sh` and invoke it.
+procedures_state_dir() {
+    printf '%s' "${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}"
+}
+export -f procedures_state_dir 2>/dev/null || true

@@ -20,7 +20,7 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 
 # Steps
 
-1. **Find your cursors.** `~/.claude/librarian/cursors/<slug>.line` holds an integer line
+1. **Find your cursors.** `${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}/cursors/<slug>.line` holds an integer line
    count already processed for one transcript. `slug` is that transcript's own filename
    with `.jsonl` stripped (its session id — a UUID, already collision-free across
    projects, so the project directory need not be encoded too). No cursor file means
@@ -69,7 +69,7 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    5. `git -C <root> push`. On rejection: `git -C <root> pull --rebase` and retry the push
       ONCE. If that still fails (a real conflict, not a fast-forward gap), run
       `git -C <root> rebase --abort`, leave the repo clean, and append a note — root,
-      files, what happened — to `~/.claude/librarian/grooming-queue.md` instead of forcing
+      files, what happened — to `${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}/grooming-queue.md` instead of forcing
       anything through.
 
 7. **Advance a transcript's cursor only after every store root its writes touched is
