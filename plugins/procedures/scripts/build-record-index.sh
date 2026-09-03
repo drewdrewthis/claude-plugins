@@ -155,14 +155,15 @@ source "$LIB_DIR/stores.sh"
 
 # Resolve the root list. --root wins outright (single root, byte-identical
 # to this script's original contract — every existing test uses this path).
-# Otherwise CODEX_STORE_ROOTS (default: this run's own $ROOT, i.e. unset =>
-# single root exactly as before).
+# Otherwise _stores_resolve_roots_spec (CODEX_STORE_ROOTS > CODEX_ROOT >
+# settings.json > hardcoded default — see lib/stores.sh), so this always
+# matches what how-do-i.sh's roots.stamp records.
 ROOTS=()
 if [ "$ROOT_EXPLICIT" -eq 1 ]; then
     ROOT="$(cd "$ROOT" && pwd)"
     ROOTS=("$ROOT")
 else
-    _stores_split_roots "${CODEX_STORE_ROOTS:-$ROOT}"
+    _stores_split_roots "$(_stores_resolve_roots_spec)"
     for _r in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do
         if [ -d "$_r" ]; then
             ROOTS+=("$(cd "$_r" && pwd)")
@@ -173,7 +174,7 @@ else
     unset _r
 fi
 if [ "${#ROOTS[@]}" -eq 0 ]; then
-    echo "build-record-index: no valid root directory found (checked: ${CODEX_STORE_ROOTS:-$ROOT})" >&2
+    echo "build-record-index: no valid root directory found (checked: $(_stores_resolve_roots_spec))" >&2
     exit 2
 fi
 

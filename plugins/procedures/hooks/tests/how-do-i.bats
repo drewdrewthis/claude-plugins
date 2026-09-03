@@ -853,3 +853,80 @@ EOF
   [ ! -f "$build_log" ]
   grep -q "fresh content" "$index_dir/index.txt"
 }
+
+# Regression: a long-lived session (or an out-of-session shell) started
+# before CODEX_STORE_ROOTS was added to settings.json's `env` block has
+# neither CODEX_STORE_ROOTS nor CODEX_ROOT in its process env. Before the
+# settings.json fallback, CURRENT_ROOTS silently collapsed to the hardcoded
+# ~/.claude default in that case, and — because roots.stamp then recorded
+# THAT (wrong) value — never self-repaired on a later run either.
+@test "CODEX_STORE_ROOTS and CODEX_ROOT both unset: roots resolve from this process's settings.json" {
+  unset CODEX_ROOT
+  unset CODEX_STORE_ROOTS
+
+  fake_config="$TMP/fake-config"
+  mkdir -p "$fake_config"
+  settings_root="$TMP/from-settings-root"
+  mkdir -p "$settings_root"
+  jq -n --arg r "$settings_root" '{env: {CODEX_STORE_ROOTS: $r}}' > "$fake_config/settings.json"
+
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  # No pre-seeded index/stamp: forces a build, which is what observes
+  # CURRENT_ROOTS.
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  scripts_dir="$TMP/scripts"
+  build_log="$TMP/build.log"
+  make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
+
+  run env CLAUDE_CONFIG_DIR="$fake_config" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [ -f "$build_log" ]
+  [ "$(sed -n '1p' "$index_dir/roots.stamp")" = "$settings_root" ]
+}
+
+@test "a rebuild forced by the mtime trigger rewrites roots.stamp with the roots actually used" {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  index_dir="$TMP/index-dir"
+  mkdir -p "$index_dir"
+  printf '1 :: stale content\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
+  touch -t 202001010000 "$index_dir/index.txt"
+  seed_roots_stamp "$index_dir"
+
+  # A record file that changed after the index was built — triggers the
+  # mtime rebuild path (not the roots-mismatch path, since the stamp already
+  # matches CURRENT_ROOTS).
+  printf '# changed record\n' > "$CODEX_ROOT/changed.md"
+  touch -t 202501010000 "$CODEX_ROOT/changed.md"
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  scripts_dir="$TMP/scripts"
+  build_log="$TMP/build.log"
+  make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [ -f "$build_log" ]
+  grep -q "rebuilt content" "$index_dir/index.txt"
+  # roots.stamp was rewritten recording the roots this rebuild actually
+  # used (a same-second rewrite can coincidentally match stamp_before
+  # byte-for-byte, so this pins content correctness, not just "changed").
+  [ "$(sed -n '1p' "$index_dir/roots.stamp")" = "$CODEX_ROOT" ]
+  [ -f "$index_dir/roots.stamp" ]
+}
