@@ -46,9 +46,24 @@ teardown() {
 # gate (section o) treats an already-built index as fresh. Every fixture
 # that pre-seeds index.txt/map.tsv to skip the build path calls this too,
 # now that a missing stamp alone forces a rebuild.
+#
+# Precedence matches _stores_resolve_roots_spec: $CODEX_STORE_ROOTS env >
+# settings.json > $CODEX_ROOT env > ~/.claude.
 seed_roots_stamp() {
   local index_dir="$1"
-  printf '%s\n%s\n' "${CODEX_STORE_ROOTS:-${CODEX_ROOT:-$HOME/.claude}}" "$(date +%s)" > "$index_dir/roots.stamp"
+  local roots_spec
+  # Check CODEX_STORE_ROOTS first
+  if [ -n "${CODEX_STORE_ROOTS:-}" ]; then
+    roots_spec="$CODEX_STORE_ROOTS"
+  # Check settings.json next (if CLAUDE_CONFIG_DIR is set and file exists)
+  elif [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" ] && command -v jq >/dev/null 2>&1; then
+    roots_spec="$(jq -r '.env.CODEX_STORE_ROOTS // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || true)"
+    [ -z "$roots_spec" ] && roots_spec="${CODEX_ROOT:-$HOME/.claude}"
+  # Fall back to CODEX_ROOT
+  else
+    roots_spec="${CODEX_ROOT:-$HOME/.claude}"
+  fi
+  printf '%s\n%s\n' "$roots_spec" "$(date +%s)" > "$index_dir/roots.stamp"
 }
 
 # Generic HOWDOI_CLAUDE_BIN stub. Writes an executable at $1. Its behavior at
@@ -769,6 +784,10 @@ EOF
   mkdir -p "$stub_dir"
   make_stub "$stub"
 
+  # Isolate CLAUDE_CONFIG_DIR so we don't pick up ~/.claude/settings.json
+  isolated_config="$TMP/isolated-config"
+  mkdir -p "$isolated_config"
+
   index_dir="$TMP/index-dir"
   mkdir -p "$index_dir"
   printf '1 :: stale content\n' > "$index_dir/index.txt"
@@ -782,7 +801,7 @@ EOF
   build_log="$TMP/build.log"
   make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
 
-  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+  run env CLAUDE_CONFIG_DIR="$isolated_config" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
       bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
 
   [ "$status" -eq 0 ]
@@ -829,12 +848,16 @@ EOF
   mkdir -p "$stub_dir"
   make_stub "$stub"
 
+  # Isolate CLAUDE_CONFIG_DIR so we don't pick up ~/.claude/settings.json
+  isolated_config="$TMP/isolated-config"
+  mkdir -p "$isolated_config"
+
   index_dir="$TMP/index-dir"
   mkdir -p "$index_dir"
   printf '1 :: fresh content\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
   touch -t 202501010000 "$index_dir/index.txt"
-  seed_roots_stamp "$index_dir"
+  CLAUDE_CONFIG_DIR="$isolated_config" seed_roots_stamp "$index_dir"
 
   # A record file that predates the index — must NOT trigger a rebuild.
   printf '# old record\n' > "$CODEX_ROOT/old.md"
@@ -846,7 +869,7 @@ EOF
   build_log="$TMP/build.log"
   make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
 
-  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+  run env CLAUDE_CONFIG_DIR="$isolated_config" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
       bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
 
   [ "$status" -eq 0 ]
@@ -893,18 +916,56 @@ EOF
   [ "$(sed -n '1p' "$index_dir/roots.stamp")" = "$settings_root" ]
 }
 
-@test "a rebuild forced by the mtime trigger rewrites roots.stamp with the roots actually used" {
+@test "CODEX_ROOT set AND settings.json present: settings.json wins over CODEX_ROOT" {
+  fake_config="$TMP/fake-config"
+  mkdir -p "$fake_config"
+  settings_root="$TMP/from-settings-root"
+  mkdir -p "$settings_root"
+  jq -n --arg r "$settings_root" '{env: {CODEX_STORE_ROOTS: $r}}' > "$fake_config/settings.json"
+
+  unset CODEX_STORE_ROOTS
+  export CODEX_ROOT="$TMP/legacy-root"
+  mkdir -p "$CODEX_ROOT"
+
   stub="$TMP/fake-claude"
   stub_dir="$TMP/stubdata"
   mkdir -p "$stub_dir"
   make_stub "$stub"
 
   index_dir="$TMP/index-dir"
+  # No pre-seeded index/stamp: forces a build, which observes CURRENT_ROOTS.
+
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  scripts_dir="$TMP/scripts"
+  build_log="$TMP/build.log"
+  make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
+
+  run env CLAUDE_CONFIG_DIR="$fake_config" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 0 ]
+  [ -f "$build_log" ]
+  # settings.json root should win, not the CODEX_ROOT
+  [ "$(sed -n '1p' "$index_dir/roots.stamp")" = "$settings_root" ]
+}
+
+@test "a rebuild forced by the mtime trigger rewrites roots.stamp with the roots actually used" {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  mkdir -p "$stub_dir"
+  make_stub "$stub"
+
+  # Isolate CLAUDE_CONFIG_DIR so we don't pick up ~/.claude/settings.json
+  isolated_config="$TMP/isolated-config"
+  mkdir -p "$isolated_config"
+
+  index_dir="$TMP/index-dir"
   mkdir -p "$index_dir"
   printf '1 :: stale content\n' > "$index_dir/index.txt"
   printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
   touch -t 202001010000 "$index_dir/index.txt"
-  seed_roots_stamp "$index_dir"
+  CLAUDE_CONFIG_DIR="$isolated_config" seed_roots_stamp "$index_dir"
 
   # A record file that changed after the index was built — triggers the
   # mtime rebuild path (not the roots-mismatch path, since the stamp already
@@ -918,7 +979,7 @@ EOF
   build_log="$TMP/build.log"
   make_build_sentinel_scripts_dir "$scripts_dir" "$build_log"
 
-  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+  run env CLAUDE_CONFIG_DIR="$isolated_config" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
       bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
 
   [ "$status" -eq 0 ]
