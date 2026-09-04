@@ -1,6 +1,6 @@
 {
   "name": "procedures",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Knowledge system: /what-do-i-know router (any record kind — procedures, decisions, solutions, references), /update-records (procedure/decision/solution + templates), /adherence-check cold-read review, a nudge that reminds both exist, and soft-by-default gate hooks — how-do-i-gate (PreToolUse) + am-i-done-gate (Stop), off unless armed — plus librarian-poke (async Stop hook that wakes a librarian agent to drain session transcripts into the knowledge store; supersedes evolve-sweep, kept but disabled by default), from orchard-codex develop-sweatshop.",
   "author": {
     "name": "Drü"
