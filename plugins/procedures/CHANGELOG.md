@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.14.1...procedures-v0.15.0) (2026-09-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* drop ~/.claude fallback root — knowledge must live in ~/.knowledge modules ([#161](https://github.com/drewdrewthis/claude-plugins/issues/161))
+
+### Features
+
+* drop ~/.claude fallback root — knowledge must live in ~/.knowledge modules ([#161](https://github.com/drewdrewthis/claude-plugins/issues/161)) ([7f51912](https://github.com/drewdrewthis/claude-plugins/commit/7f51912a1b4ecab6401bdd65f9e70a6a35c8e84f))
+
 ## [0.14.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.14.0...procedures-v0.14.1) (2026-09-04)
 
 
