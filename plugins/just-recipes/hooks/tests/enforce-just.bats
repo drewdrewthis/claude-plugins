@@ -199,3 +199,41 @@ context()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // 
   [ -f "$FAKE_HOME/.knowledge/state/wrap.log" ]
   grep -q "wget http://x" "$FAKE_HOME/.knowledge/state/wrap.log"
 }
+
+# --- glob safety in match_recipes ------------------------------------------
+
+@test "a glob-shaped doc-comment word does not match a same-named cwd file" {
+  # A doc comment word like `deploy*` must be treated LITERALLY, never
+  # expanded against files sitting in cwd (here `deploy-notes`), or an
+  # unrelated command sharing that filename would wrongly get nudged.
+  GLOBDIR="$SCRATCH/globproj"
+  mkdir -p "$GLOBDIR"
+  cat > "$GLOBDIR/justfile" <<'JF'
+# deploy* things
+build:
+    @echo building
+JF
+  : > "$GLOBDIR/deploy-notes"
+
+  run bash -c '
+    cd "$1" || exit 1
+    jq -nc --arg c "deploy-notes cat" --arg name Bash "{tool_name:\$name,tool_input:{command:\$c}}" \
+      | env -u JUST_RECIPES_ENFORCE \
+        PATH="$2:$PATH" HOME="$3" CODEX_ROOT="$4" CLAUDE_PROJECT_DIR="$1" \
+        bash "$5"
+  ' _ "$GLOBDIR" "$STUB" "$FAKE_HOME" "$CODEX_ROOT" "$HOOK"
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "wrap.log is created with owner-only 0600 permissions" {
+  run run_hook "build --release"
+  [ -f "$WRAPLOG" ]
+  if [[ "$(uname)" == "Darwin" ]]; then
+    mode=$(stat -f %Lp "$WRAPLOG")
+  else
+    mode=$(stat -c %a "$WRAPLOG")
+  fi
+  [ "$mode" = "600" ]
+}

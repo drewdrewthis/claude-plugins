@@ -38,6 +38,9 @@ log_wrap() {
   fi
   logfile="$logdir/wrap.log"
   mkdir -p "$logdir" 2>/dev/null || return 0
+  chmod 700 "$logdir" 2>/dev/null
+  [ -e "$logfile" ] || (umask 077; : >>"$logfile") 2>/dev/null
+  chmod 600 "$logfile" 2>/dev/null
   ts=$(date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) || return 0
   [ -n "$ts" ] || return 0
   oneline=$(printf '%s' "$raw" | tr '\r\n' '  ')
@@ -57,8 +60,15 @@ first_cmd_word() {
 # recipe whose doc comment (`just --list`) contains the word as a whole word.
 # Prints a deduped, space-separated list (possibly empty).
 match_recipes() {
-  local d="$1" word="$2" lcword names name doc line lcname lcdoc dw matched=""
+  local d="$1" word="$2" lcword names name doc line lcname lcdoc dw matched="" restore_f=0
   lcword=$(printf '%s' "$word" | tr '[:upper:]' '[:lower:]')
+
+  # Word-splitting recipe names / doc-comment words below relies on unquoted
+  # expansion; disable pathname expansion so a word like `build*` cannot glob
+  # against files in cwd. Restore the prior state (rather than always
+  # re-enabling) so a caller that already had -f set is not affected.
+  case $- in *f*) restore_f=1 ;; esac
+  set -f
 
   names=$( cd "$d" 2>/dev/null && just --summary 2>/dev/null ) || names=""
   for name in $names; do
@@ -90,6 +100,8 @@ match_recipes() {
   done <<EOF
 $( cd "$d" 2>/dev/null && just --list 2>/dev/null )
 EOF
+
+  [ "$restore_f" -eq 0 ] && set +f
 
   printf '%s' "$matched" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ *$//;s/^ *//'
 }

@@ -28,6 +28,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The suite reads the checkout and shells out to nothing networked,
+          # so the default persisted token would sit in .git/config for the
+          # whole job with no step that needs it.
+          persist-credentials: false
 
       - name: Install bats and jq (Linux)
         if: runner.os == 'Linux'
