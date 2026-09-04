@@ -191,13 +191,29 @@ context()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // 
   [ "$(wc -l < "$WRAPLOG" | tr -d ' ')" = "1" ]
 }
 
-@test "wrap.log falls back to \$HOME/.knowledge/state when CODEX_ROOT is unset" {
+# --- state-dir precedence (knowledge-home > CODEX_ROOT > XDG) --------------
+
+@test "tier a: ~/.knowledge/state wins even when CODEX_ROOT is also set" {
   mkdir -p "$FAKE_HOME/.knowledge"
-  payload "wget http://x" | env -u JUST_RECIPES_ENFORCE -u CODEX_ROOT \
-    PATH="$STUB:$PATH" HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$JUSTDIR" \
-    JUST_RECIPES_ENFORCE=strict bash "$HOOK"
+  run run_hook "wget http://x" strict
   [ -f "$FAKE_HOME/.knowledge/state/wrap.log" ]
   grep -q "wget http://x" "$FAKE_HOME/.knowledge/state/wrap.log"
+  [ ! -f "$WRAPLOG" ]   # CODEX_ROOT/state must NOT be used
+}
+
+@test "tier b: CODEX_ROOT/state used when no ~/.knowledge dir exists" {
+  run run_hook "wget http://x" strict
+  [ -f "$WRAPLOG" ]
+  grep -q "wget http://x" "$WRAPLOG"
+}
+
+@test "tier c: XDG_STATE_HOME/just-recipes when neither CODEX_ROOT nor ~/.knowledge" {
+  XDG="$SCRATCH/xdg"
+  payload "wget http://x" | env -u JUST_RECIPES_ENFORCE -u CODEX_ROOT \
+    PATH="$STUB:$PATH" HOME="$FAKE_HOME" XDG_STATE_HOME="$XDG" \
+    CLAUDE_PROJECT_DIR="$JUSTDIR" JUST_RECIPES_ENFORCE=strict bash "$HOOK"
+  [ -f "$XDG/just-recipes/wrap.log" ]
+  grep -q "wget http://x" "$XDG/just-recipes/wrap.log"
 }
 
 # --- glob safety in match_recipes ------------------------------------------
@@ -236,4 +252,85 @@ JF
     mode=$(stat -c %a "$WRAPLOG")
   fi
   [ "$mode" = "600" ]
+}
+
+# --- command substitution -------------------------------------------------
+
+@test "strict denies a command substitution even behind an allowlisted 'just'" {
+  run run_hook "just build \$(git rev-parse HEAD)" strict
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "deny" ]
+}
+
+@test "nudge fires on a command substitution matching a doc comment" {
+  run run_hook "rsync \$(cat x) y"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "sync-files"
+}
+
+# --- doc-comment word splitting -------------------------------------------
+
+@test "a punctuation-wrapped doc word still matches (no first-char truncation)" {
+  PDIR="$SCRATCH/parenproj"
+  mkdir -p "$PDIR"
+  cat > "$PDIR/justfile" <<'JF'
+# Deploy (staging) via rsync
+ship:
+    @echo shipping
+JF
+  run run_hook "rsync -a src dst" "" "$PDIR"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "ship"
+}
+
+# --- first-word skipping (sudo / env / VAR=value) -------------------------
+
+@test "nudge sees past sudo and a leading assignment to the real command" {
+  run run_hook "FOO=1 sudo rsync a b"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "sync-files"
+}
+
+# --- fail-open guarantees --------------------------------------------------
+
+@test "jq missing from PATH -> exit 0, empty output" {
+  NOJQ="$SCRATCH/nojq"
+  mkdir -p "$NOJQ"
+  ln -s "$STUB/just" "$NOJQ/just"
+  for b in bash cat; do ln -s "$(command -v "$b")" "$NOJQ/$b"; done
+  run bash -c '
+    printf "%s" "$1" | env -u JUST_RECIPES_ENFORCE \
+      PATH="$2" HOME="$3" CODEX_ROOT="$4" CLAUDE_PROJECT_DIR="$5" bash "$6"
+  ' _ "$(payload "build --release")" "$NOJQ" "$FAKE_HOME" "$CODEX_ROOT" "$JUSTDIR" "$HOOK"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "malformed stdin JSON -> exit 0, empty output" {
+  run bash -c '
+    printf "%s" "not json {" | env -u JUST_RECIPES_ENFORCE \
+      PATH="$1:$PATH" HOME="$2" CODEX_ROOT="$3" CLAUDE_PROJECT_DIR="$4" bash "$5"
+  ' _ "$STUB" "$FAKE_HOME" "$CODEX_ROOT" "$JUSTDIR" "$HOOK"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "just --list erroring (stub exits 2) -> exit 0" {
+  ERRBIN="$SCRATCH/errbin"
+  mkdir -p "$ERRBIN"
+  cat > "$ERRBIN/just" <<'SH'
+#!/usr/bin/env bash
+# --list always errors; the resolve probe must fail open.
+exit 2
+SH
+  chmod +x "$ERRBIN/just"
+  run bash -c '
+    printf "%s" "$1" | env -u JUST_RECIPES_ENFORCE \
+      PATH="$2:$PATH" HOME="$3" CODEX_ROOT="$4" CLAUDE_PROJECT_DIR="$5" bash "$6"
+  ' _ "$(payload "rsync -a src dst")" "$ERRBIN" "$FAKE_HOME" "$CODEX_ROOT" "$JUSTDIR" "$HOOK"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }

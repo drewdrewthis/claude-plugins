@@ -27,18 +27,37 @@ nudge() {
   exit 0
 }
 
+# Resolve the state dir that holds wrap.log. Mirrors
+# procedures_state_dir (plugins/procedures/scripts/lib/stores.sh) minus the
+# config.json tier. Highest precedence first:
+#   1. ${KNOWLEDGE_HOME:-$HOME/.knowledge}/state — but only if that ~/.knowledge
+#      dir EXISTS (a box that never opted into the knowledge home is not
+#      silently relocated under a directory that isn't there).
+#   2. $CODEX_ROOT/state — when CODEX_ROOT is set (parity with `just wrap`).
+#   3. ${XDG_STATE_HOME:-$HOME/.local/state}/just-recipes — the XDG fallback.
+log_dir() {
+  local khome="${KNOWLEDGE_HOME:-$HOME/.knowledge}"
+  if [ -d "$khome" ]; then
+    printf '%s' "$khome/state"
+  elif [ -n "${CODEX_ROOT:-}" ]; then
+    printf '%s' "$CODEX_ROOT/state"
+  else
+    printf '%s' "${XDG_STATE_HOME:-$HOME/.local/state}/just-recipes"
+  fi
+}
+
 # Append one line to the wrap.log backlog. Best-effort: every failure is silent
 # and returns 0 so it can never break the hook's exit-0 fail-open guarantee.
 log_wrap() {
   local d="$1" raw="$2" logdir logfile ts oneline
-  if [ -n "${CODEX_ROOT:-}" ]; then
-    logdir="$CODEX_ROOT/state"
-  else
-    logdir="$HOME/.knowledge/state"
-  fi
+  logdir=$(log_dir)
   logfile="$logdir/wrap.log"
-  mkdir -p "$logdir" 2>/dev/null || return 0
-  chmod 700 "$logdir" 2>/dev/null
+  # chmod 700 only when the hook itself creates the dir — never tighten a
+  # pre-existing dir (e.g. a shared ~/.knowledge/state) out from under its owner.
+  if [ ! -d "$logdir" ]; then
+    mkdir -p "$logdir" 2>/dev/null || return 0
+    chmod 700 "$logdir" 2>/dev/null
+  fi
   [ -e "$logfile" ] || (umask 077; : >>"$logfile") 2>/dev/null
   chmod 600 "$logfile" 2>/dev/null
   ts=$(date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) || return 0
@@ -48,32 +67,45 @@ log_wrap() {
   return 0
 }
 
-# First word of a command segment, with a leading path (./ or /usr/bin/) stripped.
+# First real command word of a segment: skips leading `sudo`, `env`, and
+# NAME=value assignment prefixes, then strips a leading path (./ or /usr/bin/).
+# bash 3.2 safe (no arrays/regex).
 first_cmd_word() {
-  local w="${1%%[[:space:]]*}"
+  local rest="$1" w name
+  while :; do
+    rest="${rest#"${rest%%[![:space:]]*}"}"   # strip leading whitespace
+    w="${rest%%[[:space:]]*}"
+    [ -n "$w" ] || break
+    case "$w" in
+      sudo|env) rest="${rest#"$w"}"; continue ;;
+      *=*)
+        name="${w%%=*}"
+        case "$name" in
+          ''|*[!A-Za-z0-9_]*) break ;;   # not a valid var name -> real command
+        esac
+        rest="${rest#"$w"}"; continue ;;
+    esac
+    break
+  done
   w="${w##*/}"
   printf '%s' "$w"
 }
 
 # Recipe name(s) that plausibly match a leading command word, case-insensitively:
-# a recipe whose name equals the word (`just --summary` and `just --list`), or a
-# recipe whose doc comment (`just --list`) contains the word as a whole word.
-# Prints a deduped, space-separated list (possibly empty).
+# a recipe whose name equals the word, or a recipe whose doc comment contains the
+# word as a whole word. Both names and docs come from a single `just --list`
+# capture (passed in as $1) — no extra `just` fork. Prints a deduped,
+# space-separated list (possibly empty).
 match_recipes() {
-  local d="$1" word="$2" lcword names name doc line lcname lcdoc dw matched="" restore_f=0
+  local listing="$1" word="$2" lcword name doc line lcname lcdoc dw matched="" restore_f=0
   lcword=$(printf '%s' "$word" | tr '[:upper:]' '[:lower:]')
 
-  # Word-splitting recipe names / doc-comment words below relies on unquoted
-  # expansion; disable pathname expansion so a word like `build*` cannot glob
-  # against files in cwd. Restore the prior state (rather than always
-  # re-enabling) so a caller that already had -f set is not affected.
+  # Doc-comment words below are word-split via unquoted expansion; disable
+  # pathname expansion so a word cannot glob against files in cwd. Restore the
+  # prior state (rather than always re-enabling) so a caller that already had
+  # -f set is not affected.
   case $- in *f*) restore_f=1 ;; esac
   set -f
-
-  names=$( cd "$d" 2>/dev/null && just --summary 2>/dev/null ) || names=""
-  for name in $names; do
-    [ "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" = "$lcword" ] && matched="$matched $name"
-  done
 
   while IFS= read -r line; do
     case "$line" in
@@ -91,19 +123,36 @@ match_recipes() {
     if [ "$lcname" = "$lcword" ]; then
       matched="$matched $name"
     elif [ -n "$doc" ]; then
-      lcdoc=$(printf '%s' "$doc" | tr '[:upper:]' '[:lower:]')
+      # Lowercase, then replace every non-word char with a space so
+      # punctuation-wrapped words like `(staging)` or `rsync.` split cleanly
+      # into whole words to compare — the prior trailing-trim truncated
+      # `(build)` to the empty string.
+      lcdoc=$(printf '%s' "$doc" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' ' ')
       for dw in $lcdoc; do
-        dw="${dw%%[^a-z0-9_-]*}"   # trim trailing punctuation
         [ "$dw" = "$lcword" ] && { matched="$matched $name"; break; }
       done
     fi
   done <<EOF
-$( cd "$d" 2>/dev/null && just --list 2>/dev/null )
+$listing
 EOF
 
   [ "$restore_f" -eq 0 ] && set +f
 
   printf '%s' "$matched" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ *$//;s/^ *//'
+}
+
+# Allowlist check for one command segment.
+#   $1 = segment, $2 = just-only (1: composite chain, must be a `just` call;
+#   0: lone segment, `just` or a read-only verb passes).
+seg_is_allowed() {
+  local seg="$1" just_only="$2"
+  if [ "$just_only" -eq 1 ]; then
+    case $seg in
+      just|just\ *|just$'\t'*) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  printf '%s' "$seg" | grep -Eq '^(just|cd|pwd|echo|ls|cat|command[[:space:]]+-v|which)([[:space:]]|$)'
 }
 
 # Mode: unset/default = nudge; strict = hard block; off/0 = kill switch.
@@ -201,17 +250,10 @@ all_ok=1
 bad_seg=""
 n=${#segments[@]}
 if [ "$n" -eq 1 ]; then
-  if printf '%s' "${segments[0]}" | grep -Eq '^(just|cd|pwd|echo|ls|cat|command[[:space:]]+-v|which)([[:space:]]|$)'; then
-    :
-  else
-    all_ok=0; bad_seg="${segments[0]}"
-  fi
+  seg_is_allowed "${segments[0]}" 0 || { all_ok=0; bad_seg="${segments[0]}"; }
 elif [ "$n" -gt 1 ]; then
   for s in "${segments[@]}"; do
-    case $s in
-      just|just\ *|just$'\t'*) ;;
-      *) all_ok=0; bad_seg="$s"; break ;;
-    esac
+    seg_is_allowed "$s" 1 || { all_ok=0; bad_seg="$s"; break; }
   done
 fi
 
@@ -220,9 +262,12 @@ if [ "$all_ok" -eq 1 ] && [ "$subshell" -eq 0 ]; then
   exit 0
 fi
 
-# Enforcement applies only where a justfile resolves from the project dir (or cwd)
+# Enforcement applies only where a justfile resolves from the project dir (or
+# cwd). A single `just --list` capture doubles as the resolve probe (nonzero
+# exit -> no justfile, or --list itself errored -> fail-open allow) AND the
+# recipe/doc source reused by the nudge match below — one fork, not three.
 dir="${CLAUDE_PROJECT_DIR:-$PWD}"
-( cd "$dir" 2>/dev/null && just --summary >/dev/null 2>&1 ) || exit 0
+listing=$( cd "$dir" 2>/dev/null && just --list 2>/dev/null ) || exit 0
 
 # Justfile resolves and the command is not allowlisted: record it in the
 # wrap.log backlog (nudge + strict; the kill switch already exited above).
@@ -235,10 +280,17 @@ esac
 
 # Nudge (default): only surface guidance when a recipe plausibly matches the
 # command's leading word. No match -> silent allow.
-match_seg="$bad_seg"
-[ -n "$match_seg" ] || match_seg="${segments[0]:-$cmd}"
-word=$(first_cmd_word "$match_seg")
+# The lexer breaks on command substitution before flushing a full segment, so
+# bad_seg is unreliable when subshell=1; match against the whole command's
+# first real word instead.
+if [ "$subshell" -eq 1 ]; then
+  word=$(first_cmd_word "$cmd")
+else
+  match_seg="$bad_seg"
+  [ -n "$match_seg" ] || match_seg="${segments[0]:-$cmd}"
+  word=$(first_cmd_word "$match_seg")
+fi
 [ -n "$word" ] || exit 0
-matched=$(match_recipes "$dir" "$word") || exit 0
+matched=$(match_recipes "$listing" "$word") || exit 0
 [ -n "$matched" ] || exit 0
 nudge "$matched"
