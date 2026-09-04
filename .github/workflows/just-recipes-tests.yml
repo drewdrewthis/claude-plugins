@@ -1,0 +1,48 @@
+name: just-recipes-tests
+
+# Runs the just-recipes hook's bats suite on ubuntu AND macos. The macOS leg is
+# the point: stock macOS ships bash 3.2 and no GNU coreutils, so it is the only
+# leg that turns "works on my Linux box" into a real portability gate.
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/just-recipes/hooks/**'
+      - '.github/workflows/just-recipes-tests.yml'
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: just-recipes-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bats:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats and jq (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+
+      - name: Install bats and jq (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bats-core jq
+
+      - name: Record the toolchain under test
+        run: |
+          echo "os: ${{ matrix.os }}"
+          bash --version | head -1
+          bats --version
+          jq --version
+
+      - name: enforce-just suite
+        run: bats plugins/just-recipes/hooks/tests/

@@ -1,5 +1,5 @@
 {
-  "description": "Funnel raw Bash through just recipes where a justfile resolves",
+  "description": "Nudge raw Bash toward just recipes where a justfile resolves (strict mode blocks)",
   "hooks": {
     "PreToolUse": [
       {
