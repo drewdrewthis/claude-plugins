@@ -9,7 +9,7 @@ status: active
 
 # /create-procedure
 
-Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<area>/<name>/`. Consumed by the `/how-do-i` pipeline: its `description` is what `build-record-index.sh` indexes for selection, and its `keywords` stay greppable (the invoking skill's prompt carries the resolved path).
+Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `records/procedures/<area>/<name>/` (`references/procedures/...` is the legacy per-root fallback until that root is renamed — see `stores_records_dir`). Consumed by the `/how-do-i` pipeline: its `description` is what `build-record-index.sh` indexes for selection, and its `keywords` stay greppable (the invoking skill's prompt carries the resolved path).
 
 # Triggers
 
@@ -23,7 +23,7 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
 1. **Grep for an existing procedure first** — never create if one already covers this:
 
    ```bash
-   grep -rl '<2-3 keywords>' ~/.claude/references/procedures/
+   grep -rl '<2-3 keywords>' ~/.claude/records/procedures/
    ```
 
    If a match exists, patch that procedure directly (and log the change in its sibling `EVOLUTION.md`) instead of creating a new one — see Boundaries.
@@ -31,7 +31,7 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
 2. **Determine `<area>` and `<name>`.** List the existing areas — never work from a remembered list:
 
    ```bash
-   ls "${CODEX_ROOT:-$HOME/.claude}/references/procedures/"
+   ls "${CODEX_ROOT:-$HOME/.claude}/records/procedures/"
    ```
 
    Pick the closest fit; a new area dir is allowed when none fit.
@@ -41,7 +41,7 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
 
 3. **Pick keywords** — lowercase, these are the discovery tokens for the procedures hook and skill. Include the operation verb, domain noun, and any common aliases.
 
-4. **Write `PROCEDURE.md`** at `references/procedures/<area>/<name>/PROCEDURE.md`, from `skills/update-records/templates/procedure.template.md` at the plugin root:
+4. **Write `PROCEDURE.md`** at `records/procedures/<area>/<name>/PROCEDURE.md`, from `skills/update-records/templates/procedure.template.md` at the plugin root:
 
    ```
    ---
@@ -80,7 +80,7 @@ Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `references/procedures/<are
    - <YYYY-MM-DD> — origin: drafted from <one-line provenance — the success/work that motivated it>.
    ```
 
-6. Confirm the two files exist and report: `Created references/procedures/<area>/<name>/PROCEDURE.md (status: draft) + EVOLUTION.md`.
+6. Confirm the two files exist and report: `Created records/procedures/<area>/<name>/PROCEDURE.md (status: draft) + EVOLUTION.md`.
 
    Then commit your own explicit paths (never `git add -A` — it sweeps other sessions' in-flight work).
 

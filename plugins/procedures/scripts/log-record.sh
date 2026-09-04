@@ -17,9 +17,9 @@
 #
 # Subcommands:
 #   mistake       append a row to mistakes.jsonl
-#   decision      write references/decisions/<date>-<slug>.md
-#   solution      write references/solutions/<date>-<slug>.md
-#   failure-mode  write/update references/failure-modes/<slug>.md
+#   decision      write records/decisions/<date>-<slug>.md
+#   solution      write records/solutions/<date>-<slug>.md
+#   failure-mode  write/update records/failure-modes/<slug>.md
 #                 (gated: >=3 occurrences of the pattern in mistakes.jsonl first)
 #
 # `--project <owner/repo>` is OPTIONAL on decision/solution/failure-mode and
@@ -32,20 +32,27 @@
 #   MISTAKES_JSONL        path to the jsonl (default: $HOME/.claude/mistakes.jsonl).
 #                         Also the corpus the failure-mode >=3 gate counts.
 #   DECISIONS_DIR / SOLUTIONS_DIR / FAILURE_MODES_DIR
-#                         override the target dirs (default: references/<kind>).
+#                         override the target dirs (default: records/<kind>, or
+#                         references/<kind> — the legacy fallback — when $ROOT
+#                         has no records/ dir yet; see stores_records_dir).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/stores.sh
+source "$SCRIPT_DIR/lib/stores.sh"
 # PLUGIN ADAPTATION: data root defaults to the host codex (~/.claude), not this
 # plugin install dir — upstream these scripts live inside the codex repo itself.
 ROOT="${CODEX_ROOT:-$HOME/.claude}"
 
 # --- paths (all overridable for tests) ---
+# Record-tree dirname is resolved per root: records/ canonical, references/ the
+# legacy fallback when $ROOT has not been renamed yet (see stores_records_dir).
+RECORDS_DIRNAME="$(stores_records_dir "$ROOT")"
 MISTAKES_JSONL="${MISTAKES_JSONL:-$HOME/.claude/mistakes.jsonl}"
-DECISIONS_DIR="${DECISIONS_DIR:-$ROOT/references/decisions}"
-SOLUTIONS_DIR="${SOLUTIONS_DIR:-$ROOT/references/solutions}"
-FAILURE_MODES_DIR="${FAILURE_MODES_DIR:-$ROOT/references/failure-modes}"
+DECISIONS_DIR="${DECISIONS_DIR:-$ROOT/$RECORDS_DIRNAME/decisions}"
+SOLUTIONS_DIR="${SOLUTIONS_DIR:-$ROOT/$RECORDS_DIRNAME/solutions}"
+FAILURE_MODES_DIR="${FAILURE_MODES_DIR:-$ROOT/$RECORDS_DIRNAME/failure-modes}"
 
 die() { printf 'log-record: %s\n' "$1" >&2; exit 1; }
 

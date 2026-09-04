@@ -38,16 +38,17 @@
 # to <root>/.index/index.txt. Best-effort: a root that cannot be written to
 # just does not get this file, without failing the run.
 #
-# Discovery: scans <root>/references/** and <root>/plans/** for *.md, per
+# Discovery: scans <root>/<records-dir>/** and <root>/plans/** for *.md, per
 # root, via lib/stores.sh's _stores_discover() (never a hardcoded store
-# list).
+# list). <records-dir> is resolved per root — records/ is canonical,
+# references/ the legacy per-root fallback (see stores_records_dir).
 #
 # Excluded unconditionally:
 #   - any path containing /node_modules/
 #   - files named EVOLUTION.md or INDEX.md
 #   - any file whose FRONTMATTER BLOCK (not body) contains a user-invocable:
 #     key — these are command files (skills/steps), not records
-#   - <root>/references/plans/ — a stale duplicate of the live <root>/plans/
+#   - <root>/<records-dir>/plans/ — a stale duplicate of the live <root>/plans/
 #
 # Included only if frontmatter has both a non-empty id: and a non-empty
 # description:. description is normalized (interior whitespace collapsed to
@@ -299,12 +300,14 @@ for ROOT_I in "${ROOTS[@]}"; do
         continue
     fi
 
-    # references/plans is a stale nested directory; the live plans store is
-    # the top-level plans/ (also in STORES). Dropped here, without editing
-    # stores.sh.
+    # <records-dir>/plans is a stale nested directory; the live plans store is
+    # the top-level plans/ (also in STORES). $RECORDS_ROOT was just resolved
+    # for THIS root by _stores_discover (records/ canonical, references/ the
+    # legacy per-root fallback), so the skip tracks whichever this root uses.
+    # Dropped here, without editing stores.sh.
     CANDIDATE_STORES=()
     for s in "${STORES[@]}"; do
-        [ "$s" = "references/plans" ] && continue
+        [ "$s" = "$RECORDS_ROOT/plans" ] && continue
         CANDIDATE_STORES+=("$s")
     done
 

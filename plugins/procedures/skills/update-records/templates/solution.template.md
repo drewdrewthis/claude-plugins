@@ -10,7 +10,7 @@ status: resolved
 description: <One line, ~120 chars: the fix and the problem shape it resolves, not "fix for X bug".>
 project: <owner/repo this solution is scoped to — delete if corpus-wide>
 
-<!-- TEMPLATE — copy to your knowledge root's solutions/ (default ~/.claude/references/solutions/)<YYYY-MM-DD>-<kebab-name>.md.
+<!-- TEMPLATE — copy to your knowledge root's solutions/ (default ~/.claude/records/solutions/, or the legacy ~/.claude/references/solutions/ until that root is renamed)<YYYY-MM-DD>-<kebab-name>.md.
      A solution = a reusable fix for a problem shape that will recur.
      `project:` is OPTIONAL (`--project` on the writer). DELETE the line for a
      corpus-wide solution — an empty or placeholder value is unmatchable and
