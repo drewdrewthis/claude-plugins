@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.15.0...procedures-v0.16.0) (2026-09-04)
+
+
+### Features
+
+* records/ is the record tree; references/ kept as legacy fallback per root ([#163](https://github.com/drewdrewthis/claude-plugins/issues/163)) ([67814cd](https://github.com/drewdrewthis/claude-plugins/commit/67814cdf43fa4220ba7738eca22b562f7a85f8ed))
+
 ## [0.15.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.14.1...procedures-v0.15.0) (2026-09-04)
 
 
