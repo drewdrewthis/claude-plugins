@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.14.0...procedures-v0.14.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* require bash 4+ for declare -A scripts, re-exec on macOS 3.2 ([#156](https://github.com/drewdrewthis/claude-plugins/issues/156)) ([7c2a6b8](https://github.com/drewdrewthis/claude-plugins/commit/7c2a6b8480355c2faa8bf2f91ecedc49c27d4015))
+
 ## [0.14.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.13.3...procedures-v0.14.0) (2026-09-03)
 
 
