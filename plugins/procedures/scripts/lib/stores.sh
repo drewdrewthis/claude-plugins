@@ -125,8 +125,12 @@ _stores_split_roots() {
 # module names and/or absolute paths; reads $KNOWLEDGE_HOME/config.json when
 # that env is set, else $HOME/.knowledge/config.json) > auto-discovered
 # ${KNOWLEDGE_HOME:-$HOME/.knowledge}/modules/*/ git repos (sorted) > $CODEX_ROOT
-# (legacy explicit single-root override) > hardcoded
-# ${CLAUDE_CONFIG_DIR:-$HOME/.claude}.
+# (legacy explicit single-root override). There is NO hardcoded ~/.claude
+# fallback: when EVERY tier — including $CODEX_ROOT — is absent or empty, the
+# function prints nothing and returns exit status 1. Callers that require at
+# least one root must detect that empty spec / status 1 and error themselves
+# (see _stores_no_roots_message); sourcing stores.sh never aborts — the
+# module-level _stores_split_roots below just yields an empty STORE_ROOTS.
 # The two ~/.knowledge tiers sit BELOW settings.json/env (an explicit
 # CODEX_STORE_ROOTS still wins) but ABOVE the legacy CODEX_ROOT single-root:
 # the knowledge home is the modern multi-repo layout and, once present, should
@@ -217,8 +221,18 @@ _stores_resolve_roots_spec() {
         printf '%s' "$CODEX_ROOT"
         return
     fi
-    [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: roots from hardcoded default" >&2
-    printf '%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    [ -n "${CODEX_STORE_ROOTS_DEBUG:-}" ] && echo "stores.sh: no roots resolved (all tiers empty)" >&2
+    return 1
+}
+
+# _stores_no_roots_message — the single canonical stderr message for "no
+# knowledge roots resolved at all" (every tier of _stores_resolve_roots_spec
+# came up empty). Scripts that actually NEED at least one root (unlike
+# hooks/librarian-poke.sh, which only wants procedures_state_dir and must
+# stay fail-open) call this after seeing an empty spec/STORE_ROOTS and exit
+# non-zero themselves.
+_stores_no_roots_message() {
+    printf 'no knowledge roots found — clone a module into %s/modules/<name> or set CODEX_STORE_ROOTS\n' "${KNOWLEDGE_HOME:-~/.knowledge}"
 }
 
 _stores_split_roots "$(_stores_resolve_roots_spec)"
