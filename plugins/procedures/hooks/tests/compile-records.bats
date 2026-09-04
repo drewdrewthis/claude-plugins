@@ -374,3 +374,19 @@ measure_bytes() {
   run bash "$SCRIPT" --map "$TMP/does-not-exist.tsv" --nums "1"
   [ "$status" -eq 1 ]
 }
+
+# ---------- bash-4 re-exec guard (regression) ----------
+
+@test "runs end-to-end when launched via a bash<4 interpreter (declare -A guard re-execs)" {
+  # The script uses `declare -A`, so it must run under bash 4+. When invoked
+  # via macOS's frozen /bin/bash 3.2, lib/require-bash4.sh must transparently
+  # re-exec it under a bash 4+ and still produce records. Skip where no bash<4
+  # interpreter exists (typical Linux CI: /bin/bash is already >=4, in which
+  # case every other test in this file already covers the invocation).
+  local low="/bin/bash" major
+  major="$("$low" -c 'printf %s "${BASH_VERSINFO[0]:-0}"' 2>/dev/null || echo 0)"
+  [ "$major" -lt 4 ] || skip "no bash<4 at $low on this host"
+  run "$low" "$SCRIPT" --map "$MAP" --nums "1"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RECORD 1 rec.a"* ]]
+}
