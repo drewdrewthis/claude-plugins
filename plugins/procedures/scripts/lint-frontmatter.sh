@@ -4,8 +4,9 @@
 # Enforces the uniform frontmatter schema — six required keys plus the
 # optional `description` — across the record stores discovered by
 # scripts/lib/stores.sh (directory-derived; not a fixed count here — see that
-# file). See references/principles/file-directory.md "Frontmatter schema" for
-# the convention this enforces.
+# file). See records/principles/file-directory.md (or the legacy
+# references/principles/file-directory.md) "Frontmatter schema" for the
+# convention this enforces.
 #
 # Checks (hard-fail, exit 1 on any violation):
 #   (a) PRESENT   — every tracked record .md begins with a `---` frontmatter
@@ -97,8 +98,12 @@ unset _r _rabs
 # miss here still leaves the link merely unresolved-noted, not silently
 # dropped.
 _id_exists_in_root() {
-    local root="$1" id="$2"
-    grep -RlF -- "id: ${id}" "$root/references" "$root/plans" 2>/dev/null | grep -q .
+    # $root is a DIFFERENT root than this script's own $ROOT (it comes from
+    # OTHER_ROOTS), so resolve its record-tree dirname itself rather than
+    # reading the global $RECORDS_ROOT (which reflects THIS script's $ROOT).
+    local root="$1" id="$2" recdir
+    recdir="$(stores_records_dir "$root")"
+    grep -RlF -- "id: ${id}" "$root/$recdir" "$root/plans" 2>/dev/null | grep -q .
 }
 
 # SSOT frontmatter readers — frontmatter_block() and fm_value(). Shared with
@@ -297,7 +302,11 @@ for f in "${TARGETS[@]:-}"; do
     # (e) PRINCIPLES — `enforced_by:` is OPTIONAL. A principle without it is
     # aspirational prose; emit a WARNING (never FAIL) so the gap is visible.
     case "$f" in
-        references/principles/*.md)
+        # $f is a corpus-relative path from corpus_files() (which iterates the
+        # dynamic STORES); $RECORDS_ROOT was set by _stores_discover for THIS
+        # script's $ROOT, so it already names records/ or the references/
+        # legacy fallback correctly for this root.
+        "$RECORDS_ROOT"/principles/*.md)
             # Same SIGPIPE hazard as the required-key loop above (#46).
             case "$fm_haystack" in
                 *$'\n'"enforced_by:"*) ;;

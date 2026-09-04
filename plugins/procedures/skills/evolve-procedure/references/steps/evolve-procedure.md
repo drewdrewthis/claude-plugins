@@ -24,7 +24,7 @@ Before starting, create a task for each phase below using TaskCreate. Chain sequ
 
 ## Phase 1: Gather Evidence
 
-First, check `~/.claude/mistakes.jsonl` for entries naming the target procedure — grep by its path (`references/procedures/<cat>/<name>/`) or its name. These entries are high-confidence — they were logged at correction time with classified context.
+First, check `~/.claude/mistakes.jsonl` for entries naming the target procedure — grep by its path (`records/procedures/<cat>/<name>/`, or the legacy `references/procedures/<cat>/<name>/`) or its name. These entries are high-confidence — they were logged at correction time with classified context.
 
 Then scan the **current conversation** for:
 

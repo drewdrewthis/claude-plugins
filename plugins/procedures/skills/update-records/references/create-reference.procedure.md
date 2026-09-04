@@ -9,7 +9,7 @@ status: active
 
 # /create-reference
 
-Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.md` for top-level files). Consumed by skills and agents that link to it for durable knowledge. Discoverable via `/how-do-i`'s store-wide index and keyword grep.
+Creates a reference doc at `records/<area>/<name>.md` (or `records/<name>.md` for top-level files; `references/...` is the legacy per-root fallback until that root is renamed — see `stores_records_dir`). Consumed by skills and agents that link to it for durable knowledge. Discoverable via `/how-do-i`'s store-wide index and keyword grep.
 
 # Triggers
 
@@ -23,19 +23,19 @@ Creates a reference doc at `references/<area>/<name>.md` (or `references/<name>.
 1. **Determine `<area>` and `<name>`.** List the existing areas — never work from a remembered list:
 
    ```bash
-   ls "${CODEX_ROOT:-$HOME/.claude}/references/"
+   ls "${CODEX_ROOT:-$HOME/.claude}/records/"
    ```
 
-   Alongside the area dirs sit top-level `references/<name>.md` topic files. Pick the closest fit; a new area dir is allowed when none fit — create the dir.
+   Alongside the area dirs sit top-level `records/<name>.md` topic files. Pick the closest fit; a new area dir is allowed when none fit — create the dir.
 
-   - Area fit guide: `principles/` for behavioral rules; `policies/` for constraints/mandates; `research/` for findings/analysis; `procedures/` only if creating a PROCEDURE.md (use the sibling `create-procedure.procedure.md` instead); top-level `references/<name>.md` for broad cross-cutting topics.
+   - Area fit guide: `principles/` for behavioral rules; `policies/` for constraints/mandates; `research/` for findings/analysis; `procedures/` only if creating a PROCEDURE.md (use the sibling `create-procedure.procedure.md` instead); top-level `records/<name>.md` for broad cross-cutting topics.
    - `<name>`: kebab-case slug (e.g. `orchard-daemon`, `model-selection`, `session-spawn-recipe`)
    - `id`: `ref.<area>.<name>` for area files; `ref.<name>` for top-level files
 
 2. **Grep for overlap** before writing:
 
    ```bash
-   grep -rl '<2-3 keywords>' ~/.claude/references/
+   grep -rl '<2-3 keywords>' ~/.claude/records/
    ```
 
    If a near-match exists, consider extending it (Edit) rather than creating a new file.

@@ -39,21 +39,34 @@
 # NOTE: hooks run as subprocesses; source via a path derived from the script's
 # own ${BASH_SOURCE[0]}, NOT from $CLAUDE_PROJECT_DIR (not exported to hooks).
 
-# Every directory found one level under RECORDS_ROOT becomes a store.
-RECORDS_ROOT="references"
-
-# GRC rule stores: kept explicit, not directory-derived. These four must stay
-# declared even before their directory exists on disk — invariant (absolute)
-# vs principle (judgment) vs policy (standing authority) vs standard
-# (measurable bar) is a fixed taxonomy, not a filesystem listing. Dropping
-# one silently collapses that distinction back into "principle with a flag"
-# (hooks/tests/store-list-drift.bats pins this).
-REQUIRED_STORES=(
-    references/invariants
-    references/principles
-    references/policies
-    references/standards
-)
+# stores_records_dir <root> — resolve the record-tree DIRNAME for a root (a
+# bare root-relative name like "records" or "references", NOT a full path —
+# this matches how RECORDS_ROOT is consumed everywhere: as a root-relative
+# directory name). The corpus is being renamed per-root from a legacy
+# `references/` tree to a `records/` tree, and a mixed fleet (some roots
+# renamed, some not) must keep working — so the dirname is resolved PER ROOT
+# at runtime, not baked in as a constant:
+#   1. $CODEX_RECORDS_DIR (non-empty) — forces the dirname outright, used by
+#      tests and by a root wanting a non-standard name.
+#   2. <root>/records is a directory  — the renamed layout.
+#   3. references                     — the default; covers both "references/
+#      still exists" and "neither exists yet" (references stays the fallback
+#      until a root actually creates records/).
+# Exported (export -f, see procedures_state_dir below) so a caller can
+# `source stores.sh` and invoke it for an arbitrary root.
+stores_records_dir() {
+    local root="$1"
+    if [ -n "${CODEX_RECORDS_DIR:-}" ]; then
+        printf '%s' "$CODEX_RECORDS_DIR"
+        return
+    fi
+    if [ -d "$root/records" ]; then
+        printf '%s' "records"
+        return
+    fi
+    printf '%s' "references"
+}
+export -f stores_records_dir 2>/dev/null || true
 
 # Append $1 to STORES if not already present. Bash-3.2-safe (no associative
 # arrays). Both discovery and REQUIRED_STORES funnel through this so a store
@@ -69,9 +82,34 @@ _stores_add() {
     STORES+=("$candidate")
 }
 
+# _stores_discover — repopulate STORES for the CURRENT working directory as
+# the root (CWD == root is this function's contract; callers `cd "$ROOT"`
+# before calling — see lint-frontmatter.sh / build-record-index.sh's per-root
+# loop). RECORDS_ROOT and REQUIRED_STORES are recomputed FRESH on every call
+# (via stores_records_dir "."), never module-level constants, so each root
+# resolves its own record-tree dirname — records/ if renamed, references/ if
+# not. RECORDS_ROOT is left as a GLOBAL (no `local`) set by the LAST call:
+# downstream scripts read it after calling _stores_discover for a given root
+# (build-record-index.sh's stale-dir skip, lint-frontmatter.sh's PRINCIPLES
+# check both rely on this).
+#
+# GRC rule stores stay explicit (REQUIRED_STORES), not directory-derived:
+# these four must be declared even before their directory exists on disk —
+# invariant (absolute) vs principle (judgment) vs policy (standing authority)
+# vs standard (measurable bar) is a fixed taxonomy, not a filesystem listing.
+# Dropping one silently collapses that distinction back into "principle with a
+# flag" (hooks/tests/store-list-drift.bats pins this). Everything else one
+# level under RECORDS_ROOT is discovered.
 _stores_discover() {
     STORES=()
     local d
+    RECORDS_ROOT="$(stores_records_dir ".")"
+    REQUIRED_STORES=(
+        "$RECORDS_ROOT/invariants"
+        "$RECORDS_ROOT/principles"
+        "$RECORDS_ROOT/policies"
+        "$RECORDS_ROOT/standards"
+    )
 
     for d in "${REQUIRED_STORES[@]}"; do
         _stores_add "$d"

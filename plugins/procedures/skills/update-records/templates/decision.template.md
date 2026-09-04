@@ -26,7 +26,7 @@ Real: <what was actually being solved, if different>
 [pending]
 
 <!-- TEMPLATE — the shape `/update-records decision` writes: one markdown file at
-     <knowledge-root>/references/decisions/<YYYY-MM-DD>-<slug>.md
+     <knowledge-root>/records/decisions/<YYYY-MM-DD>-<slug>.md
      (default root ~/.claude). Written by the log-record.sh writer script; use
      this template when hand-editing an existing record, or to know what to
      expect back.

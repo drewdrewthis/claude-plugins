@@ -12,14 +12,16 @@ THE single entry point for every knowledge artifact. Pick `<kind>` from the tabl
 | `<kind>` | how it is written | lands in |
 |---|---|---|
 | `mistake` | `log-record.sh` | `~/.claude/mistakes.jsonl` |
-| `decision` | `log-record.sh` | `references/decisions/` |
-| `solution` | `log-record.sh` | `references/solutions/` |
-| `failure-mode` | `log-record.sh` | `references/failure-modes/` |
-| `procedure` | follow `references/create-procedure.procedure.md` | `references/procedures/<name>/PROCEDURE.md` + seed its `EVOLUTION.md` |
+| `decision` | `log-record.sh` | `records/decisions/` |
+| `solution` | `log-record.sh` | `records/solutions/` |
+| `failure-mode` | `log-record.sh` | `records/failure-modes/` |
+| `procedure` | follow `references/create-procedure.procedure.md` | `records/procedures/<name>/PROCEDURE.md` + seed its `EVOLUTION.md` |
 | `evolution` | by hand from `templates/evolution.template.md` | beside the procedure it tracks |
-| `principle` `invariant` `policy` `standard` | by hand from the matching `templates/<kind>.template.md` | `references/{principles,invariants,policies,standards}/` |
+| `principle` `invariant` `policy` `standard` | by hand from the matching `templates/<kind>.template.md` | `records/{principles,invariants,policies,standards}/` |
 | `reference` | follow `references/create-reference.procedure.md` | the store that procedure names |
 | `skill` | follow `references/create-skill.procedure.md` | a new skill directory — only when the operation earns an invocation handle |
+
+> The `records/` paths below are the canonical record-tree layout. `references/` is the legacy per-root fallback: a root not yet renamed still writes under `references/<kind>/`, and the writers resolve this per root automatically (see `stores_records_dir`). This does NOT apply to the `references/create-*.procedure.md` refs above — those are this skill's own packaged docs.
 
 The four script-backed kinds call the deterministic writer:
 
@@ -55,7 +57,7 @@ Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `/how-do-i
 | **skill** | Active skill, if any (e.g. `manage-sessions`); omit if none |
 | **severity** | `low` (style/minor), `medium` (wasted work, wrong approach), `high` (destructive, violated explicit instruction) |
 | **trigger** | `human` (user corrected) or `self` (caught own mistake) |
-| **scenario-matched** | Slug of a matching `references/scenarios/<slug>.md`, or `null` |
+| **scenario-matched** | Slug of a matching `records/scenarios/<slug>.md`, or `null` |
 
 **Then find the join keys (do this BEFORE calling the script):**
 
@@ -70,8 +72,8 @@ Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `/how-do-i
 2. **`pattern`** — match against the `failure-modes/` registry for the join key:
 
    ```bash
-   grep -rln '^keywords:' ~/.claude/references/failure-modes/ | head    # browse the registry
-   grep -rin '<2-3 keywords from this mistake>' ~/.claude/references/failure-modes/
+   grep -rln '^keywords:' ~/.claude/records/failure-modes/ | head    # browse the registry
+   grep -rin '<2-3 keywords from this mistake>' ~/.claude/records/failure-modes/
    ```
 
    Each record's frontmatter `id` is `fm.<row-id>`. If matched, pass `--pattern "<row-id>"` (WITHOUT the `fm.` prefix). Omit if no record matches.
@@ -88,7 +90,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" mistake \
   [--pattern "<row-id>"] [--face "<face>"] [--recurrence-of "<earliest-ts>"]
 ```
 
-**After:** scan the last ~20 entries for the same `category` + similar `description` (or a shared `recurrence_of` chain). If **3+** entries share a pattern with no matching record in `references/failure-modes/`, promote it with `/update-records failure-mode <slug> "<rule>"` (see below). Below the ≥3 bar, leave the EVENT logged. Promotion at scale (condensation, demotion) stays a deliberate maintenance pass.
+**After:** scan the last ~20 entries for the same `category` + similar `description` (or a shared `recurrence_of` chain). If **3+** entries share a pattern with no matching record in `records/failure-modes/`, promote it with `/update-records failure-mode <slug> "<rule>"` (see below). Below the ≥3 bar, leave the EVENT logged. Promotion at scale (condensation, demotion) stays a deliberate maintenance pass.
 
 **Boundaries:** don't log clarifications (a correction changes direction; a clarification adds detail). Don't write vague entries ("made a mistake") — be specific.
 
@@ -96,9 +98,9 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" mistake \
 
 ## kind = decision
 
-Writes `references/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by the pre-action grep that prevents relitigating settled choices.
+Writes `records/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by the pre-action grep that prevents relitigating settled choices.
 
-**Pre-action grep first** — `grep -rl '<keywords>' ~/.claude/references/decisions/`; if the question is already settled, link the existing record instead of creating a duplicate.
+**Pre-action grep first** — `grep -rl '<keywords>' ~/.claude/records/decisions/`; if the question is already settled, link the existing record instead of creating a duplicate.
 
 **Gather:** `slug` (kebab-case, ≤7 words, names the *question* resolved), `keywords` (lowercase: domain, options considered, key actors), a one-line `summary`, and the prose `body` — sections Goal / Chosen path / Consequences / Outcome. Leave `[pending]` for sections that need future evidence — that is correct on creation.
 
@@ -121,7 +123,7 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = solution
 
-Writes `references/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by `/how-do-i`'s pre-action sweep.
+Writes `records/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by `/how-do-i`'s pre-action sweep.
 
 **Gather:** `slug` (kebab-case, ≤6 words, names the *problem* not the fix), `keywords` (problem domain, tool name, error class), `situation-tags` (lowercase situation class: `daemon`, `gh-cli`, `env-config`, …), `resolve-after` (~3 months out; env/version hacks expire faster), a one-line `summary` = the canonical resolution, and the prose `body` (Symptom / Rule / optional Check / optional Recipe — Recipe only when flags/order matter).
 
@@ -144,14 +146,14 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = failure-mode
 
-Writes `references/failure-modes/<slug>.md` (BARE slug filename, no `fm.` prefix; id `fm.<slug>`; `rule:` field = the one-sentence rule, whole and self-contained). Does NOT merge on re-run — see below. Consumed by `/how-do-i`, which sweeps failure-modes + `mistakes.jsonl` per query.
+Writes `records/failure-modes/<slug>.md` (BARE slug filename, no `fm.` prefix; id `fm.<slug>`; `rule:` field = the one-sentence rule, whole and self-contained). Does NOT merge on re-run — see below. Consumed by `/how-do-i`, which sweeps failure-modes + `mistakes.jsonl` per query.
 
 **Triggers:** a mistake pattern reached **≥3** occurrences in `~/.claude/mistakes.jsonl` (the promotion bar, script-enforced); "promote this to a rule"; a FACE record nesting under a mega parent.
 
 **Check the gate + prior entry FIRST:**
 
 ```bash
-grep -rl '<2-3 keywords>' ~/.claude/references/failure-modes/    # already exists?
+grep -rl '<2-3 keywords>' ~/.claude/records/failure-modes/    # already exists?
 grep -c '"pattern":"<slug>"' ~/.claude/mistakes.jsonl            # occurrence count
 ```
 

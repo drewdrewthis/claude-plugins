@@ -3,7 +3,9 @@
 Drü's Claude Code plugin marketplace. Versioned home for the machinery shared
 across the personal fleet AND the AppleTree tenant base — one source, two
 consumers, no copy drift. **Machinery only:** the knowledge files the agent
-generates live outside the plugins, under `~/.claude/references/**` per the
+generates live outside the plugins, under `~/.claude/records/**` (canonical;
+`~/.claude/references/**` is the legacy per-root fallback until a root is
+renamed) per the
 design record.
 
 ## Install
@@ -149,7 +151,8 @@ adaptation, marked `PLUGIN ADAPTATION` in the source where it touches code:
   Every other pointer in the row is likewise the transcript's own text rather
   than the model's retyping of it. It
   never writes `$HOME/.claude/mistakes.jsonl`: rows there are promoted into
-  `references/failure-modes/` and thence into the `@`-imported
+  `records/failure-modes/` (or `references/failure-modes/`, the legacy
+  fallback) and thence into the `@`-imported
   `common-mistakes.md`, where one bad row becomes a fleet-wide rule, so
   `mistakes` here is deliberately inert — an entry or none, no severity, no
   category, no failure-mode name, each of those being a corpus-relative
