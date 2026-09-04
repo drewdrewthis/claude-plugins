@@ -92,6 +92,12 @@ set -uo pipefail
 prog="compile-records"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# This script uses `declare -A` below (associative arrays, bash 4+). Ensure we
+# are on such a bash BEFORE any of that runs — macOS ships/resolves bash 3.2.
+# shellcheck source=scripts/lib/require-bash4.sh
+source "$SCRIPT_DIR/lib/require-bash4.sh"
+require_bash4 "$0" "$@"
+
 # shellcheck source=scripts/lib/frontmatter.sh
 source "$SCRIPT_DIR/lib/frontmatter.sh"
 

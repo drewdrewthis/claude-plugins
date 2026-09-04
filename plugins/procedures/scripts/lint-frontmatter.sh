@@ -55,6 +55,13 @@ set -uo pipefail
 # Repo root = parent of this script's dir. Overridable via
 # LINT_FRONTMATTER_ROOT for testing against fixture stores.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# This script uses `declare -A` below (associative arrays, bash 4+). Ensure we
+# are on such a bash BEFORE any of that runs — macOS ships/resolves bash 3.2.
+# shellcheck source=scripts/lib/require-bash4.sh
+source "$SCRIPT_DIR/lib/require-bash4.sh"
+require_bash4 "$0" "$@"
+
 # PLUGIN ADAPTATION: data root defaults to the host codex (~/.claude), not this
 # plugin install dir — upstream these scripts live inside the codex repo itself.
 ROOT="${LINT_FRONTMATTER_ROOT:-${CODEX_ROOT:-$HOME/.claude}}"
