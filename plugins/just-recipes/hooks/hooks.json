@@ -1,11 +1,11 @@
 {
-  "description": "Funnel raw Bash through just recipes where a justfile resolves",
+  "description": "Nudge raw Bash toward just recipes where a justfile resolves (strict mode blocks)",
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/enforce-just.sh" }
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/enforce-just.sh", "timeout": 10 }
         ]
       }
     ]

@@ -7,7 +7,13 @@ description: Use when running project commands/tasks in a repo that has a justfi
 
 ## Enforcement model
 
-- A PreToolUse hook denies raw Bash wherever a justfile resolves from the project dir. Discover recipes with `just --list`; escape hatch: `just wrap "<cmd>"` — runs the command under timeout/output-cap guardrails and logs it to `$CODEX_ROOT/state/wrap.log`.
+- A PreToolUse hook, controlled by `JUST_RECIPES_ENFORCE`, acts on raw Bash wherever a justfile resolves from the project dir:
+  - **unset / default = nudge.** The command is ALLOWED, but when its leading word plausibly maps to a recipe the hook returns `additionalContext` guidance naming the matched recipe(s). No plausible match → silent allow.
+  - **`strict` = hard block.** Denies the command outright (the old behavior), regardless of whether a recipe matches.
+  - **`off` / `0` = kill switch.** Fully silent, no logging.
+- **Match rule (nudge only):** the first real word of the first non-allowlisted segment (leading `sudo`, `env`, and `NAME=value` assignments are skipped, and a leading `./` or `/usr/bin/` path stripped) is compared case-insensitively against recipe names and doc comments taken from a single `just --list`. A command-substitution command (`$(...)`, backticks) matches on the whole command's first real word. Strict does not consult the match — it denies every non-allowlisted command.
+- **wrap.log backlog:** in nudge AND strict (never off), whenever a justfile resolves and the command is not allowlisted, one line is appended to the state dir's `wrap.log`: `ISO-timestamp <tab> hook <tab> dir <tab> raw-command`. State-dir precedence (highest first): `${KNOWLEDGE_HOME:-$HOME/.knowledge}/state` when that `~/.knowledge` dir exists; else `$CODEX_ROOT/state` when `CODEX_ROOT` is set; else `${XDG_STATE_HOME:-$HOME/.local/state}/just-recipes`. In nudge mode this accrues even when the nudge itself stays silent. Logging is best-effort and never breaks the hook's fail-open (exit-0) guarantee.
+- Discover recipes with `just --list`; escape hatch: `just wrap "<cmd>"` — runs the command under timeout/output-cap guardrails and logs it to the same `wrap.log`.
   ⚠ fm.just-wrap-unwired — bare `just wrap` errors ("no such recipe") in any project whose own justfile lacks `wrap`: mounted module recipes stay namespaced and `set fallback` walks parent directories, not modules (verified on just 1.58.0). Always-resolving form: `just --justfile ~/.claude/just/justfile -d . wrap "<cmd>"` (`-d .` pins execution to the current dir). After the wiring below, `just global::wrap "<cmd>"` also works.
 - One-time project wiring — add to the project justfile to expose every global recipe as `global::<recipe>`:
 
@@ -16,8 +22,8 @@ description: Use when running project commands/tasks in a repo that has a justfi
   set fallback
   ```
 
-- Parsing: commands are trimmed of surrounding whitespace, then segmented on shell control operators (`&&`, `||`, `;;`, `;`, `|`, newlines — quoted or backslash-escaped operators don't split). A lone segment passes when its first word is `just` or a read-only verb (`cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`); a multi-segment command passes only when EVERY segment is a `just` invocation. Command substitution (`$(...)`, backticks) is denied wherever the hook enforces.
-- Kill switch: `JUST_RECIPES_ENFORCE=off` (or `0`) disables enforcement. Repos without a resolvable justfile and machines without `just` pass everything through.
+- Parsing: commands are trimmed of surrounding whitespace, then segmented on shell control operators (`&&`, `||`, `;;`, `;`, `|`, newlines — quoted or backslash-escaped operators don't split). A lone segment passes when its first word is `just` or a read-only verb (`cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`); a multi-segment command passes only when EVERY segment is a `just` invocation. Command substitution (`$(...)`, backticks) is denied in strict mode; in nudge mode it is treated as raw execution and can trigger a nudge when its leading word maps to a recipe.
+- Repos without a resolvable justfile and machines without `just` pass everything through.
 
 ## Habit loop
 
