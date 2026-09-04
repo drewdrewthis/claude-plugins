@@ -82,6 +82,32 @@ resolve_roots() {
   [ "${#lines[@]}" -eq 2 ]   # gamma excluded, discovery not consulted
 }
 
+@test "resolve_roots: nothing configured resolves zero roots (spec is empty)" {
+  run resolve_roots
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 0 ]
+}
+
+@test "_stores_resolve_roots_spec returns exit 1 and empty output when nothing resolves" {
+  run bash -c 'source "$1"; _stores_resolve_roots_spec' _ "$STORES_SH"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "CODEX_ROOT still works as the legacy explicit override" {
+  export CODEX_ROOT="$HOME/legacy-root"
+  run resolve_roots
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$HOME/legacy-root" ]
+  [ "${#lines[@]}" -eq 1 ]
+}
+
+@test "_stores_no_roots_message prints the canonical error text" {
+  run bash -c 'source "$1"; _stores_no_roots_message' _ "$STORES_SH"
+  [ "$status" -eq 0 ]
+  [ "$output" = "no knowledge roots found — clone a module into ~/.knowledge/modules/<name> or set CODEX_STORE_ROOTS" ]
+}
+
 # --- state-dir ~/.knowledge precedence (three-way) -------------------------
 # The pre-existing tests above cover the case where ~/.knowledge is absent
 # entirely (XDG/hardcoded fallback); these three cover it present.

@@ -18,11 +18,11 @@
 #                though the (partial) index is still written.
 #
 # Roots: with --root, exactly that one directory is scanned (100% of this
-# script's original, single-root contract). Without --root, the roots are
-# CODEX_STORE_ROOTS (colon-separated absolute paths), default
-# ${CODEX_ROOT:-$HOME/.claude} — i.e. an unset CODEX_STORE_ROOTS behaves
-# exactly like the old single-root default. A configured root that does not
-# exist is skipped with a stderr warning, not a hard failure.
+# script's original, single-root contract). Without --root, the roots come
+# from CODEX_STORE_ROOTS (colon-separated, see lib/stores.sh for the full
+# precedence chain); if nothing resolves at any tier, the script errors
+# (no hardcoded default). A configured root that does not exist is skipped
+# with a stderr warning, not a hard failure.
 #
 # Outputs (exactly two files, both inside --out DIR, merged across every
 # root):
@@ -85,15 +85,16 @@ Usage: build-record-index.sh --out DIR [--root PATH] [--strict]
 
   --out DIR    Required. index.txt and map.tsv are written into DIR.
   --root PATH  Single corpus root, overriding multi-root. Without this,
-               roots come from CODEX_STORE_ROOTS (colon-separated, default
-               ${CODEX_ROOT:-$HOME/.claude}).
+               roots come from CODEX_STORE_ROOTS (colon-separated, see
+               lib/stores.sh for full precedence); if nothing resolves,
+               the script errors.
   --strict     Exit non-zero if any file was skipped (missing id/description,
                or unparseable frontmatter).
 EOF
 }
 
 OUT_DIR=""
-ROOT="${CODEX_ROOT:-$HOME/.claude}"
+ROOT="${CODEX_ROOT:-}"
 ROOT_EXPLICIT=0
 STRICT=0
 
@@ -155,15 +156,21 @@ source "$LIB_DIR/stores.sh"
 
 # Resolve the root list. --root wins outright (single root, byte-identical
 # to this script's original contract — every existing test uses this path).
-# Otherwise _stores_resolve_roots_spec (CODEX_STORE_ROOTS > CODEX_ROOT >
-# settings.json > hardcoded default — see lib/stores.sh), so this always
-# matches what how-do-i.sh's roots.stamp records.
+# Otherwise _stores_resolve_roots_spec (CODEX_STORE_ROOTS > settings.json >
+# ~/.knowledge tiers > CODEX_ROOT — see lib/stores.sh), so this always
+# matches what how-do-i.sh's roots.stamp records. When that resolver comes
+# back empty (nothing resolved at ANY tier), we error rather than defaulting.
 ROOTS=()
 if [ "$ROOT_EXPLICIT" -eq 1 ]; then
     ROOT="$(cd "$ROOT" && pwd)"
     ROOTS=("$ROOT")
 else
-    _stores_split_roots "$(_stores_resolve_roots_spec)"
+    _spec="$(_stores_resolve_roots_spec)"
+    if [ -z "$_spec" ]; then
+        _stores_no_roots_message >&2
+        exit 2
+    fi
+    _stores_split_roots "$_spec"
     for _r in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do
         if [ -d "$_r" ]; then
             ROOTS+=("$(cd "$_r" && pwd)")

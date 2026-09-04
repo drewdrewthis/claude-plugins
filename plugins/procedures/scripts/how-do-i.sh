@@ -68,11 +68,13 @@
 #                       _stores_resolve_roots_spec) — drives cache
 #                       invalidation (above) as well as what
 #                       build-record-index.sh itself scans.
-#   CODEX_ROOT          single-root fallback when CODEX_STORE_ROOTS is unset.
-#                       Resolution order when both are unset: this process's
-#                       own settings.json (.env.CODEX_STORE_ROOTS, at
-#                       ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json),
-#                       then hardcoded ${CLAUDE_CONFIG_DIR:-$HOME/.claude}.
+#   CODEX_ROOT          legacy single-root override, the LOWEST-precedence
+#                       tier. Resolution order when CODEX_STORE_ROOTS is
+#                       unset: settings.json (.env.CODEX_STORE_ROOTS, at
+#                       ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json) >
+#                       ~/.knowledge config/modules tiers > CODEX_ROOT. There
+#                       is no hardcoded default: if nothing resolves,
+#                       build-record-index.sh errors (see lib/stores.sh).
 #
 # Output:
 #   Default    the stage-2 answer on stdout, nothing else. On an empty
