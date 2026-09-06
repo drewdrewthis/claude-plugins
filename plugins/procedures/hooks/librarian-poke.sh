@@ -82,6 +82,72 @@ case "$LIBRARIAN_CLAIM_TTL_SECS" in ''|*[!0-9]*|0) LIBRARIAN_CLAIM_TTL_SECS=900 
 LIBRARIAN_LOCK="${LIBRARIAN_LOCK:-$(lp_state_dir)/librarian.lock}"
 LIBRARIAN_LOCK_DIR="${LIBRARIAN_LOCK_DIR:-${LIBRARIAN_LOCK}.d}"
 
+# --- load gate -------------------------------------------------------------
+# The drain scans the WHOLE transcript corpus. Ungated it storms the box:
+# 18:04Z 2026-09-06 it drove load to 24 and iowait to 58% with D-state
+# find+wc over ~/.claude/projects. Two defences, both at the point of action:
+#   (a) run the drain at idle I/O + lowest CPU priority (ionice -c3 nice -n19),
+#       so even when it does run it yields to real work — see LP_NICE below;
+#   (b) refuse to start it at all when the box is already under pressure —
+#       1-min loadavg over LIBRARIAN_LOAD_CEILING (default 8 = one core-worth
+#       per core on this 8-core box), or iowait over LIBRARIAN_IOWAIT_CEILING
+#       (default 30%) sampled over a ~1s /proc/stat window. On a defer the
+#       poke exits 0 without draining; the next qualifying turn retries, so no
+#       backlog is lost, only postponed until the box can afford it.
+LIBRARIAN_LOAD_CEILING="${LIBRARIAN_LOAD_CEILING:-8}"
+case "$LIBRARIAN_LOAD_CEILING" in ''|*[!0-9.]*) LIBRARIAN_LOAD_CEILING=8 ;; esac
+LIBRARIAN_IOWAIT_CEILING="${LIBRARIAN_IOWAIT_CEILING:-30}"
+case "$LIBRARIAN_IOWAIT_CEILING" in ''|*[!0-9]*) LIBRARIAN_IOWAIT_CEILING=30 ;; esac
+
+# lp_log_defer <reason> — append one line to the librarian-poke log in the
+# state dir. Best-effort: an unwritable log never blocks the poke.
+lp_log_defer() {
+    local logf; logf="$(lp_state_dir)/librarian-poke.log"
+    mkdir -p "${logf%/*}" 2>/dev/null || true
+    printf '%s librarian-poke: deferred, %s\n' \
+        "$(date -Is 2>/dev/null || true)" "${1:-}" >>"$logf" 2>/dev/null || true
+}
+
+# lp_iowait_pct — iowait % over a ~1s window from /proc/stat cpu-line deltas,
+# or empty when unreadable. Fields on the aggregate 'cpu ' line (awk-indexed):
+# $2 user $3 nice $4 system $5 idle $6 iowait $7 irq $8 softirq $9 steal.
+lp_iowait_pct() {
+    local i1 t1 i2 t2 di dt
+    read -r i1 t1 < <(awk '/^cpu /{print $6, ($2+$3+$4+$5+$6+$7+$8+$9); exit}' /proc/stat 2>/dev/null)
+    [ -n "${i1:-}" ] && [ -n "${t1:-}" ] || return 1
+    sleep 1 2>/dev/null || true
+    read -r i2 t2 < <(awk '/^cpu /{print $6, ($2+$3+$4+$5+$6+$7+$8+$9); exit}' /proc/stat 2>/dev/null)
+    [ -n "${i2:-}" ] && [ -n "${t2:-}" ] || return 1
+    di=$(( i2 - i1 )); dt=$(( t2 - t1 ))
+    [ "$dt" -gt 0 ] 2>/dev/null || return 1
+    printf '%s' "$(( di * 100 / dt ))"
+}
+
+# lp_load_ok — 0 to proceed with the drain, 1 to defer (and log the reason).
+# Fail-open: an unreadable /proc never blocks the drain.
+lp_load_ok() {
+    local l iw
+    l="$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
+    if [ -n "$l" ] && awk -v x="$l" -v y="$LIBRARIAN_LOAD_CEILING" 'BEGIN{exit !(x+0>y+0)}'; then
+        lp_log_defer "load=$l > ceiling=$LIBRARIAN_LOAD_CEILING"
+        return 1
+    fi
+    iw="$(lp_iowait_pct)" || iw=""
+    if [ -n "$iw" ] && [ "$iw" -gt "$LIBRARIAN_IOWAIT_CEILING" ] 2>/dev/null; then
+        lp_log_defer "iowait=${iw}% > ceiling=${LIBRARIAN_IOWAIT_CEILING}%"
+        return 1
+    fi
+    return 0
+}
+
+# LP_NICE — idle-I/O + lowest-CPU launch prefix for the drain. Each half is
+# guarded: ionice/nice are absent on macOS/BSD, so a missing binary drops out
+# of the prefix rather than aborting the poke. ionice class idle (-c3) and the
+# nice value are inherited by the claude child's own find/wc/grep subprocesses.
+LP_NICE=""
+command -v ionice >/dev/null 2>&1 && LP_NICE="ionice -c3"
+command -v nice   >/dev/null 2>&1 && LP_NICE="${LP_NICE:+$LP_NICE }nice -n19"
+
 # --- the poke, and its portable claim fallback ------------------------------
 
 # lp_marker_age <dir> — seconds since the claim dir was created, or nonzero
@@ -122,12 +188,17 @@ lp_worker() {
     sleep "$LIBRARIAN_SETTLE_SECS" 2>/dev/null || true
     command -v claude >/dev/null 2>&1 || return 0
 
+    # Load gate: read pressure fresh, immediately before draining. Over the
+    # ceiling => defer (logged) and exit without touching the corpus. The next
+    # qualifying turn pokes again, so nothing is dropped, only postponed.
+    lp_load_ok || return 0
+
     # LIBRARIAN_NO_FLOCK=1 forces the mkdir fallback below even when a real
     # flock is on PATH — test-only, so "second concurrent claim loses" is
     # deterministic on any host rather than depending on this machine's own
     # tool availability (mirrors LIBRARIAN_SYNC's precedent).
     if [ "${LIBRARIAN_NO_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
-        flock -n "$LIBRARIAN_LOCK" claude -p --agent procedures:librarian "Drain the transcript queue." || true
+        flock -n "$LIBRARIAN_LOCK" $LP_NICE claude -p --agent procedures:librarian "Drain the transcript queue." || true
         return 0
     fi
 
@@ -136,7 +207,7 @@ lp_worker() {
     # trap so a crash does not wedge every future poke shut.
     if lp_claim; then
         trap 'rmdir "$LIBRARIAN_LOCK_DIR" 2>/dev/null || true' EXIT
-        claude -p --agent procedures:librarian "Drain the transcript queue." || true
+        $LP_NICE claude -p --agent procedures:librarian "Drain the transcript queue." || true
         rmdir "$LIBRARIAN_LOCK_DIR" 2>/dev/null || true
         trap - EXIT
     fi
