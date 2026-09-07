@@ -385,6 +385,23 @@ EOF
   [[ "$stat" == *".index/"* ]]
 }
 
+# ---- AC19: a valid-frontmatter .md outside the record directories is refused ----
+@test "AC19: a valid-frontmatter .md outside the record directories is refused and left untouched" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  mkdir -p "$ROOT/docs"
+  _fm "$ROOT/docs/page.md" fm.page
+  local before; before=$(_commit_count)
+  local page_cs; page_cs="$(shasum < "$ROOT/docs/page.md")"
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md docs/page.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"outside the record directories"* ]]
+  [[ "$output" == *"docs/page.md"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  local page_cs_after; page_cs_after="$(shasum < "$ROOT/docs/page.md")"
+  [ "$page_cs_after" = "$page_cs" ]
+}
+
 # ---- AC20: metadata cap is a byte budget, not a character count ----
 @test "AC20: commit metadata cap is measured in bytes, not characters" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec

@@ -166,15 +166,13 @@ RECDIR="$(stores_records_dir "$ROOT")"
 read -ra PATHS <<< "$PATHS_RAW"
 
 # --paths filter. What this loop enforces: every entry is a root-relative path
-# ending in .md (absolute paths and any `..` segment are rejected so a caller
-# cannot reach outside the selected store; a non-.md entry is rejected so a
-# sensitive non-record file cannot ride in unvalidated). Record-DIR containment
-# (the entry resolves under the store's record tree, no symlinked parent) is not
-# checked here — it is enforced per-file in normalize_and_collect after the
-# parent dir is physically resolved. The literal `.index` is the one tolerated
-# exception: accepted for caller compatibility and dropped, since the gate adds
-# `.index` itself (step 5); the drop is announced once on stderr so a caller is
-# not left believing it selected the index.
+# ending in .md, located under the record directories ($RECDIR/ or plans/). Absolute
+# paths and any `..` segment are rejected so a caller cannot reach outside the
+# selected store. A non-.md entry is rejected so a sensitive non-record file cannot
+# ride in unvalidated. The literal `.index` is the one tolerated exception: accepted
+# for caller compatibility and dropped, since the gate adds `.index` itself (step 5);
+# the drop is announced once on stderr so a caller is not left believing it selected
+# the index.
 ROOT_PHYS="$(cd "$ROOT" && pwd -P)"
 _FILTERED=()
 for _p in ${PATHS[@]+"${PATHS[@]}"}; do
@@ -185,7 +183,12 @@ for _p in ${PATHS[@]+"${PATHS[@]}"}; do
             [ -n "${_index_noted:-}" ] || printf '%s: note: ".index" in --paths is ignored; the gate stages the index itself\n' "$prog" >&2
             _index_noted=1
             continue ;;
-        *.md) _FILTERED+=("$_p") ;;
+        *.md)
+            case "$_p" in
+                "$RECDIR"/*|plans/*) _FILTERED+=("$_p") ;;
+                *) usage_err "--paths entry is outside the record directories ($RECDIR/, plans/): $_p" ;;
+            esac
+            ;;
         *) usage_err "--paths entry is not a record .md file: $_p" ;;
     esac
 done

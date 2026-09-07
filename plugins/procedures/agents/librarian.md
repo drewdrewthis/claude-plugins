@@ -81,6 +81,8 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    an actionable note to `grooming-queue.md` itself. You never stage, commit, or
    push by hand — the gate owns every write to the repo:
 
+   <!-- PLUGIN ADAPTATION: no upstream counterpart — documents the plugin-local librarian commit-gate machinery. -->
+
    Write each of the three transcript-derived values to its own file with the
    Write tool under `<state-dir>/tmp/commit-<root-slug>/` — where `<state-dir>`
    is your own state dir (the same dir as your cursors), resolved with

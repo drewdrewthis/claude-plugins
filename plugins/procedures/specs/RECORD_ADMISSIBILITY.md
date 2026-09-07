@@ -68,16 +68,18 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
    `--paths` (record paths only; a `.index` entry is tolerated for caller
    compatibility but ignored, since the gate rebuilds and stages `.index`
    itself in step 5) and never `-A`, then makes a commit whose message carries
-   the reason (below). The four transcript-derived reason fields
-   (`what`/`why`/`source`/`evidence`) each arrive either inline
-   (`--what`/`--why`/`--source`/`--evidence`) or from a file
-   (`--why-file`/`--source-file`/`--evidence-file`, whose path must live under
-   the procedures state dir); the inline and `-file` forms of a field are
+   the reason (below). The transcript-derived reason fields arrive as: `--what`
+   (inline only; the kinds and counts), `--why`/`--source`/`--evidence`
+   (inline via `--why`/`--source`/`--evidence` or from a file via
+   `--why-file`/`--source-file`/`--evidence-file`, whose path must live under
+   the procedures state dir). The inline and `-file` forms of a field are
    mutually exclusive. They land verbatim in the commit body, so they are
    **bounded pointers**: each is capped at 2048 bytes and run through the same
    `check-sanitization.sh` leak classes before the commit, so a personal path,
    token, or key cannot ride into history via a trailer. A new commit every
    drain, never `--amend`, never `--force`.
+
+   <!-- PLUGIN ADAPTATION: no upstream counterpart — documents the plugin-local librarian commit-gate machinery. -->
 7. **Push** — `git push`; on rejection, `git pull --rebase` and retry once; if
    that still cannot fast-forward, `git rebase --abort`, leave the tree clean,
    and queue the root+files. Never a force-push.
