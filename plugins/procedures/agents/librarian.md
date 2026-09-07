@@ -59,6 +59,13 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    | decision / solution | Same script, `decision`/`solution` subcommand, targeting `<root>`. It does not currently emit `description:` into the frontmatter block — add it by hand (Edit) right after minting: one neutral sentence per specs/RECORD_FRONTMATTER.md's `description` guidance, not a restatement of the kind or the filename. |
    | procedure / evolution / rule-kind (invariant, policy, standard) | Hand-write directly from that store's template in `skills/update-records/templates/`, same as procedure-evolver's procedure route — full seven-key frontmatter (`id`, `kind`, `date`, `keywords`, `links`, `status`, `description`), `id` corpus-unique (grep the root before minting), `kind` matching the containing store directory. |
 
+   As you write, capture — per store root — the four **reason fields** the commit
+   gate records in git history (step 6): **what** (the kinds and counts written,
+   e.g. `1 solution, 1 mistake`), **why** (the transcript trigger that warranted
+   them), **source** (the session id and transcript line range you read), and
+   **evidence** (the pointer to the turn's evidence in the transcript). You already
+   hold all four from the extraction you just did; carry them into the gate call.
+
 5. **Groom opportunistically, within the real status vocabulary only** — never invent a
    status value outside the per-kind set in specs/RECORD_FRONTMATTER.md. When the
    transcript evidences a `pending` decision was actually acted on and held, promote it to
@@ -67,18 +74,29 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    add frontmatter keys beyond the seven the spec defines. Grooming is opportunistic, not
    a mandate to sweep the whole store every drain.
 
-6. **Commit per store root you wrote into, only after that root's writes are done:**
-   1. `git -C <root> pull --rebase`.
-   2. Rebuild that root's index so it lands in the same commit as the records it
-      describes: `bash ${CLAUDE_PLUGIN_ROOT}/scripts/build-record-index.sh --root <root> --out <root>/.index`.
-   3. `git -C <root> add <only the record and index paths you touched>` — never `-A`, never `.`.
-   4. `git -C <root> commit -m '<short summary: kinds and counts written>'` — a new commit,
-      never `--amend`.
-   5. `git -C <root> push`. On rejection: `git -C <root> pull --rebase` and retry the push
-      ONCE. If that still fails (a real conflict, not a fast-forward gap), run
-      `git -C <root> rebase --abort`, leave the repo clean, and append a note — root,
-      files, what happened — to `${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}/grooming-queue.md` (that state dir now resolves ~/.knowledge-aware — see `scripts/lib/stores.sh` `procedures_state_dir`) instead of forcing
-      anything through.
+6. **Commit per store root you wrote into, only after that root's writes are done.**
+   Run the deterministic commit gate **once per root** — it does the whole
+   pull → normalize → validate → index → structured-commit → push flow and
+   aborts atomically (no commit, no push) on any admissibility failure, appending
+   an actionable note to `grooming-queue.md` itself. You never stage, commit, or
+   push by hand — the gate owns every write to the repo:
+
+   ```
+   CODEX_ROOT=<root> bash ${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh \
+     --root <root> \
+     --paths "<the record paths you touched, space-separated, plus .index>" \
+     --what   "<kinds and counts, e.g. '1 solution, 1 mistake'>" \
+     --why    "<the transcript trigger that warranted these>" \
+     --source "<session <sid>, transcript <slug>.jsonl lines A-B>" \
+     --evidence "<pointer to the turn's evidence in the transcript>"
+   ```
+
+   A non-zero exit means the gate blocked and already queued the reason (which
+   record, which check) in `grooming-queue.md` — do not retry blindly. If one
+   record of a batch is the offender, the gate names it; re-invoke this root with
+   that path removed so the clean records still land, and leave the offender
+   queued. The gate never `--amend`s, never `--force`s, and cites its rubric in
+   `${CLAUDE_PLUGIN_ROOT}/specs/RECORD_ADMISSIBILITY.md`.
 
 7. **Advance a transcript's cursor only after every store root its writes touched is
    either committed or explicitly queued** in `grooming-queue.md` from step 6. This is
