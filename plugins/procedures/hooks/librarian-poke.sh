@@ -141,12 +141,22 @@ lp_log_defer() {
 # lp_iowait_pct — iowait % over a ~1s window from /proc/stat cpu-line deltas,
 # or empty when unreadable. Fields on the aggregate 'cpu ' line (awk-indexed):
 # $2 user $3 nice $4 system $5 idle $6 iowait $7 irq $8 softirq $9 steal.
+# PLUGIN ADAPTATION (test-injection seam): LP_STAT_FILE (default /proc/stat)
+# lets a test point both samples at a fixture instead of the real kernel
+# counter; LP_STAT_SAMPLE_SLEEP lets a test swap the fixture file BETWEEN the
+# two samples (e.g. `cp fixture2 "$LP_STAT_FILE"`) instead of sleeping 1s
+# against a live, unrepeatable counter. Unset, both default to today's exact
+# production behaviour: read /proc/stat, sleep 1, read /proc/stat again.
 lp_iowait_pct() {
     local i1 t1 i2 t2 di dt
-    read -r i1 t1 < <(awk '/^cpu /{print $6, ($2+$3+$4+$5+$6+$7+$8+$9); exit}' /proc/stat 2>/dev/null)
+    read -r i1 t1 < <(awk '/^cpu /{print $6, ($2+$3+$4+$5+$6+$7+$8+$9); exit}' "${LP_STAT_FILE:-/proc/stat}" 2>/dev/null)
     [ -n "${i1:-}" ] && [ -n "${t1:-}" ] || return 1
-    sleep 1 2>/dev/null || true
-    read -r i2 t2 < <(awk '/^cpu /{print $6, ($2+$3+$4+$5+$6+$7+$8+$9); exit}' /proc/stat 2>/dev/null)
+    if [ -n "${LP_STAT_SAMPLE_SLEEP:-}" ]; then
+        eval "$LP_STAT_SAMPLE_SLEEP" 2>/dev/null || true
+    else
+        sleep 1 2>/dev/null || true
+    fi
+    read -r i2 t2 < <(awk '/^cpu /{print $6, ($2+$3+$4+$5+$6+$7+$8+$9); exit}' "${LP_STAT_FILE:-/proc/stat}" 2>/dev/null)
     [ -n "${i2:-}" ] && [ -n "${t2:-}" ] || return 1
     di=$(( i2 - i1 )); dt=$(( t2 - t1 ))
     [ "$dt" -gt 0 ] 2>/dev/null || return 1
@@ -167,9 +177,13 @@ lp_log_failopen() {
 # Fail-open: an unreadable /proc never blocks the drain — but every blind
 # release is logged (lp_log_failopen), so a gate degraded to always-open is
 # not silent.
+# PLUGIN ADAPTATION (test-injection seam): LP_LOADAVG_FILE (default
+# /proc/loadavg) lets a test point this at a fixture file instead of the real
+# kernel counter. Unset, behaviour is byte-identical to today: read
+# /proc/loadavg.
 lp_load_ok() {
     local l iw
-    l="$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
+    l="$(awk '{print $1}' "${LP_LOADAVG_FILE:-/proc/loadavg}" 2>/dev/null)"
     if [ -n "$l" ]; then
         if awk -v x="$l" -v y="$LIBRARIAN_LOAD_CEILING" 'BEGIN{exit !(x+0>y+0)}'; then
             lp_log_defer "load=$l > ceiling=$LIBRARIAN_LOAD_CEILING"
