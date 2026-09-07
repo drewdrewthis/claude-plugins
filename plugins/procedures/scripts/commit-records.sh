@@ -8,7 +8,7 @@
 # Per store root the librarian wrote into, ONE call replaces step 6's git block:
 #
 #   CODEX_ROOT=<root> bash commit-records.sh \
-#     --root <root> --paths "<record paths + .index>" \
+#     --root <root> --paths "<record .md paths>" \
 #     --what "<kinds and counts>" --why "<trigger>" \
 #     --source "<session/transcript pointer>" --evidence "<evidence pointer>"
 #
@@ -58,13 +58,15 @@ source "$SCRIPT_DIR/lib/stores.sh"
 
 SIZE_CAP=32768
 
+# usage — print the two supported invocation forms to stdout.
 usage() {
     cat <<'EOF'
-Usage: commit-records.sh --root PATH --paths "p1 p2 .index" \
+Usage: commit-records.sh --root PATH --paths "p1.md p2.md" \
          --what STR --why STR --source STR --evidence STR
-       commit-records.sh --normalize --root PATH --paths "p1 p2"
+       commit-records.sh --normalize --root PATH --paths "p1.md p2.md"
 EOF
 }
+# usage_err — print "prog: msg" plus the usage text to stderr, then exit 2.
 usage_err() { printf '%s: %s\n' "$prog" "$1" >&2; usage >&2; exit 2; }
 
 # ---- args ----
@@ -103,18 +105,29 @@ RECDIR="$(stores_records_dir "$ROOT")"
 # Split --paths into an array (space-separated).
 read -ra PATHS <<< "$PATHS_RAW"
 
-# Containment: every --paths entry is root-relative. Reject absolute paths and
-# any `..` segment so a caller cannot make the gate normalize, rename, or stage
-# a file outside the selected store (symlinked-parent escapes are additionally
-# rejected per-file below, after the parent dir is physically resolved).
+# Containment + kind filter: every --paths entry is a root-relative record .md
+# file. Reject absolute paths and any `..` segment so a caller cannot make the
+# gate normalize, rename, or stage a file outside the selected store
+# (symlinked-parent escapes are additionally rejected per-file below, after the
+# parent dir is physically resolved). Reject any non-.md entry so a sensitive
+# non-record file cannot ride in unvalidated — EXCEPT the literal `.index`,
+# accepted for caller compatibility and silently dropped, since the gate adds
+# `.index` itself (step 5).
 ROOT_PHYS="$(cd "$ROOT" && pwd -P)"
+_FILTERED=()
 for _p in ${PATHS[@]+"${PATHS[@]}"}; do
     case "$_p" in
         /*) usage_err "--paths entry must be root-relative, not absolute: $_p" ;;
         .. | ../* | */.. | */../*) usage_err "--paths entry escapes --root via '..': $_p" ;;
+        .index) continue ;;
+        *.md) _FILTERED+=("$_p") ;;
+        *) usage_err "--paths entry is not a record .md file: $_p" ;;
     esac
 done
 unset _p
+[ "${#_FILTERED[@]}" -gt 0 ] || usage_err "--paths has no record .md entries"
+PATHS=("${_FILTERED[@]}")
+unset _FILTERED
 
 # Load the canonical seven-key schema order for normalize. A loader failure
 # aborts — normalizing to an empty key order would corrupt every record.
@@ -216,9 +229,9 @@ _slug_of_id() {
     esac
 }
 
-# Normalize every record path; rename the file so its kebab-slug matches id.
-# Updates FINAL_PATHS (what gets committed) and REC_PATHS (record .md paths for
-# validation) with any post-rename path.
+# normalize_and_collect — normalize every record path; rename the file so its
+# kebab-slug matches id. Updates FINAL_PATHS (what gets committed) and REC_PATHS
+# (record .md paths for validation) with any post-rename path.
 FINAL_PATHS=() REC_PATHS=()
 normalize_and_collect() {
     local rel abs newrel newabs id slug base want dir
@@ -262,7 +275,9 @@ normalize_and_collect() {
                 FINAL_PATHS+=("$newrel"); REC_PATHS+=("$newrel")
                 ;;
             *)
-                FINAL_PATHS+=("$rel")   # .index and any non-record path pass through
+                # PATHS is pre-filtered to record .md only (.index dropped, any
+                # other non-.md rejected as a usage error), so this is unreachable.
+                _abort path "non-record path reached normalize: $rel"
                 ;;
         esac
     done
@@ -362,6 +377,8 @@ _dup_id_scan
 # the staged record paths, compared case-insensitively. Catches the twin even
 # on a case-insensitive macOS checkout where both map to one on-disk file.
 declare -A _LOWER_OF=()
+# _check_twin <path> — record <path> under its lowercased key; abort if a
+# different path already claimed that key (i.e. a case-twin was seen).
 _check_twin() {
     local p="$1" low
     low="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
@@ -393,6 +410,10 @@ fi
 
 # ---- step 5: rebuild index into the same commit ----
 _rebuild_index
+# The gate — not the caller — stages the rebuilt index. FINAL_PATHS holds only
+# record .md paths (any caller-supplied .index was dropped up front); append it
+# now so the `git add` below stages the index alongside the records it describes.
+FINAL_PATHS+=(".index")
 
 # ---- step 6: structured commit ----
 # Constrain the transcript-derived commit metadata (what/why/source/evidence)
@@ -403,11 +424,15 @@ _rebuild_index
 # ride into git history via a commit trailer.
 META_CAP=2048
 for _mv in "$WHAT" "$WHY" "$SOURCE" "$EVIDENCE"; do
-    if [ "${#_mv}" -gt "$META_CAP" ]; then
+    # Byte count (not character count): the cap is a byte budget, and ${#_mv}
+    # counts characters, which under a UTF-8 locale undercounts a multi-byte
+    # field. LC_ALL=C wc -c counts raw bytes.
+    _mb=$(printf '%s' "$_mv" | LC_ALL=C wc -c | tr -d '[:space:]')
+    if [ "$_mb" -gt "$META_CAP" ]; then
         _abort metadata "commit metadata field exceeds the ${META_CAP}-byte pointer cap"
     fi
 done
-unset _mv
+unset _mv _mb
 _meta_tmp="$(mktemp)"
 printf '%s\n%s\n%s\n%s\n' "$WHAT" "$WHY" "$SOURCE" "$EVIDENCE" > "$_meta_tmp"
 if ! _meta_out="$(bash "$SCRIPT_DIR/check-sanitization.sh" "$_meta_tmp" 2>&1)"; then
