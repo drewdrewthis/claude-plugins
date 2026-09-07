@@ -141,7 +141,7 @@ lp_log_defer() {
 # lp_iowait_pct — iowait % over a ~1s window from /proc/stat cpu-line deltas,
 # or empty when unreadable. Fields on the aggregate 'cpu ' line (awk-indexed):
 # $2 user $3 nice $4 system $5 idle $6 iowait $7 irq $8 softirq $9 steal.
-# PLUGIN ADAPTATION (test-injection seam): LP_STAT_FILE (default /proc/stat)
+# PLUGIN ADAPTATION: LP_STAT_FILE (a test-injection seam, default /proc/stat)
 # lets a test point both samples at a fixture instead of the real kernel
 # counter; LP_STAT_SAMPLE_SLEEP lets a test swap the fixture file BETWEEN the
 # two samples (e.g. `cp fixture2 "$LP_STAT_FILE"`) instead of sleeping 1s
@@ -177,7 +177,7 @@ lp_log_failopen() {
 # Fail-open: an unreadable /proc never blocks the drain — but every blind
 # release is logged (lp_log_failopen), so a gate degraded to always-open is
 # not silent.
-# PLUGIN ADAPTATION (test-injection seam): LP_LOADAVG_FILE (default
+# PLUGIN ADAPTATION: LP_LOADAVG_FILE (a test-injection seam, default
 # /proc/loadavg) lets a test point this at a fixture file instead of the real
 # kernel counter. Unset, behaviour is byte-identical to today: read
 # /proc/loadavg.

@@ -221,6 +221,11 @@ claude_never_ran() { [ ! -f "$CLAUDE_LOG" ]; }
 
 # ---------- load gate (lp_load_ok) via its test-injection seams ------------
 #
+# PLUGIN ADAPTATION: this pressure-gate suite (cases below) is plugin-local —
+# it covers the vendored fork's load/iowait defer behaviour, which has no
+# upstream equivalent, and drives it through the hook's LP_*_FILE /
+# LP_STAT_SAMPLE_SLEEP injection seams.
+#
 # LP_LOADAVG_FILE / LP_STAT_FILE / LP_STAT_SAMPLE_SLEEP let these tests drive
 # lp_load_ok deterministically off fixture files instead of the real
 # /proc/loadavg + /proc/stat, and swap the /proc/stat fixture BETWEEN
