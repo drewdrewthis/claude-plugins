@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# PLUGIN ADAPTATION: no upstream counterpart — new librarian commit-gate machinery.
 # commit-records.sh — the deterministic admissibility gate + committer for the
 # librarian's write path. The rubric it enforces is specs/RECORD_ADMISSIBILITY.md
 # (SSOT); this script does not re-describe it. No model, no network — the whole
@@ -70,12 +71,20 @@ usage_err() { printf '%s: %s\n' "$prog" "$1" >&2; usage >&2; exit 2; }
 ROOT="" PATHS_RAW="" WHAT="" WHY="" SOURCE="" EVIDENCE="" NORMALIZE_ONLY=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --root) ROOT="${2:-}"; shift 2 ;;
-        --paths) PATHS_RAW="${2:-}"; shift 2 ;;
-        --what) WHAT="${2:-}"; shift 2 ;;
-        --why) WHY="${2:-}"; shift 2 ;;
-        --source) SOURCE="${2:-}"; shift 2 ;;
-        --evidence) EVIDENCE="${2:-}"; shift 2 ;;
+        # Value-taking options: reject a trailing option with no value. Without
+        # this, `shift 2` on a single remaining arg fails (errexit is off), $#
+        # never decreases, and the parser loops forever.
+        --root | --paths | --what | --why | --source | --evidence)
+            [ "$#" -ge 2 ] || usage_err "option '$1' requires a value"
+            case "$1" in
+                --root) ROOT="$2" ;;
+                --paths) PATHS_RAW="$2" ;;
+                --what) WHAT="$2" ;;
+                --why) WHY="$2" ;;
+                --source) SOURCE="$2" ;;
+                --evidence) EVIDENCE="$2" ;;
+            esac
+            shift 2 ;;
         --normalize) NORMALIZE_ONLY=1; shift ;;
         -h | --help) usage; exit 0 ;;
         *) usage_err "unknown arg '$1'" ;;
@@ -93,6 +102,19 @@ RECDIR="$(stores_records_dir "$ROOT")"
 
 # Split --paths into an array (space-separated).
 read -ra PATHS <<< "$PATHS_RAW"
+
+# Containment: every --paths entry is root-relative. Reject absolute paths and
+# any `..` segment so a caller cannot make the gate normalize, rename, or stage
+# a file outside the selected store (symlinked-parent escapes are additionally
+# rejected per-file below, after the parent dir is physically resolved).
+ROOT_PHYS="$(cd "$ROOT" && pwd -P)"
+for _p in ${PATHS[@]+"${PATHS[@]}"}; do
+    case "$_p" in
+        /*) usage_err "--paths entry must be root-relative, not absolute: $_p" ;;
+        .. | ../* | */.. | */../*) usage_err "--paths entry escapes --root via '..': $_p" ;;
+    esac
+done
+unset _p
 
 # Load the canonical seven-key schema order for normalize. A loader failure
 # aborts — normalizing to an empty key order would corrupt every record.
@@ -112,9 +134,14 @@ _abort() {
     local check="$1" msg="$2" qdir qfile
     qdir="$(procedures_state_dir)"
     qfile="$qdir/grooming-queue.md"
-    mkdir -p "$qdir" 2>/dev/null || true
-    printf -- '- %s | root: %s | check: %s | %s\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ROOT" "$check" "$msg" >> "$qfile" 2>/dev/null || true
+    # The grooming queue is the durable record that this root was blocked; a
+    # silent write failure would let the caller assume the block was queued when
+    # it was not. Surface a distinct queue-write error instead of swallowing it.
+    if ! mkdir -p "$qdir" 2>/dev/null \
+        || ! printf -- '- %s | root: %s | check: %s | %s\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ROOT" "$check" "$msg" >> "$qfile" 2>/dev/null; then
+        printf '%s: QUEUE-WRITE-FAILED: could not record this block in %s\n' "$prog" "$qfile" >&2
+    fi
     printf '%s: BLOCK [%s]: %s\n' "$prog" "$check" "$msg" >&2
     printf '%s: re-invoke this root with the offending path(s) removed once fixed/queued.\n' "$prog" >&2
     exit 1
@@ -199,6 +226,14 @@ normalize_and_collect() {
         case "$rel" in
             *.md)
                 abs="$ROOT/$rel"
+                # Symlinked-parent escape guard: the physical parent dir must
+                # stay under the physical root before we write/rename the file.
+                pdir="$(cd "$ROOT/$(dirname "$rel")" 2>/dev/null && pwd -P)" \
+                    || _abort path "cannot resolve parent directory of: $rel"
+                case "$pdir/" in
+                    "$ROOT_PHYS"/*) : ;;
+                    *) _abort path "record path escapes --root (symlink?): $rel" ;;
+                esac
                 _normalize_file "$abs"
                 newrel="$rel"
                 if [ -f "$abs" ] && [ "$(head -1 "$abs")" = "---" ]; then
@@ -233,21 +268,58 @@ normalize_and_collect() {
     done
 }
 
+# _dup_id_scan — whole-root duplicate-id scan over the record tree (records dir
+# + plans/), skipping index/vendor/template dirs and INDEX/EVOLUTION files. Two
+# records sharing an id abort. Reused on the push-retry path after a rebase.
+_dup_id_scan() {
+    local -A _ID_FILE=()
+    local _scan_dirs=() rf rid
+    [ -d "$ROOT/$RECDIR" ] && _scan_dirs+=("$ROOT/$RECDIR")
+    [ -d "$ROOT/plans" ] && _scan_dirs+=("$ROOT/plans")
+    [ "${#_scan_dirs[@]}" -gt 0 ] || return 0
+    while IFS= read -r rf; do
+        [ -n "$rf" ] || continue
+        case "$rf" in */.index/* | */node_modules/* | */templates/*) continue ;; esac
+        case "$(basename "$rf")" in INDEX.md | EVOLUTION.md) continue ;; esac
+        [ "$(head -1 "$rf" 2>/dev/null)" = "---" ] || continue
+        rid="$(fm_value "$(frontmatter_block "$rf")" id)"; rid="${rid%%[[:space:]]*}"
+        [ -n "$rid" ] || continue
+        if [ -n "${_ID_FILE[$rid]+x}" ]; then
+            _abort duplicate-id "duplicate id '$rid' in: ${_ID_FILE[$rid]} ${rf#"$ROOT"/}"
+        fi
+        _ID_FILE[$rid]="${rf#"$ROOT"/}"
+    done < <(find "${_scan_dirs[@]}" -type f -name '*.md' 2>/dev/null | sort)
+}
+
+# _rebuild_index — regenerate <root>/.index so it lands in the same commit as
+# the records it describes. Reused on the push-retry path after a rebase, where
+# the committed index would otherwise describe the pre-rebase tree.
+_rebuild_index() {
+    local idx_out
+    if ! idx_out="$(bash "$SCRIPT_DIR/build-record-index.sh" --root "$ROOT" --out "$ROOT/.index" 2>&1)"; then
+        _abort index "build-record-index failed: $(printf '%s' "$idx_out" | tr '\n' ' ')"
+    fi
+}
+
 # ---- normalize-only mode (AC4 evidence) ----
 if [ -n "$NORMALIZE_ONLY" ]; then
     normalize_and_collect
     exit 0
 fi
 
-normalize_and_collect
-
 # ---- step 1: pull --rebase (only with an upstream) ----
+# Runs BEFORE normalize: normalization rewrites and `git mv`s tracked records,
+# and `git pull --rebase` refuses a dirty worktree/index. Sync first, then
+# normalize the local records against current upstream.
 if git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
     if ! git -C "$ROOT" pull --rebase >/dev/null 2>&1; then
         git -C "$ROOT" rebase --abort >/dev/null 2>&1 || true
         _abort pull "initial 'git pull --rebase' failed for $ROOT; tree left clean"
     fi
 fi
+
+# ---- step 2: normalize ----
+normalize_and_collect
 
 # ---- step 3: validate — baseline ----
 
@@ -284,24 +356,7 @@ fi
 # whole-root duplicate-id scan (AFTER the rebase; the entire record tree, not
 # just the changed paths — a staged record that collides with one already on
 # history would make build-record-index abort fleet-wide on the next pull).
-declare -A _ID_FILE=()
-_scan_dirs=()
-[ -d "$ROOT/$RECDIR" ] && _scan_dirs+=("$ROOT/$RECDIR")
-[ -d "$ROOT/plans" ] && _scan_dirs+=("$ROOT/plans")
-if [ "${#_scan_dirs[@]}" -gt 0 ]; then
-    while IFS= read -r rf; do
-        [ -n "$rf" ] || continue
-        case "$rf" in */.index/* | */node_modules/* | */templates/*) continue ;; esac
-        case "$(basename "$rf")" in INDEX.md | EVOLUTION.md) continue ;; esac
-        [ "$(head -1 "$rf" 2>/dev/null)" = "---" ] || continue
-        rid="$(fm_value "$(frontmatter_block "$rf")" id)"; rid="${rid%%[[:space:]]*}"
-        [ -n "$rid" ] || continue
-        if [ -n "${_ID_FILE[$rid]+x}" ]; then
-            _abort duplicate-id "duplicate id '$rid' in: ${_ID_FILE[$rid]} ${rf#"$ROOT"/}"
-        fi
-        _ID_FILE[$rid]="${rf#"$ROOT"/}"
-    done < <(find "${_scan_dirs[@]}" -type f -name '*.md' 2>/dev/null | sort)
-fi
+_dup_id_scan
 
 # case-twin scan — two paths differing only by case, over `git ls-files` plus
 # the staged record paths, compared case-insensitively. Catches the twin even
@@ -337,11 +392,30 @@ if [ -x "$ROOT/scripts/validate.sh" ]; then
 fi
 
 # ---- step 5: rebuild index into the same commit ----
-if ! idx_out="$(bash "$SCRIPT_DIR/build-record-index.sh" --root "$ROOT" --out "$ROOT/.index" 2>&1)"; then
-    _abort index "build-record-index failed: $(printf '%s' "$idx_out" | tr '\n' ' ')"
-fi
+_rebuild_index
 
 # ---- step 6: structured commit ----
+# Constrain the transcript-derived commit metadata (what/why/source/evidence)
+# before it lands verbatim in the commit body. The baseline sanitization scans
+# record FILES only; these fields bypass it entirely. They are meant to be
+# bounded pointers (session id, line ranges), so cap their length and run them
+# through the same leak-class check — a personal path, token, or key must not
+# ride into git history via a commit trailer.
+META_CAP=2048
+for _mv in "$WHAT" "$WHY" "$SOURCE" "$EVIDENCE"; do
+    if [ "${#_mv}" -gt "$META_CAP" ]; then
+        _abort metadata "commit metadata field exceeds the ${META_CAP}-byte pointer cap"
+    fi
+done
+unset _mv
+_meta_tmp="$(mktemp)"
+printf '%s\n%s\n%s\n%s\n' "$WHAT" "$WHY" "$SOURCE" "$EVIDENCE" > "$_meta_tmp"
+if ! _meta_out="$(bash "$SCRIPT_DIR/check-sanitization.sh" "$_meta_tmp" 2>&1)"; then
+    rm -f "$_meta_tmp"
+    _abort metadata "commit metadata leaks unsafe content: $(printf '%s' "$_meta_out" | tr '\n' ' ')"
+fi
+rm -f "$_meta_tmp"
+
 git -C "$ROOT" add -- ${FINAL_PATHS[@]+"${FINAL_PATHS[@]}"} 2>/dev/null || \
     _abort commit "git add failed for: ${FINAL_PATHS[*]}"
 
@@ -362,6 +436,22 @@ if git -C "$ROOT" remote | grep -q .; then
         if ! git -C "$ROOT" pull --rebase >/dev/null 2>&1; then
             git -C "$ROOT" rebase --abort >/dev/null 2>&1 || true
             _abort push "push rejected and 'pull --rebase' could not fast-forward; rebase aborted, tree left clean, no force; files: ${FINAL_PATHS[*]}"
+        fi
+        # The rebase merged upstream records into the tree. Re-run the two checks
+        # that the merged tree can invalidate: the fleet-safety duplicate-id scan
+        # (a merged record may now collide) and the index rebuild (the committed
+        # .index describes the pre-rebase tree). Commit any refreshed index as a
+        # new commit before retrying — never --amend, never --force.
+        _dup_id_scan
+        _rebuild_index
+        git -C "$ROOT" add -- .index 2>/dev/null || true
+        if ! git -C "$ROOT" diff --cached --quiet -- .index 2>/dev/null; then
+            if ! git -C "$ROOT" commit \
+                -m "records(${STORE_BASENAME}): reindex after push-retry rebase" \
+                -m "$(printf 'why: refresh .index against upstream merged during push retry\nsource: %s\nevidence: %s' "$SOURCE" "$EVIDENCE")" \
+                >/dev/null 2>&1; then
+                _abort push "reindex commit failed after rebase; tree left as-is; files: ${FINAL_PATHS[*]}"
+            fi
         fi
         if ! git -C "$ROOT" push >/dev/null 2>&1; then
             _abort push "push still rejected after rebase; not forcing; files: ${FINAL_PATHS[*]}"

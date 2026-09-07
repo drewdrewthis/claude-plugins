@@ -64,8 +64,12 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
 5. **Index** — `build-record-index.sh --root <root> --out <root>/.index`, so the
    rebuilt index lands in the same commit as the records it describes.
 6. **Structured commit** — `git add <paths>` (never `-A`), then a commit whose
-   message carries the reason (below). A new commit every drain, never
-   `--amend`, never `--force`.
+   message carries the reason (below). The four transcript-derived reason fields
+   (`what`/`why`/`source`/`evidence`) land verbatim in the commit body, so they
+   are **bounded pointers**: each is capped at 2048 bytes and run through the
+   same `check-sanitization.sh` leak classes before the commit, so a personal
+   path, token, or key cannot ride into history via a trailer. A new commit
+   every drain, never `--amend`, never `--force`.
 7. **Push** — `git push`; on rejection, `git pull --rebase` and retry once; if
    that still cannot fast-forward, `git rebase --abort`, leave the tree clean,
    and queue the root+files. Never a force-push.

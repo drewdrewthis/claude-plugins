@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 # Tests for scripts/commit-records.sh — the deterministic admissibility gate.
+# PLUGIN ADAPTATION: no upstream counterpart — tests for new librarian commit-gate machinery.
 # One case per testable AC (AC1–AC9, AC13–AC18). Each builds a tmp git root as
 # a fixture (records/ tree) so the live corpus is never touched. Push is skipped
 # with COMMIT_RECORDS_NO_PUSH=1 except AC15, which uses a real bare remote.

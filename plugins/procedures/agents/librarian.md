@@ -81,14 +81,22 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    an actionable note to `grooming-queue.md` itself. You never stage, commit, or
    push by hand — the gate owns every write to the repo:
 
+   Pass each value as one literal, single-quoted argv word. `--why`, `--source`,
+   and `--evidence` are transcript-derived: never build the command by
+   interpolating transcript text into a double-quoted string, where a `$(...)`
+   or backtick in that text would be reparsed and executed by your shell.
+   Single-quote every value (and quote `<root>` in both places); the gate reads
+   each as a plain argument and writes it verbatim, so the fields keep their
+   exact contents with no reparsing.
+
    ```
-   CODEX_ROOT=<root> bash ${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh \
-     --root <root> \
-     --paths "<the record paths you touched, space-separated, plus .index>" \
-     --what   "<kinds and counts, e.g. '1 solution, 1 mistake'>" \
-     --why    "<the transcript trigger that warranted these>" \
-     --source "<session <sid>, transcript <slug>.jsonl lines A-B>" \
-     --evidence "<pointer to the turn's evidence in the transcript>"
+   CODEX_ROOT='<root>' bash "${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh" \
+     --root '<root>' \
+     --paths '<the record paths you touched, space-separated, plus .index>' \
+     --what   '<kinds and counts, e.g. 1 solution, 1 mistake>' \
+     --why    '<the transcript trigger that warranted these>' \
+     --source '<session <sid>, transcript <slug>.jsonl lines A-B>' \
+     --evidence '<pointer to the turn'"'"'s evidence in the transcript>'
    ```
 
    A non-zero exit means the gate blocked and already queued the reason (which

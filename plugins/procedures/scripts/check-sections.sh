@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # check-sections.sh — per-kind required-section presence for records.
+# PLUGIN ADAPTATION: no upstream counterpart — new librarian commit-gate machinery.
 #
 # The required sections per kind are the rubric in
 # specs/RECORD_ADMISSIBILITY.md §Per-kind required sections. A "section" is a
@@ -61,7 +62,7 @@ for f in "$@"; do
     while IFS= read -r section; do
         [ -n "$section" ] || continue
         if ! _has_section "$f" "$section"; then
-            if [ -n "$REQUIRED" ]; then
+            if [ "$REQUIRED" = "1" ]; then
                 echo "$prog: FAIL: $f ($kind) — missing required section: $section"
                 FAIL=1
             else

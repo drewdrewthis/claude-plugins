@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 # Tests for scripts/check-sanitization.sh — the leak-class baseline check.
+# PLUGIN ADAPTATION: no upstream counterpart — tests for new librarian commit-gate machinery.
 # One case per leak class (AC2) plus the /home/ubuntu/ carve-out and a clean pass.
 # Run: bats hooks/tests/check-sanitization.bats
 
