@@ -472,6 +472,39 @@ EOF
   [ "$(_commit_count)" -eq "$before" ]
 }
 
+# ---- AC23: a directory passed to --why-file is a usage error ----
+@test "AC23: a directory passed to --why-file is a usage error and nothing is committed" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$FIX/whydir"; mkdir -p "$d"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$d" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--why-file"* ]]
+  [[ "$output" == *"regular file"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: --why-file preserves trailing newlines ----
+@test "AC23: --why-file preserves trailing newlines verbatim" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$FIX/meta"; mkdir -p "$d"
+  # Write a why file with exactly three trailing newlines
+  printf 'first line\n\n\n' > "$d/why.txt"
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$d/why.txt" --source s --evidence e
+  [ "$status" -eq 0 ]
+  # Verify trailing newlines survived in the commit body. Git normalizes
+  # trailing blank lines in commit messages, so we cannot rely on log -1 --format=%B
+  # to see them. Instead, verify that at least one trailing newline survived:
+  # the line immediately after "why: first line" should be empty, which proves
+  # at least one newline made it through (command-substitution trimming would
+  # have removed all of them).
+  local line_after_why
+  line_after_why="$(git -C "$ROOT" log -1 --format=%B | grep -A1 '^why: first line$' | sed -n 2p)"
+  [ -z "$line_after_why" ]
+}
+
 # ---- AC24: a symlinked record path is refused before git add ----
 @test "AC24: a symlinked .md under --root is rejected before git add" {
   _fm "$FIX/outside.md" fm.outside

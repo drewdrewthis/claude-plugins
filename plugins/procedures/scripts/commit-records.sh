@@ -77,6 +77,17 @@ Prefer the -file forms for transcript-derived text; nothing is ever
 assembled into shell source.
 EOF
 }
+# _read_meta_file FILE OPT — read a metadata file verbatim into _META_VALUE
+# (trailing newlines preserved, no command-substitution trimming). FILE must
+# be a readable regular file; any failure is a usage error naming OPT.
+_read_meta_file() {
+    [ -f "$1" ] && [ -r "$1" ] \
+        || usage_err "$2: not a readable regular file: $1"
+    _META_VALUE="$(cat -- "$1" && printf x)" \
+        || usage_err "$2: cannot read: $1"
+    _META_VALUE="${_META_VALUE%x}"
+}
+
 # usage_err — print "prog: msg" plus the usage text to stderr, then exit 2.
 usage_err() { printf '%s: %s\n' "$prog" "$1" >&2; usage >&2; exit 2; }
 
@@ -101,17 +112,10 @@ while [ "$#" -gt 0 ]; do
                 --why) WHY="$2"; WHY_INLINE=1 ;;
                 --source) SOURCE="$2"; SOURCE_INLINE=1 ;;
                 --evidence) EVIDENCE="$2"; EVIDENCE_INLINE=1 ;;
-                # -file forms: read the file's full content verbatim into the
-                # field. Missing/unreadable file is a usage error.
-                --why-file)
-                    [ -r "$2" ] || usage_err "--why-file: cannot read: $2"
-                    WHY="$(cat -- "$2")"; WHY_FILE=1 ;;
-                --source-file)
-                    [ -r "$2" ] || usage_err "--source-file: cannot read: $2"
-                    SOURCE="$(cat -- "$2")"; SOURCE_FILE=1 ;;
-                --evidence-file)
-                    [ -r "$2" ] || usage_err "--evidence-file: cannot read: $2"
-                    EVIDENCE="$(cat -- "$2")"; EVIDENCE_FILE=1 ;;
+                # -file forms: read the file verbatim into the field (see _read_meta_file).
+                --why-file) _read_meta_file "$2" --why-file; WHY="$_META_VALUE"; WHY_FILE=1 ;;
+                --source-file) _read_meta_file "$2" --source-file; SOURCE="$_META_VALUE"; SOURCE_FILE=1 ;;
+                --evidence-file) _read_meta_file "$2" --evidence-file; EVIDENCE="$_META_VALUE"; EVIDENCE_FILE=1 ;;
             esac
             shift 2 ;;
         --normalize) NORMALIZE_ONLY=1; shift ;;
@@ -119,6 +123,7 @@ while [ "$#" -gt 0 ]; do
         *) usage_err "unknown arg '$1'" ;;
     esac
 done
+unset _META_VALUE
 
 # The inline and -file forms of a field are mutually exclusive: supplying both
 # is ambiguous about which text should land in the commit body.
