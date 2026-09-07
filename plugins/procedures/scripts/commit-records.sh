@@ -8,9 +8,13 @@
 # Per store root the librarian wrote into, ONE call replaces step 6's git block:
 #
 #   CODEX_ROOT=<root> bash commit-records.sh \
-#     --root <root> --paths "<record .md paths>" \
-#     --what "<kinds and counts>" --why "<trigger>" \
-#     --source "<session/transcript pointer>" --evidence "<evidence pointer>"
+#     --root <root> --paths "<record .md paths>" --what "<kinds and counts>" \
+#     --why-file <dir>/why.txt --source-file <dir>/source.txt \
+#     --evidence-file <dir>/evidence.txt
+#
+# The metadata fields also accept inline forms (--why/--source/--evidence);
+# prefer the -file forms for transcript-derived text — nothing is ever
+# assembled into shell source, so there is no quoting or escaping to get wrong.
 #
 # Runs, in order, aborting ATOMICALLY (no commit, no push) on the first failure
 # and appending an actionable note (root, failing path(s), which check) to the
@@ -58,12 +62,19 @@ source "$SCRIPT_DIR/lib/stores.sh"
 
 SIZE_CAP=32768
 
-# usage — print the two supported invocation forms to stdout.
+# usage — print the supported invocation forms to stdout. Prefer the -file
+# forms (--why-file/--source-file/--evidence-file) for transcript-derived
+# text; nothing is ever assembled into shell source.
 usage() {
     cat <<'EOF'
 Usage: commit-records.sh --root PATH --paths "p1.md p2.md" \
          --what STR --why STR --source STR --evidence STR
+       commit-records.sh --root PATH --paths "p1.md p2.md" --what STR \
+         --why-file PATH --source-file PATH --evidence-file PATH
        commit-records.sh --normalize --root PATH --paths "p1.md p2.md"
+
+Prefer the -file forms for transcript-derived text; nothing is ever
+assembled into shell source.
 EOF
 }
 # usage_err — print "prog: msg" plus the usage text to stderr, then exit 2.
@@ -71,20 +82,36 @@ usage_err() { printf '%s: %s\n' "$prog" "$1" >&2; usage >&2; exit 2; }
 
 # ---- args ----
 ROOT="" PATHS_RAW="" WHAT="" WHY="" SOURCE="" EVIDENCE="" NORMALIZE_ONLY=""
+# Per-field origin flags: distinguish an inline form from a -file form so the
+# two cannot be supplied for the same field (the -file form reads the whole
+# file into the same variable, so nothing is ever assembled into shell source).
+WHY_INLINE="" WHY_FILE="" SOURCE_INLINE="" SOURCE_FILE="" EVIDENCE_INLINE="" EVIDENCE_FILE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         # Value-taking options: reject a trailing option with no value. Without
         # this, `shift 2` on a single remaining arg fails (errexit is off), $#
         # never decreases, and the parser loops forever.
-        --root | --paths | --what | --why | --source | --evidence)
+        --root | --paths | --what | --why | --source | --evidence \
+            | --why-file | --source-file | --evidence-file)
             [ "$#" -ge 2 ] || usage_err "option '$1' requires a value"
             case "$1" in
                 --root) ROOT="$2" ;;
                 --paths) PATHS_RAW="$2" ;;
                 --what) WHAT="$2" ;;
-                --why) WHY="$2" ;;
-                --source) SOURCE="$2" ;;
-                --evidence) EVIDENCE="$2" ;;
+                --why) WHY="$2"; WHY_INLINE=1 ;;
+                --source) SOURCE="$2"; SOURCE_INLINE=1 ;;
+                --evidence) EVIDENCE="$2"; EVIDENCE_INLINE=1 ;;
+                # -file forms: read the file's full content verbatim into the
+                # field. Missing/unreadable file is a usage error.
+                --why-file)
+                    [ -r "$2" ] || usage_err "--why-file: cannot read: $2"
+                    WHY="$(cat -- "$2")"; WHY_FILE=1 ;;
+                --source-file)
+                    [ -r "$2" ] || usage_err "--source-file: cannot read: $2"
+                    SOURCE="$(cat -- "$2")"; SOURCE_FILE=1 ;;
+                --evidence-file)
+                    [ -r "$2" ] || usage_err "--evidence-file: cannot read: $2"
+                    EVIDENCE="$(cat -- "$2")"; EVIDENCE_FILE=1 ;;
             esac
             shift 2 ;;
         --normalize) NORMALIZE_ONLY=1; shift ;;
@@ -92,6 +119,15 @@ while [ "$#" -gt 0 ]; do
         *) usage_err "unknown arg '$1'" ;;
     esac
 done
+
+# The inline and -file forms of a field are mutually exclusive: supplying both
+# is ambiguous about which text should land in the commit body.
+[ -n "$WHY_INLINE" ] && [ -n "$WHY_FILE" ] \
+    && usage_err "--why and --why-file are mutually exclusive"
+[ -n "$SOURCE_INLINE" ] && [ -n "$SOURCE_FILE" ] \
+    && usage_err "--source and --source-file are mutually exclusive"
+[ -n "$EVIDENCE_INLINE" ] && [ -n "$EVIDENCE_FILE" ] \
+    && usage_err "--evidence and --evidence-file are mutually exclusive"
 
 [ -n "$ROOT" ] || usage_err "--root is required"
 [ -d "$ROOT" ] || usage_err "--root '$ROOT' is not a directory"
@@ -239,6 +275,10 @@ normalize_and_collect() {
         case "$rel" in
             *.md)
                 abs="$ROOT/$rel"
+                # Refuse a symlinked record: following it would let a caller
+                # normalize/stage a file whose real location is anywhere on disk.
+                [ -L "$abs" ] \
+                    && _abort path "record path is a symlink (refusing to follow): $rel"
                 # Symlinked-parent escape guard: the physical parent dir must
                 # stay under the physical root before we write/rename the file.
                 pdir="$(cd "$ROOT/$(dirname "$rel")" 2>/dev/null && pwd -P)" \

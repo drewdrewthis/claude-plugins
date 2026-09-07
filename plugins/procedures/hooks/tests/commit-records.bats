@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Tests for scripts/commit-records.sh — the deterministic admissibility gate.
 # PLUGIN ADAPTATION: no upstream counterpart — tests for new librarian commit-gate machinery.
-# One case per testable AC (AC1–AC9, AC13–AC22). Each builds a tmp git root as
+# One case per testable AC (AC1–AC9, AC13–AC24). Each builds a tmp git root as
 # a fixture (records/ tree) so the live corpus is never touched. Push is skipped
 # with COMMIT_RECORDS_NO_PUSH=1 except AC15/AC21/AC22, which use a real bare remote.
 # Run: bats hooks/tests/commit-records.bats
@@ -430,4 +430,57 @@ EOF
   grep -q "fm.local" "$A/.index/map.tsv"
   grep -q "fm.remote" "$A/.index/map.tsv"
   git -C "$A" diff --quiet -- .index                                           # committed index == working copy
+}
+
+# ---- AC23: -file metadata forms carry file content verbatim, no shell eval ----
+@test "AC23: --why-file/--source-file/--evidence-file pass file content verbatim into the commit body" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$FIX/meta"; mkdir -p "$d"
+  # First line is a shell-injection payload; second line is a heredoc-terminator
+  # lookalike. Neither must be interpreted — the value never reaches the shell.
+  local inj="x'; echo INJECTED; \$(touch \"$FIX/pwned\") \`id\`"
+  printf '%s\n__CR__\n' "$inj" > "$d/why.txt"
+  printf 's\n' > "$d/source.txt"
+  printf 'e\n' > "$d/evidence.txt"
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$d/why.txt" --source-file "$d/source.txt" --evidence-file "$d/evidence.txt"
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" log -1 --format=%B | grep -qF "$inj"   # verbatim in the body
+  [ ! -e "$FIX/pwned" ]                                 # payload never executed
+}
+
+# ---- AC23: a missing --why-file is a usage error and commits nothing ----
+@test "AC23: a missing --why-file is a usage error and nothing is committed" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$FIX/nope.txt" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--why-file"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: inline and -file forms of one field are mutually exclusive ----
+@test "AC23: --why and --why-file together are rejected" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$FIX/meta"; mkdir -p "$d"; printf 'w\n' > "$d/why.txt"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why w --why-file "$d/why.txt" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"exclusive"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC24: a symlinked record path is refused before git add ----
+@test "AC24: a symlinked .md under --root is rejected before git add" {
+  _fm "$FIX/outside.md" fm.outside
+  ln -s "$FIX/outside.md" "$ROOT/records/failure-modes/link.md"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/link.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"symlink"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]   # nothing staged
 }

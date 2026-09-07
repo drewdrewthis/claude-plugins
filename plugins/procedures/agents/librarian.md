@@ -81,31 +81,24 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    an actionable note to `grooming-queue.md` itself. You never stage, commit, or
    push by hand — the gate owns every write to the repo:
 
-   `--why`, `--source`, and `--evidence` carry transcript text that may hold any
-   quote, `$(...)`, or backtick. Do not interpolate that text into a quoted
-   string and do not rely on an escaping rule: assign each transcript-derived
-   value through a QUOTED heredoc into a variable, then pass the variable in
-   double quotes. Two rules make this safe with no escaping: the heredoc
-   delimiter is quoted (`<<'__CR__'`) so nothing inside is expanded or reparsed;
-   and a value must not contain a line that is exactly `__CR__` (pick another
-   delimiter if it does).
+   Write each of the three transcript-derived values to its own file with the
+   Write tool under
+   `${PROCEDURES_STATE_DIR:-$HOME/.claude/procedures}/tmp/commit-<root-slug>/`
+   — `why.txt`, `source.txt`, `evidence.txt` (create the dir first; plain text,
+   verbatim, no quoting). Then invoke the gate with the `-file` forms:
 
    ```
-   read -r -d '' WHY <<'__CR__' || true
-   <the transcript trigger that warranted these, verbatim>
-   __CR__
-   read -r -d '' SOURCE <<'__CR__' || true
-   session <sid>, transcript <slug>.jsonl lines A-B
-   __CR__
-   read -r -d '' EVIDENCE <<'__CR__' || true
-   <pointer to the turn's evidence in the transcript>
-   __CR__
    CODEX_ROOT='<root>' bash "${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh" \
      --root '<root>' \
      --paths '<the record .md paths you touched, space-separated>' \
-     --what   '<kinds and counts, e.g. 1 solution, 1 mistake>' \
-     --why "$WHY" --source "$SOURCE" --evidence "$EVIDENCE"
+     --what  '<kinds and counts, e.g. 1 solution, 1 mistake>' \
+     --why-file '<dir>/why.txt' --source-file '<dir>/source.txt' --evidence-file '<dir>/evidence.txt'
    ```
+
+   Transcript text may hold quotes, `$(...)`, backticks, or a line that looks
+   like a heredoc terminator; the values never pass through the shell, so there
+   is no escaping rule to get wrong. Delete the tmp dir after the gate exits,
+   either way.
 
    A non-zero exit means the gate blocked and already queued the reason (which
    record, which check) in `grooming-queue.md` — do not retry blindly. If one
