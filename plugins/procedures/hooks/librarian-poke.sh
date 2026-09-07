@@ -108,6 +108,12 @@ LIBRARIAN_LOCK="${LIBRARIAN_LOCK:-$(lp_state_dir)/librarian.lock}"
 LIBRARIAN_LOCK_DIR="${LIBRARIAN_LOCK_DIR:-${LIBRARIAN_LOCK}.d}"
 
 # --- load gate -------------------------------------------------------------
+# PLUGIN ADAPTATION: the vendored upstream librarian-poke drains unconditionally.
+# This plugin copy diverges by pressure-gating the drain (loadavg/iowait ceilings
+# below, plus ionice/nice/timeout wrappers on the run) because on this always-on
+# box the ungated find+wc corpus scan storms the shared host — 18:04Z 2026-09-06
+# it drove load to 24 / iowait to 58%. The gate is fail-open by design so it can
+# only ever postpone a drain, never lose one; see the ceilings and lp_load_ok.
 # The drain scans the WHOLE transcript corpus. Ungated it storms the box:
 # 18:04Z 2026-09-06 it drove load to 24 and iowait to 58% with D-state
 # find+wc over ~/.claude/projects. Two defences, both at the point of action:
@@ -147,19 +153,39 @@ lp_iowait_pct() {
     printf '%s' "$(( di * 100 / dt ))"
 }
 
+# lp_log_failopen <signal> — record a blind fail-open: a pressure signal was
+# unreadable (empty /proc read), so the gate RELEASES rather than blocks — an
+# unreadable /proc must never wedge the drain shut. Distinct message from
+# lp_log_defer (which records an intentional over-ceiling defer) so a silently
+# degraded gate is visible in the log. Best-effort: an unwritable log never
+# blocks the poke.
+lp_log_failopen() {
+    lp_log "librarian-poke: fail-open, ${1:-} unreadable — proceeding without that signal"
+}
+
 # lp_load_ok — 0 to proceed with the drain, 1 to defer (and log the reason).
-# Fail-open: an unreadable /proc never blocks the drain.
+# Fail-open: an unreadable /proc never blocks the drain — but every blind
+# release is logged (lp_log_failopen), so a gate degraded to always-open is
+# not silent.
 lp_load_ok() {
     local l iw
     l="$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
-    if [ -n "$l" ] && awk -v x="$l" -v y="$LIBRARIAN_LOAD_CEILING" 'BEGIN{exit !(x+0>y+0)}'; then
-        lp_log_defer "load=$l > ceiling=$LIBRARIAN_LOAD_CEILING"
-        return 1
+    if [ -n "$l" ]; then
+        if awk -v x="$l" -v y="$LIBRARIAN_LOAD_CEILING" 'BEGIN{exit !(x+0>y+0)}'; then
+            lp_log_defer "load=$l > ceiling=$LIBRARIAN_LOAD_CEILING"
+            return 1
+        fi
+    else
+        lp_log_failopen "loadavg"
     fi
     iw="$(lp_iowait_pct)" || iw=""
-    if [ -n "$iw" ] && [ "$iw" -gt "$LIBRARIAN_IOWAIT_CEILING" ] 2>/dev/null; then
-        lp_log_defer "iowait=${iw}% > ceiling=${LIBRARIAN_IOWAIT_CEILING}%"
-        return 1
+    if [ -n "$iw" ]; then
+        if [ "$iw" -gt "$LIBRARIAN_IOWAIT_CEILING" ] 2>/dev/null; then
+            lp_log_defer "iowait=${iw}% > ceiling=${LIBRARIAN_IOWAIT_CEILING}%"
+            return 1
+        fi
+    else
+        lp_log_failopen "iowait"
     fi
     return 0
 }
