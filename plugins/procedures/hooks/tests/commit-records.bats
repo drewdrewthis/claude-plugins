@@ -398,6 +398,7 @@ EOF
   [[ "$output" == *"outside the record directories"* ]]
   [[ "$output" == *"docs/page.md"* ]]
   [ "$(_commit_count)" -eq "$before" ]
+  [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]
   local page_cs_after; page_cs_after="$(shasum < "$ROOT/docs/page.md")"
   [ "$page_cs_after" = "$page_cs" ]
 }
