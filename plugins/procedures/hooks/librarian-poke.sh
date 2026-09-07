@@ -72,6 +72,31 @@ lp_state_dir() {
     printf '%s' "${PROCEDURES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/procedures/librarian}"
 }
 
+# lp_log <line> — append one timestamped line to the librarian-poke log in the
+# state dir. Best-effort: an unwritable log never blocks the poke. The single
+# writer for every log line below (defers, invalid-env warnings, timeouts).
+lp_log() {
+    local logf; logf="$(lp_state_dir)/librarian-poke.log"
+    mkdir -p "${logf%/*}" 2>/dev/null || true
+    printf '%s %s\n' "$(date -Is 2>/dev/null || true)" "${1:-}" >>"$logf" 2>/dev/null || true
+}
+
+# lp_num_or_default <name> <value> <default> <ere> — echo <value> when it
+# matches the (anchored) ERE, else log one line and echo <default>. The value
+# is passed in directly (not via ${!name}) so set -u never trips on an unset
+# indirect target. Fixes the old `case ...|*[!0-9.]*)` guards, which only
+# rejected a value that CONTAINED a bad char and so let `...` and `1.2.3` pass
+# straight into a ceiling that then defers the drain forever, silently.
+lp_num_or_default() {
+    local name="$1" val="$2" def="$3" re="$4"
+    if [[ "$val" =~ $re ]]; then
+        printf '%s' "$val"
+    else
+        lp_log "librarian-poke: invalid $name=$val, using $def"
+        printf '%s' "$def"
+    fi
+}
+
 # --- tunables --------------------------------------------------------------
 LIBRARIAN_SETTLE_SECS="${LIBRARIAN_SETTLE_SECS:-3}"
 case "$LIBRARIAN_SETTLE_SECS" in ''|*[!0-9]*) LIBRARIAN_SETTLE_SECS=3 ;; esac
@@ -81,6 +106,136 @@ case "$LIBRARIAN_CLAIM_TTL_SECS" in ''|*[!0-9]*|0) LIBRARIAN_CLAIM_TTL_SECS=900 
 
 LIBRARIAN_LOCK="${LIBRARIAN_LOCK:-$(lp_state_dir)/librarian.lock}"
 LIBRARIAN_LOCK_DIR="${LIBRARIAN_LOCK_DIR:-${LIBRARIAN_LOCK}.d}"
+
+# --- load gate -------------------------------------------------------------
+# PLUGIN ADAPTATION: the vendored upstream librarian-poke drains unconditionally.
+# This plugin copy diverges by pressure-gating the drain (loadavg/iowait ceilings
+# below, plus ionice/nice/timeout wrappers on the run) because on this always-on
+# box the ungated find+wc corpus scan storms the shared host — 18:04Z 2026-09-06
+# it drove load to 24 / iowait to 58%. The gate is fail-open by design so it can
+# only ever postpone a drain, never lose one; see the ceilings and lp_load_ok.
+# The drain scans the WHOLE transcript corpus. Ungated it storms the box:
+# 18:04Z 2026-09-06 it drove load to 24 and iowait to 58% with D-state
+# find+wc over ~/.claude/projects. Two defences, both at the point of action:
+#   (a) run the drain at idle I/O + lowest CPU priority (ionice -c3 nice -n19),
+#       so even when it does run it yields to real work — see LP_NICE below;
+#   (b) refuse to start it at all when the box is already under pressure —
+#       1-min loadavg over LIBRARIAN_LOAD_CEILING (default 8 = one core-worth
+#       per core on this 8-core box), or iowait over LIBRARIAN_IOWAIT_CEILING
+#       (default 30%) sampled over a ~1s /proc/stat window. On a defer the
+#       poke exits 0 without draining; the next qualifying turn retries, so no
+#       backlog is lost, only postponed until the box can afford it.
+# Load is a decimal (loadavg), iowait an integer percent. Strict-validate
+# both: anything not matching the anchored pattern falls back to the default
+# AND logs, so a fat-fingered ceiling can never silently coerce the drain into
+# deferring forever.
+LIBRARIAN_LOAD_CEILING="$(lp_num_or_default LIBRARIAN_LOAD_CEILING "${LIBRARIAN_LOAD_CEILING:-8}" 8 '^[0-9]+([.][0-9]+)?$')"
+LIBRARIAN_IOWAIT_CEILING="$(lp_num_or_default LIBRARIAN_IOWAIT_CEILING "${LIBRARIAN_IOWAIT_CEILING:-30}" 30 '^[0-9]+$')"
+
+# lp_log_defer <reason> — append one line to the librarian-poke log in the
+# state dir. Best-effort: an unwritable log never blocks the poke.
+lp_log_defer() {
+    lp_log "librarian-poke: deferred, ${1:-}"
+}
+
+# lp_iowait_pct — iowait % over a ~1s window from /proc/stat cpu-line deltas,
+# or empty when unreadable. Fields on the aggregate 'cpu ' line (awk-indexed):
+# $2 user $3 nice $4 system $5 idle $6 iowait $7 irq $8 softirq $9 steal.
+# PLUGIN ADAPTATION: LP_STAT_FILE (a test-injection seam, default /proc/stat)
+# lets a test point both samples at a fixture instead of the real kernel
+# counter; LP_STAT_SAMPLE_SLEEP lets a test swap the fixture file BETWEEN the
+# two samples (e.g. `cp fixture2 "$LP_STAT_FILE"`) instead of sleeping 1s
+# against a live, unrepeatable counter. Unset, both default to today's exact
+# production behaviour: read /proc/stat, sleep 1, read /proc/stat again.
+lp_iowait_pct() {
+    local i1 t1 i2 t2 di dt
+    read -r i1 t1 < <(awk '/^cpu /{print $6, ($2+$3+$4+$5+$6+$7+$8+$9); exit}' "${LP_STAT_FILE:-/proc/stat}" 2>/dev/null)
+    [ -n "${i1:-}" ] && [ -n "${t1:-}" ] || return 1
+    if [ -n "${LP_STAT_SAMPLE_SLEEP:-}" ]; then
+        eval "$LP_STAT_SAMPLE_SLEEP" 2>/dev/null || true
+    else
+        sleep 1 2>/dev/null || true
+    fi
+    read -r i2 t2 < <(awk '/^cpu /{print $6, ($2+$3+$4+$5+$6+$7+$8+$9); exit}' "${LP_STAT_FILE:-/proc/stat}" 2>/dev/null)
+    [ -n "${i2:-}" ] && [ -n "${t2:-}" ] || return 1
+    di=$(( i2 - i1 )); dt=$(( t2 - t1 ))
+    [ "$dt" -gt 0 ] 2>/dev/null || return 1
+    printf '%s' "$(( di * 100 / dt ))"
+}
+
+# lp_log_failopen <signal> — record a blind fail-open: a pressure signal was
+# unreadable (empty /proc read), so the gate RELEASES rather than blocks — an
+# unreadable /proc must never wedge the drain shut. Distinct message from
+# lp_log_defer (which records an intentional over-ceiling defer) so a silently
+# degraded gate is visible in the log. Best-effort: an unwritable log never
+# blocks the poke.
+lp_log_failopen() {
+    lp_log "librarian-poke: fail-open, ${1:-} unreadable — proceeding without that signal"
+}
+
+# lp_load_ok — 0 to proceed with the drain, 1 to defer (and log the reason).
+# Fail-open: an unreadable /proc never blocks the drain — but every blind
+# release is logged (lp_log_failopen), so a gate degraded to always-open is
+# not silent.
+# PLUGIN ADAPTATION: LP_LOADAVG_FILE (a test-injection seam, default
+# /proc/loadavg) lets a test point this at a fixture file instead of the real
+# kernel counter. Unset, behaviour is byte-identical to today: read
+# /proc/loadavg.
+lp_load_ok() {
+    local l iw
+    l="$(awk '{print $1}' "${LP_LOADAVG_FILE:-/proc/loadavg}" 2>/dev/null)"
+    if [ -n "$l" ]; then
+        if awk -v x="$l" -v y="$LIBRARIAN_LOAD_CEILING" 'BEGIN{exit !(x+0>y+0)}'; then
+            lp_log_defer "load=$l > ceiling=$LIBRARIAN_LOAD_CEILING"
+            return 1
+        fi
+    else
+        lp_log_failopen "loadavg"
+    fi
+    iw="$(lp_iowait_pct)" || iw=""
+    if [ -n "$iw" ]; then
+        if [ "$iw" -gt "$LIBRARIAN_IOWAIT_CEILING" ] 2>/dev/null; then
+            lp_log_defer "iowait=${iw}% > ceiling=${LIBRARIAN_IOWAIT_CEILING}%"
+            return 1
+        fi
+    else
+        lp_log_failopen "iowait"
+    fi
+    return 0
+}
+
+# LP_NICE — idle-I/O + lowest-CPU launch prefix for the drain. Each half is
+# guarded: ionice/nice are absent on macOS/BSD, so a missing binary drops out
+# of the prefix rather than aborting the poke. ionice class idle (-c3) and the
+# nice value are inherited by the claude child's own find/wc/grep subprocesses.
+LP_NICE=""
+command -v ionice >/dev/null 2>&1 && LP_NICE="ionice -c3"
+command -v nice   >/dev/null 2>&1 && LP_NICE="${LP_NICE:+$LP_NICE }nice -n19"
+
+# LP_TIMEOUT — a wall-clock cap on the drain. Under `ionice -c3` (idle I/O)
+# the drain can be starved indefinitely on a busy box while it still HOLDS the
+# single-writer lock, so every later poke finds the lock taken and no drain
+# ever runs again. Bounding the run at LIBRARIAN_MAX_RUNTIME_SEC (default 30m)
+# guarantees the lock is released: a starved drain is TERMed, KILLed 60s later
+# if it ignores that, and the next qualifying turn retries. Guarded on the
+# binary — `timeout` is absent on macOS/BSD, where it simply drops out of the
+# prefix (the drain then runs unbounded, exactly as it does today).
+LIBRARIAN_MAX_RUNTIME_SEC="$(lp_num_or_default LIBRARIAN_MAX_RUNTIME_SEC "${LIBRARIAN_MAX_RUNTIME_SEC:-1800}" 1800 '^[0-9]+$')"
+LP_TIMEOUT=""
+command -v timeout >/dev/null 2>&1 && \
+    LP_TIMEOUT="timeout --signal=TERM --kill-after=60 $LIBRARIAN_MAX_RUNTIME_SEC"
+
+# lp_note_timeout <rc> — log one line when the drain was killed by the runtime
+# cap. `timeout` exits 124 on TERM, or 137 (128+SIGKILL) when it had to
+# escalate. The lock is released by the caller either way, so this only
+# records that a retry is now possible; a no-timeout exit logs nothing.
+lp_note_timeout() {
+    [ -n "$LP_TIMEOUT" ] || return 0
+    case "${1:-0}" in
+        124|137) lp_log "librarian-poke: drain exceeded ${LIBRARIAN_MAX_RUNTIME_SEC}s cap, killed; lock released for retry" ;;
+    esac
+    return 0
+}
 
 # --- the poke, and its portable claim fallback ------------------------------
 
@@ -122,12 +277,19 @@ lp_worker() {
     sleep "$LIBRARIAN_SETTLE_SECS" 2>/dev/null || true
     command -v claude >/dev/null 2>&1 || return 0
 
+    # Load gate: read pressure fresh, immediately before draining. Over the
+    # ceiling => defer (logged) and exit without touching the corpus. The next
+    # qualifying turn pokes again, so nothing is dropped, only postponed.
+    lp_load_ok || return 0
+
     # LIBRARIAN_NO_FLOCK=1 forces the mkdir fallback below even when a real
     # flock is on PATH — test-only, so "second concurrent claim loses" is
     # deterministic on any host rather than depending on this machine's own
     # tool availability (mirrors LIBRARIAN_SYNC's precedent).
     if [ "${LIBRARIAN_NO_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
-        flock -n "$LIBRARIAN_LOCK" claude -p --agent procedures:librarian "Drain the transcript queue." || true
+        local rc=0
+        flock -n "$LIBRARIAN_LOCK" $LP_TIMEOUT $LP_NICE claude -p --agent procedures:librarian "Drain the transcript queue." || rc=$?
+        lp_note_timeout "$rc"
         return 0
     fi
 
@@ -136,7 +298,9 @@ lp_worker() {
     # trap so a crash does not wedge every future poke shut.
     if lp_claim; then
         trap 'rmdir "$LIBRARIAN_LOCK_DIR" 2>/dev/null || true' EXIT
-        claude -p --agent procedures:librarian "Drain the transcript queue." || true
+        local rc=0
+        $LP_TIMEOUT $LP_NICE claude -p --agent procedures:librarian "Drain the transcript queue." || rc=$?
+        lp_note_timeout "$rc"
         rmdir "$LIBRARIAN_LOCK_DIR" 2>/dev/null || true
         trap - EXIT
     fi

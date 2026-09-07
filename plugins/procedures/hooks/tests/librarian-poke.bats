@@ -218,3 +218,82 @@ claude_never_ran() { [ ! -f "$CLAUDE_LOG" ]; }
   [ ! -f "$STATE/how-do-i-index/late.txt" ]   # not migrated again
   [ -f "$LEGACY/late.txt" ]                    # left where it was
 }
+
+# ---------- load gate (lp_load_ok) via its test-injection seams ------------
+#
+# PLUGIN ADAPTATION: this pressure-gate suite (cases below) is plugin-local —
+# it covers the vendored fork's load/iowait defer behaviour, which has no
+# upstream equivalent, and drives it through the hook's LP_*_FILE /
+# LP_STAT_SAMPLE_SLEEP injection seams.
+#
+# LP_LOADAVG_FILE / LP_STAT_FILE / LP_STAT_SAMPLE_SLEEP let these tests drive
+# lp_load_ok deterministically off fixture files instead of the real
+# /proc/loadavg + /proc/stat, and swap the /proc/stat fixture BETWEEN
+# lp_iowait_pct's two samples instead of sleeping 1s against a live,
+# unrepeatable counter. All four drive the worker directly via `--worker`
+# (LIBRARIAN_NO_FLOCK=1, same shape as the two "worker:" tests above) so
+# lp_load_ok runs exactly where production calls it, before the claim.
+#
+# /proc/stat cpu-line fields (lp_iowait_pct's own comment): $2 user $3 nice
+# $4 system $5 idle $6 iowait $7 irq $8 softirq $9 steal.
+#   fixture "under": cpu 1010 0 1010 8080 110 0 0 0 vs the base sample below
+#     -> total delta 110, iowait delta 10 -> 9% (< ceiling 30)
+#   fixture "over":  cpu 1000 0 1000 8000 600 0 0 0 vs the base sample below
+#     -> total delta 500, iowait delta 500 -> 100% (> ceiling 30)
+#   base sample: cpu 1000 0 1000 8000 100 0 0 0
+
+lp_gate_setup() {
+  export LIBRARIAN_LOAD_CEILING=8
+  export LIBRARIAN_IOWAIT_CEILING=30
+  export LP_LOADAVG_FILE="$BATS_TEST_TMPDIR/loadavg"
+  export LP_STAT_FILE="$BATS_TEST_TMPDIR/stat"
+  printf 'cpu 1000 0 1000 8000 100 0 0 0\n' > "$LP_STAT_FILE"
+}
+
+@test "load gate: under both ceilings proceeds — claude runs" {
+  lp_gate_setup
+  printf '1.00 0.50 0.10 1/200 123\n' > "$LP_LOADAVG_FILE"
+  printf 'cpu 1010 0 1010 8080 110 0 0 0\n' > "$BATS_TEST_TMPDIR/stat-under"
+  export LP_STAT_SAMPLE_SLEEP="cp '$BATS_TEST_TMPDIR/stat-under' '$LP_STAT_FILE'"
+
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ ! -d "$LIBRARIAN_LOCK.d" ]
+}
+
+@test "load gate: over the load ceiling defers — claude never runs, defer logged" {
+  lp_gate_setup
+  printf '50.00 0.50 0.10 1/200 123\n' > "$LP_LOADAVG_FILE"
+
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  grep -q "librarian-poke: deferred, load=50.00 > ceiling=8" \
+    "$HOME/.local/state/procedures/librarian/librarian-poke.log"
+}
+
+@test "load gate: over the iowait ceiling (two fixtures swapped between samples) defers — claude never runs, defer logged" {
+  lp_gate_setup
+  printf '1.00 0.50 0.10 1/200 123\n' > "$LP_LOADAVG_FILE"
+  printf 'cpu 1000 0 1000 8000 600 0 0 0\n' > "$BATS_TEST_TMPDIR/stat-over"
+  export LP_STAT_SAMPLE_SLEEP="cp '$BATS_TEST_TMPDIR/stat-over' '$LP_STAT_FILE'"
+
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  grep -q "librarian-poke: deferred, iowait=100% > ceiling=30%" \
+    "$HOME/.local/state/procedures/librarian/librarian-poke.log"
+}
+
+@test "load gate: unreadable loadavg AND stat fail open — claude runs, both fail-opens logged" {
+  lp_gate_setup
+  rm -f "$LP_LOADAVG_FILE" "$LP_STAT_FILE"   # unreadable: never created
+
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  local LOG="$HOME/.local/state/procedures/librarian/librarian-poke.log"
+  grep -q "librarian-poke: fail-open, loadavg unreadable" "$LOG"
+  grep -q "librarian-poke: fail-open, iowait unreadable" "$LOG"
+}
