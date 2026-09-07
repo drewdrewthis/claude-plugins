@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.16.0...procedures-v0.17.0) (2026-09-07)
+
+
+### Features
+
+* **procedures:** librarian commit gate — deterministic validate + structured commit (commit-records.sh) ([#168](https://github.com/drewdrewthis/claude-plugins/issues/168)) ([75dc66e](https://github.com/drewdrewthis/claude-plugins/commit/75dc66eb125430610ab6687d944517532c93e247))
+
+
+### Bug Fixes
+
+* **procedures:** load-gate + ionice the librarian drain so it cannot storm the box ([#165](https://github.com/drewdrewthis/claude-plugins/issues/165)) ([47cd678](https://github.com/drewdrewthis/claude-plugins/commit/47cd6789315d5e60a46e4669aa5703f4e15ef68f))
+
 ## [0.16.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.15.0...procedures-v0.16.0) (2026-09-04)
 
 
