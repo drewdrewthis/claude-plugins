@@ -15,6 +15,9 @@
 # The metadata fields also accept inline forms (--why/--source/--evidence);
 # prefer the -file forms for transcript-derived text — nothing is ever
 # assembled into shell source, so there is no quoting or escaping to get wrong.
+# A -file path must live under the procedures state dir (the same dir as the
+# librarian's cursors and grooming queue, `$(procedures_state_dir)`), typically
+# <state-dir>/tmp/commit-<root-slug>/; a path outside it is refused.
 #
 # Runs, in order, aborting ATOMICALLY (no commit, no push) on the first failure
 # and appending an actionable note (root, failing path(s), which check) to the
@@ -64,7 +67,8 @@ SIZE_CAP=32768
 
 # usage — print the supported invocation forms to stdout. Prefer the -file
 # forms (--why-file/--source-file/--evidence-file) for transcript-derived
-# text; nothing is ever assembled into shell source.
+# text; nothing is ever assembled into shell source. A -file path must live
+# under the procedures state dir (`$(procedures_state_dir)`).
 usage() {
     cat <<'EOF'
 Usage: commit-records.sh --root PATH --paths "p1.md p2.md" \
@@ -74,13 +78,28 @@ Usage: commit-records.sh --root PATH --paths "p1.md p2.md" \
        commit-records.sh --normalize --root PATH --paths "p1.md p2.md"
 
 Prefer the -file forms for transcript-derived text; nothing is ever
-assembled into shell source.
+assembled into shell source. A -file path must live under the procedures
+state dir, typically <state-dir>/tmp/commit-<root-slug>/.
 EOF
 }
 # _read_meta_file FILE OPT — read a metadata file verbatim into _META_VALUE
-# (trailing newlines preserved, no command-substitution trimming). FILE must
-# be a readable regular file; any failure is a usage error naming OPT.
+# (trailing newlines preserved, no command-substitution trimming). FILE must be
+# a readable regular file whose physical parent dir is under the procedures
+# state dir (`$(procedures_state_dir)`, typically <state-dir>/tmp/commit-<root-slug>/)
+# and must not be a symlink — so a caller cannot make the gate read, then commit
+# verbatim, a file anywhere on disk. Any failure is a usage error naming OPT.
 _read_meta_file() {
+    local _sd _sdp _fdp
+    [ -L "$1" ] && usage_err "$2: refusing a symlink: $1"
+    _sd="$(procedures_state_dir)"
+    [ -d "$_sd" ] || usage_err "$2: procedures state dir does not exist: $_sd"
+    _sdp="$(cd "$_sd" && pwd -P)"
+    _fdp="$(cd "$(dirname -- "$1")" 2>/dev/null && pwd -P)" \
+        || usage_err "$2: cannot resolve: $1"
+    case "$_fdp/" in
+        "$_sdp"/*) : ;;
+        *) usage_err "$2: file must live under the procedures state dir ($_sd): $1" ;;
+    esac
     [ -f "$1" ] && [ -r "$1" ] \
         || usage_err "$2: not a readable regular file: $1"
     _META_VALUE="$(cat -- "$1" && printf x)" \
@@ -146,26 +165,31 @@ RECDIR="$(stores_records_dir "$ROOT")"
 # Split --paths into an array (space-separated).
 read -ra PATHS <<< "$PATHS_RAW"
 
-# Containment + kind filter: every --paths entry is a root-relative record .md
-# file. Reject absolute paths and any `..` segment so a caller cannot make the
-# gate normalize, rename, or stage a file outside the selected store
-# (symlinked-parent escapes are additionally rejected per-file below, after the
-# parent dir is physically resolved). Reject any non-.md entry so a sensitive
-# non-record file cannot ride in unvalidated — EXCEPT the literal `.index`,
-# accepted for caller compatibility and silently dropped, since the gate adds
-# `.index` itself (step 5).
+# --paths filter. What this loop enforces: every entry is a root-relative path
+# ending in .md (absolute paths and any `..` segment are rejected so a caller
+# cannot reach outside the selected store; a non-.md entry is rejected so a
+# sensitive non-record file cannot ride in unvalidated). Record-DIR containment
+# (the entry resolves under the store's record tree, no symlinked parent) is not
+# checked here — it is enforced per-file in normalize_and_collect after the
+# parent dir is physically resolved. The literal `.index` is the one tolerated
+# exception: accepted for caller compatibility and dropped, since the gate adds
+# `.index` itself (step 5); the drop is announced once on stderr so a caller is
+# not left believing it selected the index.
 ROOT_PHYS="$(cd "$ROOT" && pwd -P)"
 _FILTERED=()
 for _p in ${PATHS[@]+"${PATHS[@]}"}; do
     case "$_p" in
         /*) usage_err "--paths entry must be root-relative, not absolute: $_p" ;;
         .. | ../* | */.. | */../*) usage_err "--paths entry escapes --root via '..': $_p" ;;
-        .index) continue ;;
+        .index)
+            [ -n "${_index_noted:-}" ] || printf '%s: note: ".index" in --paths is ignored; the gate stages the index itself\n' "$prog" >&2
+            _index_noted=1
+            continue ;;
         *.md) _FILTERED+=("$_p") ;;
         *) usage_err "--paths entry is not a record .md file: $_p" ;;
     esac
 done
-unset _p
+unset _p _index_noted
 [ "${#_FILTERED[@]}" -gt 0 ] || usage_err "--paths has no record .md entries"
 PATHS=("${_FILTERED[@]}")
 unset _FILTERED
@@ -280,8 +304,10 @@ normalize_and_collect() {
         case "$rel" in
             *.md)
                 abs="$ROOT/$rel"
-                # Refuse a symlinked record: following it would let a caller
-                # normalize/stage a file whose real location is anywhere on disk.
+                # Refuse a symlinked record: _normalize_file and the rename
+                # below would write THROUGH the link to a file outside the
+                # store, and validation would read the target while git would
+                # commit only the link.
                 [ -L "$abs" ] \
                     && _abort path "record path is a symlink (refusing to follow): $rel"
                 # Symlinked-parent escape guard: the physical parent dir must
@@ -468,16 +494,22 @@ FINAL_PATHS+=(".index")
 # through the same leak-class check — a personal path, token, or key must not
 # ride into git history via a commit trailer.
 META_CAP=2048
-for _mv in "$WHAT" "$WHY" "$SOURCE" "$EVIDENCE"; do
+for _mn in what why source evidence; do
+    case $_mn in
+        what) _mv="$WHAT" ;;
+        why) _mv="$WHY" ;;
+        source) _mv="$SOURCE" ;;
+        evidence) _mv="$EVIDENCE" ;;
+    esac
     # Byte count (not character count): the cap is a byte budget, and ${#_mv}
     # counts characters, which under a UTF-8 locale undercounts a multi-byte
     # field. LC_ALL=C wc -c counts raw bytes.
     _mb=$(printf '%s' "$_mv" | LC_ALL=C wc -c | tr -d '[:space:]')
     if [ "$_mb" -gt "$META_CAP" ]; then
-        _abort metadata "commit metadata field exceeds the ${META_CAP}-byte pointer cap"
+        _abort metadata "--$_mn (${_mb} bytes) exceeds the ${META_CAP}-byte pointer cap"
     fi
 done
-unset _mv _mb
+unset _mn _mv _mb
 _meta_tmp="$(mktemp)"
 printf '%s\n%s\n%s\n%s\n' "$WHAT" "$WHY" "$SOURCE" "$EVIDENCE" > "$_meta_tmp"
 if ! _meta_out="$(bash "$SCRIPT_DIR/check-sanitization.sh" "$_meta_tmp" 2>&1)"; then

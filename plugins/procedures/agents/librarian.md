@@ -82,10 +82,12 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    push by hand — the gate owns every write to the repo:
 
    Write each of the three transcript-derived values to its own file with the
-   Write tool under
-   `${PROCEDURES_STATE_DIR:-$HOME/.claude/procedures}/tmp/commit-<root-slug>/`
-   — `why.txt`, `source.txt`, `evidence.txt` (create the dir first; plain text,
-   verbatim, no quoting). Then invoke the gate with the `-file` forms:
+   Write tool under `<state-dir>/tmp/commit-<root-slug>/` — where `<state-dir>`
+   is your own state dir (the same dir as your cursors), resolved with
+   `bash -c 'source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stores.sh" && procedures_state_dir'`
+   — as `why.txt`, `source.txt`, `evidence.txt` (create the dir first; plain
+   text, verbatim, no quoting). The gate refuses a `-file` path outside that
+   dir. Then invoke the gate with the `-file` forms:
 
    ```
    CODEX_ROOT='<root>' bash "${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh" \

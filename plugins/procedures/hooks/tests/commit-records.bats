@@ -435,7 +435,7 @@ EOF
 # ---- AC23: -file metadata forms carry file content verbatim, no shell eval ----
 @test "AC23: --why-file/--source-file/--evidence-file pass file content verbatim into the commit body" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec
-  local d="$FIX/meta"; mkdir -p "$d"
+  local d="$PROCEDURES_STATE_DIR/tmp/commit-x"; mkdir -p "$d"
   # First line is a shell-injection payload; second line is a heredoc-terminator
   # lookalike. Neither must be interpreted — the value never reaches the shell.
   local inj="x'; echo INJECTED; \$(touch \"$FIX/pwned\") \`id\`"
@@ -463,7 +463,7 @@ EOF
 # ---- AC23: inline and -file forms of one field are mutually exclusive ----
 @test "AC23: --why and --why-file together are rejected" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec
-  local d="$FIX/meta"; mkdir -p "$d"; printf 'w\n' > "$d/why.txt"
+  local d="$PROCEDURES_STATE_DIR/tmp/commit-x"; mkdir -p "$d"; printf 'w\n' > "$d/why.txt"
   local before; before=$(_commit_count)
   _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
     --what x --why w --why-file "$d/why.txt" --source s --evidence e
@@ -475,7 +475,7 @@ EOF
 # ---- AC23: a directory passed to --why-file is a usage error ----
 @test "AC23: a directory passed to --why-file is a usage error and nothing is committed" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec
-  local d="$FIX/whydir"; mkdir -p "$d"
+  local d="$PROCEDURES_STATE_DIR/whydir"; mkdir -p "$d"
   local before; before=$(_commit_count)
   _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
     --what x --why-file "$d" --source s --evidence e
@@ -485,21 +485,54 @@ EOF
   [ "$(_commit_count)" -eq "$before" ]
 }
 
-# ---- AC23: --why-file preserves trailing newlines ----
-@test "AC23: --why-file preserves trailing newlines verbatim" {
+# ---- AC23: a --why-file outside the procedures state dir is refused ----
+@test "AC23: a --why-file outside the procedures state dir is refused and nothing is committed" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec
-  local d="$FIX/meta"; mkdir -p "$d"
+  # State dir exists, so it is containment — not existence — that refuses.
+  mkdir -p "$PROCEDURES_STATE_DIR/tmp/commit-x"
+  printf 'w\n' > "$FIX/outside-why.txt"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$FIX/outside-why.txt" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"state dir"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: a symlinked --why-file is refused ----
+@test "AC23: a symlinked --why-file is refused" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  # A link that lives INSIDE the state dir but points OUTSIDE it must be refused
+  # for being a symlink — the containment case cannot vouch for the target.
+  mkdir -p "$PROCEDURES_STATE_DIR/tmp/commit-x"
+  printf 's3cr3t\n' > "$FIX/secret.txt"
+  ln -s "$FIX/secret.txt" "$PROCEDURES_STATE_DIR/tmp/commit-x/why.txt"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$PROCEDURES_STATE_DIR/tmp/commit-x/why.txt" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"symlink"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: -file value is not trimmed through command substitution ----
+@test "AC23: --why-file does not trim the value through command substitution" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$PROCEDURES_STATE_DIR/tmp/commit-x"; mkdir -p "$d"
   # Write a why file with exactly three trailing newlines
   printf 'first line\n\n\n' > "$d/why.txt"
   _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
     --what x --why-file "$d/why.txt" --source s --evidence e
   [ "$status" -eq 0 ]
-  # Verify trailing newlines survived in the commit body. Git normalizes
-  # trailing blank lines in commit messages, so we cannot rely on log -1 --format=%B
-  # to see them. Instead, verify that at least one trailing newline survived:
-  # the line immediately after "why: first line" should be empty, which proves
-  # at least one newline made it through (command-substitution trimming would
-  # have removed all of them).
+  # First prove the value landed at all (so the newline check below cannot pass
+  # vacuously — e.g. if "why:" carried no value the grep -A1 would match nothing
+  # and sed would yield empty, faking a pass).
+  git -C "$ROOT" log -1 --format=%B | grep -qF 'why: first line'
+  # Then verify trailing newlines survived. Git normalizes trailing blank lines
+  # in commit messages, so we cannot rely on log -1 --format=%B to see them all;
+  # instead, the line immediately after "why: first line" being empty proves at
+  # least one newline made it through (command-substitution trimming would have
+  # removed all of them).
   local line_after_why
   line_after_why="$(git -C "$ROOT" log -1 --format=%B | grep -A1 '^why: first line$' | sed -n 2p)"
   [ -z "$line_after_why" ]

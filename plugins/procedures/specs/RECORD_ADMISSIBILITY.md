@@ -61,15 +61,23 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
    how a store adds a rule (e.g. the langwatch `<prefix>.langwatch.<slug>`
    namespace) without a plugin release. Contract: exit `0` = admissible,
    non-zero = block; offending paths to stderr.
-5. **Index** — `build-record-index.sh --root <root> --out <root>/.index`, so the
-   rebuilt index lands in the same commit as the records it describes.
-6. **Structured commit** — `git add <paths>` (never `-A`), then a commit whose
-   message carries the reason (below). The four transcript-derived reason fields
-   (`what`/`why`/`source`/`evidence`) land verbatim in the commit body, so they
-   are **bounded pointers**: each is capped at 2048 bytes and run through the
-   same `check-sanitization.sh` leak classes before the commit, so a personal
-   path, token, or key cannot ride into history via a trailer. A new commit
-   every drain, never `--amend`, never `--force`.
+5. **Index** — `build-record-index.sh --root <root> --out <root>/.index`; the
+   gate — not the caller — stages the rebuilt index, so it lands in the same
+   commit as the records it describes.
+6. **Structured commit** — the gate stages the record `.md` paths given in
+   `--paths` (record paths only; a `.index` entry is tolerated for caller
+   compatibility but ignored, since the gate rebuilds and stages `.index`
+   itself in step 5) and never `-A`, then makes a commit whose message carries
+   the reason (below). The four transcript-derived reason fields
+   (`what`/`why`/`source`/`evidence`) each arrive either inline
+   (`--what`/`--why`/`--source`/`--evidence`) or from a file
+   (`--why-file`/`--source-file`/`--evidence-file`, whose path must live under
+   the procedures state dir); the inline and `-file` forms of a field are
+   mutually exclusive. They land verbatim in the commit body, so they are
+   **bounded pointers**: each is capped at 2048 bytes and run through the same
+   `check-sanitization.sh` leak classes before the commit, so a personal path,
+   token, or key cannot ride into history via a trailer. A new commit every
+   drain, never `--amend`, never `--force`.
 7. **Push** — `git push`; on rejection, `git pull --rebase` and retry once; if
    that still cannot fast-forward, `git rebase --abort`, leave the tree clean,
    and queue the root+files. Never a force-push.
