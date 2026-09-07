@@ -8,9 +8,16 @@
 # Per store root the librarian wrote into, ONE call replaces step 6's git block:
 #
 #   CODEX_ROOT=<root> bash commit-records.sh \
-#     --root <root> --paths "<record paths + .index>" \
-#     --what "<kinds and counts>" --why "<trigger>" \
-#     --source "<session/transcript pointer>" --evidence "<evidence pointer>"
+#     --root <root> --paths "<record .md paths>" --what "<kinds and counts>" \
+#     --why-file <dir>/why.txt --source-file <dir>/source.txt \
+#     --evidence-file <dir>/evidence.txt
+#
+# The metadata fields also accept inline forms (--why/--source/--evidence);
+# prefer the -file forms for transcript-derived text — nothing is ever
+# assembled into shell source, so there is no quoting or escaping to get wrong.
+# A -file path must live under the procedures state dir (the same dir as the
+# librarian's cursors and grooming queue, `$(procedures_state_dir)`), typically
+# <state-dir>/tmp/commit-<root-slug>/; a path outside it is refused.
 #
 # Runs, in order, aborting ATOMICALLY (no commit, no push) on the first failure
 # and appending an actionable note (root, failing path(s), which check) to the
@@ -58,31 +65,76 @@ source "$SCRIPT_DIR/lib/stores.sh"
 
 SIZE_CAP=32768
 
+# usage — print the supported invocation forms to stdout. Prefer the -file
+# forms (--why-file/--source-file/--evidence-file) for transcript-derived
+# text; nothing is ever assembled into shell source. A -file path must live
+# under the procedures state dir (`$(procedures_state_dir)`).
 usage() {
     cat <<'EOF'
-Usage: commit-records.sh --root PATH --paths "p1 p2 .index" \
+Usage: commit-records.sh --root PATH --paths "p1.md p2.md" \
          --what STR --why STR --source STR --evidence STR
-       commit-records.sh --normalize --root PATH --paths "p1 p2"
+       commit-records.sh --root PATH --paths "p1.md p2.md" --what STR \
+         --why-file PATH --source-file PATH --evidence-file PATH
+       commit-records.sh --normalize --root PATH --paths "p1.md p2.md"
+
+Prefer the -file forms for transcript-derived text; nothing is ever
+assembled into shell source. A -file path must live under the procedures
+state dir, typically <state-dir>/tmp/commit-<root-slug>/.
 EOF
 }
+# _read_meta_file FILE OPT — read a metadata file verbatim into _META_VALUE
+# (trailing newlines preserved, no command-substitution trimming). FILE must be
+# a readable regular file whose physical parent dir is under the procedures
+# state dir (`$(procedures_state_dir)`, typically <state-dir>/tmp/commit-<root-slug>/)
+# and must not be a symlink — so a caller cannot make the gate read, then commit
+# verbatim, a file anywhere on disk. Any failure is a usage error naming OPT.
+_read_meta_file() {
+    local _sd _sdp _fdp
+    [ -L "$1" ] && usage_err "$2: refusing a symlink: $1"
+    _sd="$(procedures_state_dir)"
+    [ -d "$_sd" ] || usage_err "$2: procedures state dir does not exist: $_sd"
+    _sdp="$(cd "$_sd" && pwd -P)"
+    _fdp="$(cd "$(dirname -- "$1")" 2>/dev/null && pwd -P)" \
+        || usage_err "$2: cannot resolve: $1"
+    case "$_fdp/" in
+        "$_sdp"/*) : ;;
+        *) usage_err "$2: file must live under the procedures state dir ($_sd): $1" ;;
+    esac
+    [ -f "$1" ] && [ -r "$1" ] \
+        || usage_err "$2: not a readable regular file: $1"
+    _META_VALUE="$(cat -- "$1" && printf x)" \
+        || usage_err "$2: cannot read: $1"
+    _META_VALUE="${_META_VALUE%x}"
+}
+
+# usage_err — print "prog: msg" plus the usage text to stderr, then exit 2.
 usage_err() { printf '%s: %s\n' "$prog" "$1" >&2; usage >&2; exit 2; }
 
 # ---- args ----
 ROOT="" PATHS_RAW="" WHAT="" WHY="" SOURCE="" EVIDENCE="" NORMALIZE_ONLY=""
+# Per-field origin flags: distinguish an inline form from a -file form so the
+# two cannot be supplied for the same field (the -file form reads the whole
+# file into the same variable, so nothing is ever assembled into shell source).
+WHY_INLINE="" WHY_FILE="" SOURCE_INLINE="" SOURCE_FILE="" EVIDENCE_INLINE="" EVIDENCE_FILE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         # Value-taking options: reject a trailing option with no value. Without
         # this, `shift 2` on a single remaining arg fails (errexit is off), $#
         # never decreases, and the parser loops forever.
-        --root | --paths | --what | --why | --source | --evidence)
+        --root | --paths | --what | --why | --source | --evidence \
+            | --why-file | --source-file | --evidence-file)
             [ "$#" -ge 2 ] || usage_err "option '$1' requires a value"
             case "$1" in
                 --root) ROOT="$2" ;;
                 --paths) PATHS_RAW="$2" ;;
                 --what) WHAT="$2" ;;
-                --why) WHY="$2" ;;
-                --source) SOURCE="$2" ;;
-                --evidence) EVIDENCE="$2" ;;
+                --why) WHY="$2"; WHY_INLINE=1 ;;
+                --source) SOURCE="$2"; SOURCE_INLINE=1 ;;
+                --evidence) EVIDENCE="$2"; EVIDENCE_INLINE=1 ;;
+                # -file forms: read the file verbatim into the field (see _read_meta_file).
+                --why-file) _read_meta_file "$2" --why-file; WHY="$_META_VALUE"; WHY_FILE=1 ;;
+                --source-file) _read_meta_file "$2" --source-file; SOURCE="$_META_VALUE"; SOURCE_FILE=1 ;;
+                --evidence-file) _read_meta_file "$2" --evidence-file; EVIDENCE="$_META_VALUE"; EVIDENCE_FILE=1 ;;
             esac
             shift 2 ;;
         --normalize) NORMALIZE_ONLY=1; shift ;;
@@ -90,6 +142,16 @@ while [ "$#" -gt 0 ]; do
         *) usage_err "unknown arg '$1'" ;;
     esac
 done
+unset _META_VALUE
+
+# The inline and -file forms of a field are mutually exclusive: supplying both
+# is ambiguous about which text should land in the commit body.
+[ -n "$WHY_INLINE" ] && [ -n "$WHY_FILE" ] \
+    && usage_err "--why and --why-file are mutually exclusive"
+[ -n "$SOURCE_INLINE" ] && [ -n "$SOURCE_FILE" ] \
+    && usage_err "--source and --source-file are mutually exclusive"
+[ -n "$EVIDENCE_INLINE" ] && [ -n "$EVIDENCE_FILE" ] \
+    && usage_err "--evidence and --evidence-file are mutually exclusive"
 
 [ -n "$ROOT" ] || usage_err "--root is required"
 [ -d "$ROOT" ] || usage_err "--root '$ROOT' is not a directory"
@@ -103,18 +165,37 @@ RECDIR="$(stores_records_dir "$ROOT")"
 # Split --paths into an array (space-separated).
 read -ra PATHS <<< "$PATHS_RAW"
 
-# Containment: every --paths entry is root-relative. Reject absolute paths and
-# any `..` segment so a caller cannot make the gate normalize, rename, or stage
-# a file outside the selected store (symlinked-parent escapes are additionally
-# rejected per-file below, after the parent dir is physically resolved).
+# --paths filter. What this loop enforces: every entry is a root-relative path
+# ending in .md, located under the record directories ($RECDIR/ or plans/). Absolute
+# paths and any `..` segment are rejected so a caller cannot reach outside the
+# selected store. A non-.md entry is rejected so a sensitive non-record file cannot
+# ride in unvalidated. The literal `.index` is the one tolerated exception: accepted
+# for caller compatibility and dropped, since the gate adds `.index` itself (step 5);
+# the drop is announced once on stderr so a caller is not left believing it selected
+# the index.
 ROOT_PHYS="$(cd "$ROOT" && pwd -P)"
+_FILTERED=()
 for _p in ${PATHS[@]+"${PATHS[@]}"}; do
     case "$_p" in
         /*) usage_err "--paths entry must be root-relative, not absolute: $_p" ;;
         .. | ../* | */.. | */../*) usage_err "--paths entry escapes --root via '..': $_p" ;;
+        .index)
+            [ -n "${_index_noted:-}" ] || printf '%s: note: ".index" in --paths is ignored; the gate stages the index itself\n' "$prog" >&2
+            _index_noted=1
+            continue ;;
+        *.md)
+            case "$_p" in
+                "$RECDIR"/*|plans/*) _FILTERED+=("$_p") ;;
+                *) usage_err "--paths entry is outside the record directories ($RECDIR/, plans/): $_p" ;;
+            esac
+            ;;
+        *) usage_err "--paths entry is not a record .md file: $_p" ;;
     esac
 done
-unset _p
+unset _p _index_noted
+[ "${#_FILTERED[@]}" -gt 0 ] || usage_err "--paths has no record .md entries"
+PATHS=("${_FILTERED[@]}")
+unset _FILTERED
 
 # Load the canonical seven-key schema order for normalize. A loader failure
 # aborts — normalizing to an empty key order would corrupt every record.
@@ -216,9 +297,9 @@ _slug_of_id() {
     esac
 }
 
-# Normalize every record path; rename the file so its kebab-slug matches id.
-# Updates FINAL_PATHS (what gets committed) and REC_PATHS (record .md paths for
-# validation) with any post-rename path.
+# normalize_and_collect — normalize every record path; rename the file so its
+# kebab-slug matches id. Updates FINAL_PATHS (what gets committed) and REC_PATHS
+# (record .md paths for validation) with any post-rename path.
 FINAL_PATHS=() REC_PATHS=()
 normalize_and_collect() {
     local rel abs newrel newabs id slug base want dir
@@ -226,6 +307,12 @@ normalize_and_collect() {
         case "$rel" in
             *.md)
                 abs="$ROOT/$rel"
+                # Refuse a symlinked record: _normalize_file and the rename
+                # below would write THROUGH the link to a file outside the
+                # store, and validation would read the target while git would
+                # commit only the link.
+                [ -L "$abs" ] \
+                    && _abort path "record path is a symlink (refusing to follow): $rel"
                 # Symlinked-parent escape guard: the physical parent dir must
                 # stay under the physical root before we write/rename the file.
                 pdir="$(cd "$ROOT/$(dirname "$rel")" 2>/dev/null && pwd -P)" \
@@ -262,7 +349,9 @@ normalize_and_collect() {
                 FINAL_PATHS+=("$newrel"); REC_PATHS+=("$newrel")
                 ;;
             *)
-                FINAL_PATHS+=("$rel")   # .index and any non-record path pass through
+                # PATHS is pre-filtered to record .md only (.index dropped, any
+                # other non-.md rejected as a usage error), so this is unreachable.
+                _abort path "non-record path reached normalize: $rel"
                 ;;
         esac
     done
@@ -362,6 +451,8 @@ _dup_id_scan
 # the staged record paths, compared case-insensitively. Catches the twin even
 # on a case-insensitive macOS checkout where both map to one on-disk file.
 declare -A _LOWER_OF=()
+# _check_twin <path> — record <path> under its lowercased key; abort if a
+# different path already claimed that key (i.e. a case-twin was seen).
 _check_twin() {
     local p="$1" low
     low="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
@@ -393,6 +484,10 @@ fi
 
 # ---- step 5: rebuild index into the same commit ----
 _rebuild_index
+# The gate — not the caller — stages the rebuilt index. FINAL_PATHS holds only
+# record .md paths (any caller-supplied .index was dropped up front); append it
+# now so the `git add` below stages the index alongside the records it describes.
+FINAL_PATHS+=(".index")
 
 # ---- step 6: structured commit ----
 # Constrain the transcript-derived commit metadata (what/why/source/evidence)
@@ -402,12 +497,22 @@ _rebuild_index
 # through the same leak-class check — a personal path, token, or key must not
 # ride into git history via a commit trailer.
 META_CAP=2048
-for _mv in "$WHAT" "$WHY" "$SOURCE" "$EVIDENCE"; do
-    if [ "${#_mv}" -gt "$META_CAP" ]; then
-        _abort metadata "commit metadata field exceeds the ${META_CAP}-byte pointer cap"
+for _mn in what why source evidence; do
+    case $_mn in
+        what) _mv="$WHAT" ;;
+        why) _mv="$WHY" ;;
+        source) _mv="$SOURCE" ;;
+        evidence) _mv="$EVIDENCE" ;;
+    esac
+    # Byte count (not character count): the cap is a byte budget, and ${#_mv}
+    # counts characters, which under a UTF-8 locale undercounts a multi-byte
+    # field. LC_ALL=C wc -c counts raw bytes.
+    _mb=$(printf '%s' "$_mv" | LC_ALL=C wc -c | tr -d '[:space:]')
+    if [ "$_mb" -gt "$META_CAP" ]; then
+        _abort metadata "--$_mn (${_mb} bytes) exceeds the ${META_CAP}-byte pointer cap"
     fi
 done
-unset _mv
+unset _mn _mv _mb
 _meta_tmp="$(mktemp)"
 printf '%s\n%s\n%s\n%s\n' "$WHAT" "$WHY" "$SOURCE" "$EVIDENCE" > "$_meta_tmp"
 if ! _meta_out="$(bash "$SCRIPT_DIR/check-sanitization.sh" "$_meta_tmp" 2>&1)"; then

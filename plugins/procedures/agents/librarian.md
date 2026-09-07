@@ -81,23 +81,28 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    an actionable note to `grooming-queue.md` itself. You never stage, commit, or
    push by hand — the gate owns every write to the repo:
 
-   Pass each value as one literal, single-quoted argv word. `--why`, `--source`,
-   and `--evidence` are transcript-derived: never build the command by
-   interpolating transcript text into a double-quoted string, where a `$(...)`
-   or backtick in that text would be reparsed and executed by your shell.
-   Single-quote every value (and quote `<root>` in both places); the gate reads
-   each as a plain argument and writes it verbatim, so the fields keep their
-   exact contents with no reparsing.
+   <!-- PLUGIN ADAPTATION: no upstream counterpart — documents the plugin-local librarian commit-gate machinery. -->
+
+   Write each of the three transcript-derived values to its own file with the
+   Write tool under `<state-dir>/tmp/commit-<root-slug>/` — where `<state-dir>`
+   is your own state dir (the same dir as your cursors), resolved with
+   `bash -c 'source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stores.sh" && procedures_state_dir'`
+   — as `why.txt`, `source.txt`, `evidence.txt` (create the dir first; plain
+   text, verbatim, no quoting). The gate refuses a `-file` path outside that
+   dir. Then invoke the gate with the `-file` forms:
 
    ```
    CODEX_ROOT='<root>' bash "${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh" \
      --root '<root>' \
-     --paths '<the record paths you touched, space-separated, plus .index>' \
-     --what   '<kinds and counts, e.g. 1 solution, 1 mistake>' \
-     --why    '<the transcript trigger that warranted these>' \
-     --source '<session <sid>, transcript <slug>.jsonl lines A-B>' \
-     --evidence '<pointer to the turn'"'"'s evidence in the transcript>'
+     --paths '<the record .md paths you touched, space-separated>' \
+     --what  '<kinds and counts, e.g. 1 solution, 1 mistake>' \
+     --why-file '<dir>/why.txt' --source-file '<dir>/source.txt' --evidence-file '<dir>/evidence.txt'
    ```
+
+   Transcript text may hold quotes, `$(...)`, backticks, or a line that looks
+   like a heredoc terminator; the values never pass through the shell, so there
+   is no escaping rule to get wrong. Delete the tmp dir after the gate exits,
+   either way.
 
    A non-zero exit means the gate blocked and already queued the reason (which
    record, which check) in `grooming-queue.md` — do not retry blindly. If one
