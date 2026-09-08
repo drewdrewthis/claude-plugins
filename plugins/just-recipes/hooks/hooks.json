@@ -1,5 +1,5 @@
 {
-  "description": "Nudge raw Bash toward just recipes where a justfile resolves (strict mode blocks)",
+  "description": "Nudge raw Bash toward just recipes in every repo, from the project justfile or the global library (strict mode blocks)",
   "hooks": {
     "PreToolUse": [
       {

@@ -468,3 +468,32 @@ SH
     CLAUDE_PROJECT_DIR="$MODDIR" bash "$HOOK" > "$SCRATCH/sub.json"
   grep -q "global::send" "$SCRATCH/sub.json"
 }
+
+@test "older just: --list-submodules fails, the hook retries plain --list" {
+  OLDDIR="$SCRATCH/oldproj"
+  mkdir -p "$OLDDIR"
+  : > "$OLDDIR/justfile"
+  # Stub for a just too old to know --list-submodules: it fails on that flag
+  # and answers only the plain listing.
+  OLDBIN="$SCRATCH/oldbin"
+  mkdir -p "$OLDBIN"
+  cat > "$OLDBIN/just" <<'SH'
+#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "--list-submodules" ]; then
+    echo "error: Found argument '--list-submodules' which wasn't expected" >&2
+    exit 2
+  fi
+done
+for a in "$@"; do
+  [ "$a" = "--list" ] && { printf 'Available recipes:\n    deploy # Deploy the service\n'; exit 0; }
+done
+exit 1
+SH
+  chmod +x "$OLDBIN/just"
+  payload "deploy the thing" | env -u JUST_RECIPES_ENFORCE \
+    PATH="$OLDBIN:$PATH" HOME="$FAKE_HOME" CODEX_ROOT="$CODEX_ROOT" \
+    CLAUDE_PROJECT_DIR="$OLDDIR" bash "$HOOK" > "$SCRATCH/old.json"
+  grep -q '"permissionDecision": *"allow"' "$SCRATCH/old.json"
+  grep -q "deploy" "$SCRATCH/old.json"
+}
