@@ -1,8 +1,8 @@
 #!/bin/bash
-# PreToolUse (Bash) hook: nudge raw bash toward just recipes where a justfile
-# resolves. Default is a NUDGE (permissionDecision=allow + additionalContext);
-# JUST_RECIPES_ENFORCE=strict restores the old hard block; off/0 is a kill
-# switch.
+# PreToolUse (Bash) hook: nudge raw bash toward just recipes EVERYWHERE — in
+# every repo, whether or not a project justfile resolves. Default is a NUDGE
+# (permissionDecision=allow + additionalContext); JUST_RECIPES_ENFORCE=strict
+# restores the old hard block; off/0 is a kill switch.
 # Defensive by design: ANY internal failure must result in exit 0 (allow).
 # Never use `set -e` here — a hook that exits nonzero on a bug denies all Bash.
 
@@ -21,8 +21,16 @@ deny() {
 }
 
 nudge() {
-  # $1: space-separated matched recipe name(s).
-  jq -nc --arg c "A just recipe may cover this ($1). $GUIDANCE" \
+  # $1: space-separated matched recipe name(s); empty for the generic nudge.
+  # Every non-allowlisted raw command is nudged, so "no recipe matched" is a
+  # backlog prompt (write one), not a reason to stay silent.
+  local msg
+  if [ -n "$1" ]; then
+    msg="A just recipe may cover this ($1). $GUIDANCE"
+  else
+    msg="No recipe covers this yet: add one (see the just-recipes skill) or run it under 'just wrap'. $GUIDANCE"
+  fi
+  jq -nc --arg c "$msg" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",additionalContext:$c}}' 2>/dev/null
   exit 0
 }
@@ -262,27 +270,49 @@ if [ "$all_ok" -eq 1 ] && [ "$subshell" -eq 0 ]; then
   exit 0
 fi
 
-# Enforcement applies only where a justfile resolves from the project dir (or
-# cwd). A single `just --list` capture doubles as the resolve probe (nonzero
-# exit -> no justfile, or --list itself errored -> fail-open allow) AND the
-# recipe/doc source reused by the nudge match below — one fork, not three.
+# Build the recipe listing. There is no longer a "project justfile must
+# resolve" gate: the nudge fires in every repo. Source order —
+#   1. the project justfile, listed WITH submodules when just supports the flag
+#      so a mounted `mod global` library shows up as global::<recipe>;
+#   2. otherwise the global library (JUST_GLOBAL_JUSTFILE, default
+#      ~/.claude/just/justfile), so a repo with no justfile of its own still
+#      sees the shared recipes;
+#   3. otherwise nothing — the command is still nudged, generically.
 dir="${CLAUDE_PROJECT_DIR:-$PWD}"
-listing=$( cd "$dir" 2>/dev/null && just --list 2>/dev/null ) || exit 0
+global_jf="${JUST_GLOBAL_JUSTFILE:-$HOME/.claude/just/justfile}"
+listing=""
+have_project=0
 
-# Justfile resolves and the command is not allowlisted: record it in the
-# wrap.log backlog (nudge + strict; the kill switch already exited above).
-log_wrap "$dir" "$cmd"
+l=$( cd "$dir" 2>/dev/null && just --list --list-submodules 2>/dev/null )
+if [ -n "$l" ]; then
+  listing="$l"; have_project=1
+else
+  # --list-submodules is unsupported on older just; retry the plain listing.
+  l=$( cd "$dir" 2>/dev/null && just --list 2>/dev/null )
+  if [ -n "$l" ]; then listing="$l"; have_project=1; fi
+fi
+
+if [ "$have_project" -eq 0 ] && [ -f "$global_jf" ]; then
+  l=$( just --justfile "$global_jf" -d "$dir" --list 2>/dev/null )
+  [ -n "$l" ] && listing="$l"
+fi
+
+# Record every non-allowlisted command in the wrap.log backlog (nudge + strict;
+# the kill switch already exited above). The dir column is tagged `global` when
+# no project justfile resolved, so the backlog is readable per-repo.
+log_col="$dir"
+[ "$have_project" -eq 1 ] || log_col="global"
+log_wrap "$log_col" "$cmd"
 
 # Strict mode: hard block regardless of whether a recipe matches.
 case "$mode" in
   strict) deny ;;
 esac
 
-# Nudge (default): only surface guidance when a recipe plausibly matches the
-# command's leading word. No match -> silent allow.
-# The lexer breaks on command substitution before flushing a full segment, so
-# bad_seg is unreliable when subshell=1; match against the whole command's
-# first real word instead.
+# Nudge (default). A matched recipe is named; no match still nudges, pointing
+# at the backlog. The lexer breaks on command substitution before flushing a
+# full segment, so bad_seg is unreliable when subshell=1; match against the
+# whole command's first real word instead.
 if [ "$subshell" -eq 1 ]; then
   word=$(first_cmd_word "$cmd")
 else
@@ -290,7 +320,8 @@ else
   [ -n "$match_seg" ] || match_seg="${segments[0]:-$cmd}"
   word=$(first_cmd_word "$match_seg")
 fi
-[ -n "$word" ] || exit 0
-matched=$(match_recipes "$listing" "$word") || exit 0
-[ -n "$matched" ] || exit 0
+matched=""
+if [ -n "$word" ] && [ -n "$listing" ]; then
+  matched=$(match_recipes "$listing" "$word") || matched=""
+fi
 nudge "$matched"

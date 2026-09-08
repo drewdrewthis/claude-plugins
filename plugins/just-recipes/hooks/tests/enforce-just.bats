@@ -4,17 +4,23 @@
 # WHAT THIS FILE PROVES:
 #   1. THE THREE MODES ARE DISTINCT. off/0 is fully silent (no output, no log);
 #      strict denies; unset/default nudges.
-#   2. NUDGE IS MATCH-GATED. It fires only when the command's leading word
-#      plausibly maps to a recipe — by summary name OR by a doc comment — and
-#      is a SILENT allow otherwise. Strict denies regardless of any match.
-#   3. THE wrap.log BACKLOG ACCRUES in nudge AND strict where a justfile
-#      resolves and the command is not allowlisted, and NEVER in off.
-#   4. FAIL-OPEN HOLDS: no justfile / allowlisted `just` -> silent passthrough.
+#   2. NUDGE FIRES EVERYWHERE. Every non-allowlisted raw command is nudged,
+#      in every repo, whether or not a PROJECT justfile resolves. A matching
+#      recipe (by name or doc comment) is named; no match gets the generic
+#      "no recipe covers this yet" nudge. Strict denies regardless.
+#   3. THE GLOBAL LIBRARY IS THE FALLBACK LISTING. With no project justfile,
+#      recipes come from JUST_GLOBAL_JUSTFILE (default ~/.claude/just/justfile).
+#   4. THE wrap.log BACKLOG ACCRUES in nudge AND strict for every
+#      non-allowlisted command, and NEVER in off. The dir column is tagged
+#      `global` when no project justfile resolved.
+#   5. FAIL-OPEN HOLDS: the hook never exits nonzero and never denies outside
+#      strict, even when jq/just/stdin misbehave.
 #
 # NO REAL `just` IS INSTALLED FOR THE SUITE. A stub first on PATH parses the
-# fixture justfile in cwd, so --summary / --list are deterministic and the
-# "no justfile" path is exercised by pointing at an empty dir (the stub exits
-# nonzero when no justfile is present, exactly as real just does).
+# justfile it resolves (cwd, or --justfile/-d as passed), so --summary /
+# --list are deterministic and the "no project justfile" path is exercised by
+# pointing at an empty dir (the stub exits nonzero when no justfile is
+# present, exactly as real just does).
 
 setup() {
   HOOK="$BATS_TEST_DIRNAME/../enforce-just.sh"
@@ -41,15 +47,40 @@ JF
   EMPTYDIR="$SCRATCH/empty"
   mkdir -p "$EMPTYDIR"
 
+  # The GLOBAL recipe library under the fake HOME — the fallback listing the
+  # hook uses in any repo that has no justfile of its own.
+  mkdir -p "$FAKE_HOME/.claude/just"
+  cat > "$FAKE_HOME/.claude/just/justfile" <<'JF'
+# Send a message to a tmux worker session
+send:
+    @echo sending
+
+# Report PR readiness
+pr-ready:
+    @echo checking
+JF
+
   # `just` stub: parses the justfile in cwd. Exits nonzero when absent.
   STUB="$SCRATCH/bin"
   mkdir -p "$STUB"
   cat > "$STUB/just" <<'SH'
 #!/usr/bin/env bash
-jf=""
-for f in justfile Justfile .justfile; do [ -f "$f" ] && { jf="$f"; break; }; done
-[ -n "$jf" ] || { echo "error: No justfile found." >&2; exit 1; }
-case "${1:-}" in
+# Honors --justfile <path> and -d/--working-directory <dir> the way real just
+# does, so the hook's global-library probe is exercised for real.
+jf=""; wd=""; args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --justfile) jf="$2"; shift 2 ;;
+    -d|--working-directory) wd="$2"; shift 2 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+[ -n "$wd" ] && cd "$wd" 2>/dev/null
+if [ -z "$jf" ]; then
+  for f in justfile Justfile .justfile; do [ -f "$f" ] && { jf="$f"; break; }; done
+fi
+[ -f "$jf" ] || { echo "error: No justfile found." >&2; exit 1; }
+case "${args[0]:-}" in
   --summary)
     awk '/^[A-Za-z0-9_-]+[^=]*:/{n=$1; sub(/:.*/,"",n); printf "%s ", n} END{print ""}' "$jf"
     ;;
@@ -122,11 +153,12 @@ context()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // 
 
 # --- passthrough / fail-open ---------------------------------------------
 
-@test "no justfile -> silent passthrough (nudge mode)" {
+@test "no project justfile and no global library -> generic nudge, still allows" {
+  rm -rf "$FAKE_HOME/.claude"
   run run_hook "wget http://x" "" "$EMPTYDIR"
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
-  [ ! -f "$WRAPLOG" ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "No recipe covers this yet"
 }
 
 @test "allowlisted 'just build' -> silent passthrough" {
@@ -152,10 +184,11 @@ context()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // 
   context "$output" | grep -q "sync-files"
 }
 
-@test "silent allow when no recipe plausibly matches" {
+@test "generic nudge when no recipe plausibly matches" {
   run run_hook "wget http://x"
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "No recipe covers this yet"
 }
 
 # --- wrap.log backlog -----------------------------------------------------
@@ -168,7 +201,7 @@ context()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // 
   awk -F'\t' -v d="$JUSTDIR" '{ if ($2!="hook" || $3!=d) exit 1; if (index($4,"build --release")==0) exit 1 }' "$WRAPLOG"
 }
 
-@test "wrap.log line appended even when nudge stays silent (no match)" {
+@test "wrap.log line appended when no recipe matches" {
   run run_hook "wget http://x"
   [ -f "$WRAPLOG" ]
   grep -q "$(printf '\thook\t')" "$WRAPLOG"
@@ -240,7 +273,8 @@ JF
   ' _ "$GLOBDIR" "$STUB" "$FAKE_HOME" "$CODEX_ROOT" "$HOOK"
 
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  context "$output" | grep -qv "build"
+  context "$output" | grep -q "No recipe covers this yet"
 }
 
 @test "wrap.log is created with owner-only 0600 permissions" {
@@ -318,7 +352,7 @@ JF
   [ -z "$output" ]
 }
 
-@test "just --list erroring (stub exits 2) -> exit 0" {
+@test "just --list erroring (stub exits 2) -> exit 0, generic nudge, never a deny" {
   ERRBIN="$SCRATCH/errbin"
   mkdir -p "$ERRBIN"
   cat > "$ERRBIN/just" <<'SH'
@@ -332,5 +366,105 @@ SH
       PATH="$2:$PATH" HOME="$3" CODEX_ROOT="$4" CLAUDE_PROJECT_DIR="$5" bash "$6"
   ' _ "$(payload "rsync -a src dst")" "$ERRBIN" "$FAKE_HOME" "$CODEX_ROOT" "$JUSTDIR" "$HOOK"
   [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "No recipe covers this yet"
+}
+
+# --- global library fallback (no project justfile) -------------------------
+
+@test "no project justfile: a global recipe doc match names the recipe" {
+  run run_hook "tmux send-keys -t x hi" "" "$EMPTYDIR"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "send"
+}
+
+@test "no project justfile: the wrap.log dir column is tagged global" {
+  run run_hook "tmux send-keys -t x hi" "" "$EMPTYDIR"
+  [ -f "$WRAPLOG" ]
+  [ "$(wc -l < "$WRAPLOG" | tr -d ' ')" = "1" ]
+  awk -F'\t' '{ if ($2!="hook" || $3!="global") exit 1; if (index($4,"tmux send-keys")==0) exit 1 }' "$WRAPLOG"
+}
+
+@test "no project justfile: an unmatched command still nudges and logs" {
+  run run_hook "bash some-script.sh" "" "$EMPTYDIR"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "No recipe covers this yet"
+  [ -f "$WRAPLOG" ]
+  grep -q "bash some-script.sh" "$WRAPLOG"
+}
+
+@test "no project justfile: off stays silent with no log line" {
+  run run_hook "tmux send-keys -t x hi" off "$EMPTYDIR"
+  [ "$status" -eq 0 ]
   [ -z "$output" ]
+  [ ! -f "$WRAPLOG" ]
+}
+
+@test "no project justfile: allowlisted verbs and just calls stay silent" {
+  run run_hook "ls -la" "" "$EMPTYDIR"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -f "$WRAPLOG" ]
+
+  run run_hook "just send" "" "$EMPTYDIR"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -f "$WRAPLOG" ]
+}
+
+@test "JUST_GLOBAL_JUSTFILE overrides the default global library path" {
+  ALT="$SCRATCH/altlib"
+  mkdir -p "$ALT"
+  cat > "$ALT/justfile" <<'JF'
+# curl the health endpoint
+health-check:
+    @echo ok
+JF
+  payload "curl http://x" | env -u JUST_RECIPES_ENFORCE \
+    PATH="$STUB:$PATH" HOME="$FAKE_HOME" CODEX_ROOT="$CODEX_ROOT" \
+    CLAUDE_PROJECT_DIR="$EMPTYDIR" JUST_GLOBAL_JUSTFILE="$ALT/justfile" \
+    bash "$HOOK" > "$SCRATCH/out.json"
+  [ "$(decision "$(cat "$SCRATCH/out.json")")" = "allow" ]
+  grep -q "health-check" "$SCRATCH/out.json"
+}
+
+@test "no project justfile: strict still denies" {
+  run run_hook "tmux send-keys -t x hi" strict "$EMPTYDIR"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "deny" ]
+}
+
+# --- project justfile takes precedence over the global library ------------
+
+@test "a project justfile wins: global recipes are not consulted" {
+  run run_hook "tmux send-keys -t x hi"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "allow" ]
+  context "$output" | grep -q "No recipe covers this yet"
+}
+
+@test "submodule recipes are listed when just supports --list-submodules" {
+  MODDIR="$SCRATCH/modproj"
+  mkdir -p "$MODDIR"
+  cat > "$MODDIR/justfile" <<'JF'
+# Build the project
+build:
+    @echo building
+JF
+  # Stub that only answers when --list-submodules is present, proving the hook
+  # asks for submodules first.
+  SUBBIN="$SCRATCH/subbin"
+  mkdir -p "$SUBBIN"
+  cat > "$SUBBIN/just" <<'SH'
+#!/usr/bin/env bash
+for a in "$@"; do [ "$a" = "--list-submodules" ] && { printf 'Available recipes:\n    global::send # Send a message to a tmux worker session\n'; exit 0; }; done
+exit 1
+SH
+  chmod +x "$SUBBIN/just"
+  payload "tmux send-keys -t x hi" | env -u JUST_RECIPES_ENFORCE \
+    PATH="$SUBBIN:$PATH" HOME="$FAKE_HOME" CODEX_ROOT="$CODEX_ROOT" \
+    CLAUDE_PROJECT_DIR="$MODDIR" bash "$HOOK" > "$SCRATCH/sub.json"
+  grep -q "global::send" "$SCRATCH/sub.json"
 }
