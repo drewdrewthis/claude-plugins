@@ -354,6 +354,25 @@ SH
   context "$output" | grep -q "No recipe covers this yet"
 }
 
+@test "strict + just --list erroring -> exit 0 but deny (fail-open is exit-code only)" {
+  ERRBIN="$SCRATCH/errbin-strict"
+  mkdir -p "$ERRBIN"
+  cat > "$ERRBIN/just" <<'SH'
+#!/usr/bin/env bash
+# --list (and --list-submodules, and the global-library --justfile probe)
+# always error; strict must still deny even though the listing never resolves.
+exit 2
+SH
+  chmod +x "$ERRBIN/just"
+  run bash -c '
+    printf "%s" "$1" | env -u JUST_RECIPES_ENFORCE \
+      PATH="$2:$PATH" HOME="$3" CODEX_ROOT="$4" CLAUDE_PROJECT_DIR="$5" \
+      JUST_RECIPES_ENFORCE=strict bash "$6"
+  ' _ "$(payload "rsync -a src dst")" "$ERRBIN" "$FAKE_HOME" "$CODEX_ROOT" "$JUSTDIR" "$HOOK"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = "deny" ]
+}
+
 # --- global library fallback (no project justfile) -------------------------
 
 @test "no project justfile: a global recipe doc match names the recipe" {
