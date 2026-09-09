@@ -7,14 +7,12 @@ description: Use when running project commands/tasks in any repo, when the user 
 
 ## Enforcement model
 
-- A PreToolUse hook, controlled by `JUST_RECIPES_ENFORCE`, acts on raw Bash in **every repo** — there is no "the project must have a justfile" condition:
-  - **unset / default = nudge.** The command is ALLOWED. When its leading word plausibly maps to a recipe the hook returns `additionalContext` naming the matched recipe(s); with no match it still nudges — "no recipe covers this yet: add one (see the just-recipes skill) or run it under `just wrap`".
-  - **`strict` = hard block.** Denies the command outright (the old behavior), regardless of whether a recipe matches.
-  - **`off` / `0` = kill switch.** Fully silent, no logging.
-- **Recipe listing source:** the project justfile when one resolves (listed with `--list-submodules` where supported, so a mounted `mod global` library shows up as `global::<recipe>`); otherwise the global library at `JUST_GLOBAL_JUSTFILE` (default `~/.claude/just/justfile`). Neither resolving is not a pass — the command still gets the generic nudge.
-- **Match rule (nudge only):** the first real word of the first non-allowlisted segment (leading `sudo`, `env`, and `NAME=value` assignments are skipped, and a leading `./` or `/usr/bin/` path stripped) is compared case-insensitively against recipe names and doc comments from that listing. A command-substitution command (`$(...)`, backticks) matches on the whole command's first real word. Strict does not consult the match — it denies every non-allowlisted command.
-- **wrap.log backlog:** in nudge AND strict (never off), EVERY non-allowlisted command appends one line to the state dir's `wrap.log`: `ISO-timestamp <tab> hook <tab> dir <tab> raw-command`. The dir column is the project dir, or the literal `global` when no project justfile resolved. State-dir precedence (highest first): `${KNOWLEDGE_HOME:-$HOME/.knowledge}/state` when that `~/.knowledge` dir exists; else `$CODEX_ROOT/state` when `CODEX_ROOT` is set; else `${XDG_STATE_HOME:-$HOME/.local/state}/just-recipes`. Logging is best-effort and never breaks the hook's fail-open (exit-0) guarantee.
-- Discover recipes with `just --list`; escape hatch: `just wrap "<cmd>"` — runs the command under timeout/output-cap guardrails and logs it to the same `wrap.log`.
+- A PreToolUse hook acts on raw Bash in every repo. `JUST_RECIPES_ENFORCE`:
+  - unset / default = **nudge.** The command runs; `additionalContext` names a matching recipe, or says none covers it yet.
+  - `strict` = **deny.** Every non-allowlisted command is blocked — use a recipe or `just wrap`.
+  - `off` / `0` = silent.
+- Passes untouched: `just ...` (every segment of a chain), and the read-only verbs `cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`. Everything else is raw execution, command substitution (`$(...)`, backticks) included.
+- Escape hatch: `just wrap "<cmd>"` — runs the command under timeout/output-cap guardrails and logs it.
   ⚠ fm.just-wrap-unwired — bare `just wrap` errors ("no such recipe") in any project whose own justfile lacks `wrap`: mounted module recipes stay namespaced and `set fallback` walks parent directories, not modules (verified on just 1.58.0). Always-resolving form: `just --justfile ~/.claude/just/justfile -d . wrap "<cmd>"` (`-d .` pins execution to the current dir). After the wiring below, `just global::wrap "<cmd>"` also works.
 - One-time project wiring — add to the project justfile to expose every global recipe as `global::<recipe>`:
 
@@ -22,9 +20,6 @@ description: Use when running project commands/tasks in any repo, when the user 
   mod global '~/.claude/just/justfile'
   set fallback
   ```
-
-- Parsing: commands are trimmed of surrounding whitespace, then segmented on shell control operators (`&&`, `||`, `;;`, `;`, `|`, newlines — quoted or backslash-escaped operators don't split). A lone segment passes when its first word is `just` or a read-only verb (`cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`); a multi-segment command passes only when EVERY segment is a `just` invocation. Command substitution (`$(...)`, backticks) is denied in strict mode; in nudge mode it is treated as raw execution and can trigger a nudge when its leading word maps to a recipe.
-- Machines without `just` installed pass everything through. A repo without its own justfile does NOT — it falls back to the global library and is nudged like any other.
 
 ## Habit loop
 

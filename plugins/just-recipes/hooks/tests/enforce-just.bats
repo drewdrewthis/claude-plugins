@@ -1,26 +1,10 @@
 #!/usr/bin/env bats
 # Tests for hooks/enforce-just.sh — the PreToolUse Bash nudge/block hook.
 #
-# WHAT THIS FILE PROVES:
-#   1. THE THREE MODES ARE DISTINCT. off/0 is fully silent (no output, no log);
-#      strict denies; unset/default nudges.
-#   2. NUDGE FIRES EVERYWHERE. Every non-allowlisted raw command is nudged,
-#      in every repo, whether or not a PROJECT justfile resolves. A matching
-#      recipe (by name or doc comment) is named; no match gets the generic
-#      "no recipe covers this yet" nudge. Strict denies regardless.
-#   3. THE GLOBAL LIBRARY IS THE FALLBACK LISTING. With no project justfile,
-#      recipes come from JUST_GLOBAL_JUSTFILE (default ~/.claude/just/justfile).
-#   4. THE wrap.log BACKLOG ACCRUES in nudge AND strict for every
-#      non-allowlisted command, and NEVER in off. The dir column is tagged
-#      `global` when no project justfile resolved.
-#   5. FAIL-OPEN HOLDS: the hook never exits nonzero and never denies outside
-#      strict, even when jq/just/stdin misbehave.
-#
-# NO REAL `just` IS INSTALLED FOR THE SUITE. A stub first on PATH parses the
-# justfile it resolves (cwd, or --justfile/-d as passed), so --summary /
-# --list are deterministic and the "no project justfile" path is exercised by
-# pointing at an empty dir (the stub exits nonzero when no justfile is
-# present, exactly as real just does).
+# No real `just` is installed for the suite. A stub first on PATH must honour
+# --justfile and -d as passed, because the hook resolves the global library
+# through both; the "no project justfile" path is exercised by pointing at an
+# empty dir, where the stub exits nonzero exactly as real just does.
 
 setup() {
   HOOK="$BATS_TEST_DIRNAME/../enforce-just.sh"
