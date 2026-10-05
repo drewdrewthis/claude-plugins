@@ -256,9 +256,12 @@ for f in "${TARGETS[@]:-}"; do
     # strip braces/brackets, the sub-key names, and commas — leaving a
     # whitespace-separated list of referenced ids (empty for `{}`).
     # STORES_BASENAME_ALT (from stores.sh) strips the sub-key names in links values.
+    # The optional `"?` around the key matches both bare-YAML (`failure-modes:`)
+    # and quoted JSON-style (`"failure-modes":`) forms — without it a quoted key
+    # survives extraction glued to its colon and false-fails as an unresolved id.
     ids="$(printf '%s' "$links_val" \
         | tr -d '{}[]' \
-        | sed -E "s/(${STORES_BASENAME_ALT}):/ /g" \
+        | sed -E "s/\"?(${STORES_BASENAME_ALT})\"?:/ /g" \
         | tr ',' ' ')"
     for lid in $ids; do
         lid="${lid//\"/}"

@@ -197,6 +197,27 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+# ---- valid resolving link, quoted JSON-style key form ----
+
+@test "valid links reference passes with quoted JSON-style key" {
+  cat > "$FIX/references/decisions/linking-quoted.md" <<'EOF'
+---
+id: dec.linking-quoted
+kind: decision
+date: 2026-06-12
+keywords: [linkingquotedword]
+links: {"decisions": ["dec.anchor"]}
+status: active
+---
+# Valid linking record with quoted key
+
+Links to dec.anchor via a quoted JSON-style key — must resolve, not false-fail.
+EOF
+  run env LINT_FRONTMATTER_ROOT="$FIX" bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ ! "$output" =~ "resolves to no record" ]]
+}
+
 # ---- (e) PRINCIPLES: missing enforced_by is WARNING, not FAIL ----
 
 @test "principle without enforced_by emits warning but does not fail" {
