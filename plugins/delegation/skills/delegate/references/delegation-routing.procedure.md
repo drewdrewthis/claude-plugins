@@ -22,8 +22,8 @@ status: active
 | AC sharpening | `ac-reviewer` | Opus |
 | Adversarial stress-test | `devils-advocate` | Opus |
 | Multi-file reasoning, complex debugging | `advanced-coder` | Opus |
-| Genuinely novel work no specialist fits AND not worth minting | `general-purpose` (**HOOK-BLOCKED** — harness surfaces an ask; last resort only) | inherits session (Opus) |
+| Genuinely novel work no specialist fits AND not worth minting | `general-purpose` (**HARD-DENIED** by the PreToolUse hook — no ask, no approval path; pick a specialist above or mint one via `create-new-sub-agent`) | inherits session (`fable[1m]`) |
 
 ## Self-extension rule
 
-When no existing specialist fits, write `agents/<name>.md` with a right-sized model + tools, then `/reload-plugins`. Tier guidance: haiku for mechanical fully-specified execution; sonnet for standard implementation and research; opus for judgment-bearing design, debugging-of-unknowns, and verification. Only a genuine one-off that is not worth minting justifies an approved `general-purpose` call.
+When no existing specialist fits, write `agents/<name>.md` with a right-sized model + tools, then `/reload-plugins`. Tier guidance: haiku for mechanical fully-specified execution; sonnet for standard implementation and research; opus for judgment-bearing design, debugging-of-unknowns, and verification. `general-purpose` is hard-denied by the PreToolUse hook regardless of justification — pick a specialist or mint one instead.

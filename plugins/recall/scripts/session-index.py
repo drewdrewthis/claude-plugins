@@ -320,7 +320,11 @@ def iter_messages(jsonl_path, roles, start_line=1, stop_line=None):
             else:
                 # Non-string content would otherwise be indexed as a Python repr.
                 continue
-            text = text.strip()
+            # A JSON escape like "\ud83c" (half of a broken emoji) decodes to a
+            # lone surrogate, which the file-level errors="replace" never sees
+            # and SQLite's UTF-8 encoder rejects at insert time. Replace it
+            # here so neither the indexer nor the reader can trip on it.
+            text = text.encode("utf-8", errors="replace").decode("utf-8").strip()
             if len(text) < MIN_TEXT_LEN or text.startswith(NOISE_PREFIXES):
                 continue
             yield line_no, role, text
