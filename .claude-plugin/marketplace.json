@@ -44,6 +44,11 @@
       "name": "heartbeats",
       "source": "./plugins/heartbeats",
       "description": "Cron jobs as unit files: /heartbeats renders a directory of markdown units into one marker-delimited managed block of the crontab, and diffs, drift-checks, or installs it behind an explicit approval flag."
+    },
+    {
+      "name": "guards",
+      "source": "./plugins/guards",
+      "description": "PreToolUse guards against agent litter: home-root-guard denies creating new files directly in $HOME (records go in workspace notes, scratch in /tmp or the scratchpad)."
     }
   ]
 }

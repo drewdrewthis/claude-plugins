@@ -1,0 +1,8 @@
+{
+  "name": "guards",
+  "version": "0.1.0",
+  "description": "PreToolUse guards against agent litter: home-root-guard denies creating new files directly in $HOME (file tools + best-effort Bash), allowing edits of existing files and an allowlist of real dotfiles.",
+  "author": {
+    "name": "Drü"
+  }
+}

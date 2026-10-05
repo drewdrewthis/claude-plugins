@@ -1,0 +1,13 @@
+{
+  "description": "Deny creating new files directly in the home-directory root (Write/Edit/MultiEdit/NotebookEdit, best-effort Bash)",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/home-root-guard.sh", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

@@ -19,6 +19,7 @@ design record.
 /plugin install take-note@drewdrewthis
 /plugin install recall@drewdrewthis
 /plugin install heartbeats@drewdrewthis
+/plugin install guards@drewdrewthis
 ```
 
 ## Plugins
@@ -379,6 +380,46 @@ Tests:
 
 ```bash
 cd plugins/heartbeats && bats scripts/tests
+```
+
+### guards (0.1.0)
+
+PreToolUse guards against agent litter. One hook so far:
+
+**`home-root-guard`** (PreToolUse: `Write|Edit|MultiEdit|NotebookEdit|Bash`)
+denies creating a NEW file directly in `$HOME` — run records, logs, scripts and
+backups dropped in the home root where nobody owns or finds them. The deny
+reason: *"Don't create files in the home root — put records in your workspace
+notes, scratch in /tmp or your scratchpad."*
+
+A path is blocked only when all three hold:
+
+- its parent resolves to the physical `$HOME` — `~`, `$HOME`/`${HOME}`,
+  relative paths against the payload `cwd`, `..`, and symlinks are resolved;
+- nothing exists there yet — editing or overwriting an existing file is never
+  blocked;
+- its basename is not an allowlisted dotfile (`.bashrc`, `.zshrc`, `.profile`,
+  `.gitconfig`, `.tmux.conf`, `.vimrc`, `.npmrc`, `.editorconfig`,
+  `.claude.json`, … — see the script header). Unlisted dotfiles such as
+  `.cutover-timers.txt` or `.bashrc.bak` are litter too.
+
+The Bash surface is **best effort, biased to false negatives**: a quote-aware
+tokenizer finds output redirections (`>`, `>>`, `>|`, `&>`, `N>`), `tee`,
+`touch`, and `cp`/`mv`/`install` destinations (including `-t DIR` and a bare
+`~/` directory destination), following a static `cd` within the command.
+Targets it cannot resolve statically (`$VAR` other than `HOME`, `$(...)`,
+globs, `~user`, a symlinked dir reaching `$HOME`) are skipped; reads, quoted
+text, comments and heredoc bodies are never treated as destinations.
+
+Config: `HOME_ROOT_GUARD=off` (or `0`) is the kill switch;
+`HOME_ROOT_GUARD_ALLOW` adds basenames to the allowlist (space- or
+colon-separated). Fails open — missing `jq`, an unreadable payload or an
+unresolvable `$HOME` exit 0 silently.
+
+Tests:
+
+```bash
+cd plugins/guards && bats hooks/tests
 ```
 
 ## docs/
