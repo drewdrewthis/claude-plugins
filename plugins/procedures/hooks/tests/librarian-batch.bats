@@ -205,3 +205,17 @@ EOF
   [ -z "$(_issued bad)" ]
   [ "$(_issued good)" = "0 2" ]
 }
+
+@test "the librarian's own drain sessions are never issued and get no cursor" {
+  { printf '{"type":"agent-setting","agentSetting":"procedures:librarian","sessionId":"x"}\n'
+    printf '{"type":"user","message":{"content":"Drain the transcript queue."}}\n'; } > "$PROJ/drain.jsonl"
+  { printf '{"type":"agent-setting","agentSetting":"claude","sessionId":"y"}\n'
+    printf '{"type":"user","message":{"content":"real work"}}\n'; } > "$PROJ/other.jsonl"
+  _transcript plain 2 1
+  _batch
+  [ -z "$(_issued drain)" ]
+  [ ! -e "$PROCEDURES_STATE_DIR/cursors/drain.line" ]
+  [ "$(_issued other)" = "0 2" ]
+  [ "$(_issued plain)" = "0 2" ]
+  ! grep -q 'Drain the transcript queue' "$PROCEDURES_STATE_DIR/batch.txt" || false
+}

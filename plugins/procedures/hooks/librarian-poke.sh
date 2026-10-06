@@ -280,6 +280,11 @@ lp_drain() {
         lp_log "librarian-poke: batch failed, drain skipped: $(printf '%s' "$out" | tr '\n' ' ')"
         return 0
     fi
+    # A transcript the batch had to skip is reported even when the batch succeeded.
+    local line
+    while IFS= read -r line; do
+        case "$line" in "librarian-batch: skipped "*) lp_log "librarian-poke: $line" ;; esac
+    done <<< "$out"
     [ -s "$(lp_state_dir)/batch.manifest" ] || return 0
     $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
     lp_note_timeout "$rc"
