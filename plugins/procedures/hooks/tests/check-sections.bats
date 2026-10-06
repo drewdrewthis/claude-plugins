@@ -4,10 +4,12 @@
 # record with all required sections passes in both modes.
 # Run: bats hooks/tests/check-sections.bats
 
+# setup — resolve the script under test and a fresh tmp fixture dir.
 setup() {
   SCRIPT="$BATS_TEST_DIRNAME/../../scripts/check-sections.sh"
   FIX="$(mktemp -d)"
 }
+# teardown — remove the tmp fixture tree.
 teardown() { rm -rf "$FIX"; }
 
 # A decision missing its "Chosen path" section.

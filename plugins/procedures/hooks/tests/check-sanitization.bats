@@ -1,13 +1,16 @@
 #!/usr/bin/env bats
 # Tests for scripts/check-sanitization.sh — the leak-class baseline check.
 # PLUGIN ADAPTATION: no upstream counterpart — tests for new librarian commit-gate machinery.
-# One case per leak class (AC2) plus the /home/ubuntu/ carve-out and a clean pass.
+# One case per leak class (AC2) plus the /home/ubuntu/ carve-out and a clean pass,
+# and hardened path cases (uppercase user, mixed line, traversal).
 # Run: bats hooks/tests/check-sanitization.bats
 
+# setup — resolve the script under test and a fresh tmp fixture dir.
 setup() {
   SCRIPT="$BATS_TEST_DIRNAME/../../scripts/check-sanitization.sh"
   FIX="$(mktemp -d)"
 }
+# teardown — remove the tmp fixture tree.
 teardown() { rm -rf "$FIX"; }
 
 # A well-formed record body with nothing to leak.
@@ -41,9 +44,33 @@ EOF
   [[ "$output" == *"macOS home path"* ]]
 }
 
+@test "macOS personal home path with uppercase username is rejected" {
+  _clean_record
+  printf 'path: /Users/Alice/secret\n' >> "$FIX/rec.md"
+  run bash "$SCRIPT" "$FIX/rec.md"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"macOS home path"* ]]
+}
+
 @test "Linux personal home path is rejected" {
   _clean_record
   printf 'path: /home/bob/private\n' >> "$FIX/rec.md"
+  run bash "$SCRIPT" "$FIX/rec.md"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Linux home path"* ]]
+}
+
+@test "allowed and personal Linux paths on one line still trips" {
+  _clean_record
+  printf 'paths: /home/ubuntu/ok and /home/bob/private\n' >> "$FIX/rec.md"
+  run bash "$SCRIPT" "$FIX/rec.md"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Linux home path"* ]]
+}
+
+@test "Linux traversal out of the allowed /home/ubuntu segment is rejected" {
+  _clean_record
+  printf 'path: /home/ubuntu/../alice/secret\n' >> "$FIX/rec.md"
   run bash "$SCRIPT" "$FIX/rec.md"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Linux home path"* ]]

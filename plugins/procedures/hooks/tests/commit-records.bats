@@ -1,11 +1,13 @@
 #!/usr/bin/env bats
 # Tests for scripts/commit-records.sh — the deterministic admissibility gate.
 # PLUGIN ADAPTATION: no upstream counterpart — tests for new librarian commit-gate machinery.
-# One case per testable AC (AC1–AC9, AC13–AC18). Each builds a tmp git root as
+# One case per testable AC (AC1–AC9, AC13–AC24). Each builds a tmp git root as
 # a fixture (records/ tree) so the live corpus is never touched. Push is skipped
-# with COMMIT_RECORDS_NO_PUSH=1 except AC15, which uses a real bare remote.
+# with COMMIT_RECORDS_NO_PUSH=1 except AC15/AC21/AC22, which use a real bare remote.
 # Run: bats hooks/tests/commit-records.bats
 
+# setup — fresh tmp fixture: an isolated state dir plus a git root with a
+# committed anchor record ($ROOT). Runs before every test.
 setup() {
   GATE="$BATS_TEST_DIRNAME/../../scripts/commit-records.sh"
   FIX="$(mktemp -d)"
@@ -14,6 +16,7 @@ setup() {
   ROOT="$FIX/root"
   _init_root "$ROOT"
 }
+# teardown — remove the tmp fixture tree. Runs after every test.
 teardown() { rm -rf "$FIX"; }
 
 # _init_root <dir> — git repo with a committed valid anchor record. Global git
@@ -54,10 +57,41 @@ y
 EOF
 }
 
+# _run_gate <args…> — run the gate with push skipped (COMMIT_RECORDS_NO_PUSH=1).
 _run_gate() {  # COMMIT_RECORDS_NO_PUSH by default
   COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" "$@"
 }
+# _commit_count — number of commits on HEAD in $ROOT.
 _commit_count() { git -C "$ROOT" rev-list --count HEAD; }
+
+# _remote_fixture <remote-rel-path> <remote-id> — build a bare remote plus a
+# clone A whose pre-push hook, on the FIRST push only, advances the remote by
+# committing a record at <remote-rel-path> with id <remote-id>, then exits 0 so
+# git rejects A's push as non-fast-forward. Sets REMOTE, A, HK for the caller.
+_remote_fixture() {
+  local rpath="$1" rid="$2"
+  REMOTE="$FIX/remote.git"; git init -q --bare -b main "$REMOTE"
+  A="$FIX/A"; git clone -q "$REMOTE" "$A" 2>/dev/null
+  git -C "$A" config user.email t@t.com; git -C "$A" config user.name t
+  git -C "$A" config commit.gpgsign false
+  HK="$FIX/hooks"; mkdir -p "$HK"; git -C "$A" config core.hooksPath "$HK"
+  mkdir -p "$A/records/failure-modes"; _fm "$A/records/failure-modes/seed.md" fm.seed
+  git -C "$A" add -A; git -C "$A" commit -qm seed; git -C "$A" push -qu origin main
+  cat > "$HK/pre-push" <<EOF
+#!/usr/bin/env bash
+set -e
+FLAG="$FIX/.pushed_once"
+[ -f "\$FLAG" ] && exit 0
+touch "\$FLAG"
+C="$FIX/C"; rm -rf "\$C"; git clone -q "$REMOTE" "\$C"
+git -C "\$C" config user.email t@t.com; git -C "\$C" config user.name t; git -C "\$C" config commit.gpgsign false
+mkdir -p "\$C/$(dirname "$rpath")"
+printf -- '---\nid: $rid\nkind: failure-mode\ndate: 2026-09-05\nkeywords: [k]\nlinks: {}\nstatus: active\ndescription: upstream record injected by the push-retry rebase fixture here now.\n---\n# rec\n## Mistake\nREMOTE\n## Correct\ny\n' > "\$C/$rpath"
+git -C "\$C" add -A; git -C "\$C" commit -qm remote-add; git -C "\$C" push -q
+exit 0
+EOF
+  chmod +x "$HK/pre-push"
+}
 
 # ---- AC1: malformed frontmatter blocks, no commit, actionable queue ----
 @test "AC1: missing required key blocks, no commit, queue names record+root+check" {
@@ -216,6 +250,7 @@ EOF
 # ---- AC9: size guard, boundary exact ----
 @test "AC9: 32768 bytes passes, 32769 bytes is rejected" {
   # Build a canonical record (normalize is a no-op) then pad to an exact size.
+  # _pad_to <path> <id> <target-bytes> — canonical record padded to N bytes.
   _pad_to() {  # <path> <id> <target-bytes>
     _fm "$1" "$2"
     local cur need; cur=$(wc -c < "$1" | tr -d '[:space:]'); need=$(( $3 - cur - 1 ))
@@ -265,7 +300,8 @@ EOF
 # ---- AC14: rebuilt index lands in the record's own commit ----
 @test "AC14: the single commit contains both the record and the .index" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec
-  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md .index" --what x --why w --source s --evidence e
+  # --paths omits .index deliberately: the gate must add it internally.
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" --what x --why w --source s --evidence e
   [ "$status" -eq 0 ]
   local stat; stat="$(git -C "$ROOT" show --stat --format='' HEAD)"
   [[ "$stat" == *"records/failure-modes/rec.md"* ]]
@@ -276,28 +312,7 @@ EOF
 
 # ---- AC15: push conflict -> rebase --abort, clean tree, queue, no force ----
 @test "AC15: a push rejected with a non-fast-forwardable rebase aborts cleanly and queues" {
-  local REMOTE="$FIX/remote.git"; git init -q --bare -b main "$REMOTE"
-  local A="$FIX/A"; git clone -q "$REMOTE" "$A" 2>/dev/null
-  git -C "$A" config user.email t@t.com; git -C "$A" config user.name t
-  git -C "$A" config commit.gpgsign false
-  local HK="$FIX/hooks"; mkdir -p "$HK"; git -C "$A" config core.hooksPath "$HK"
-  mkdir -p "$A/records/failure-modes"; _fm "$A/records/failure-modes/seed.md" fm.seed
-  git -C "$A" add -A; git -C "$A" commit -qm seed; git -C "$A" push -qu origin main
-  # pre-push hook advances the remote once with a conflicting add of the same path
-  cat > "$HK/pre-push" <<EOF
-#!/usr/bin/env bash
-set -e
-FLAG="$FIX/.pushed_once"
-[ -f "\$FLAG" ] && exit 0
-touch "\$FLAG"
-C="$FIX/C"; rm -rf "\$C"; git clone -q "$REMOTE" "\$C"
-git -C "\$C" config user.email t@t.com; git -C "\$C" config user.name t; git -C "\$C" config commit.gpgsign false
-mkdir -p "\$C/records/failure-modes"
-printf -- '---\nid: fm.contested\nkind: failure-mode\ndate: 2026-09-05\nkeywords: [k]\nlinks: {}\nstatus: active\ndescription: remote side of the add/add conflict for the push-guard test.\n---\n# rec\n## Mistake\nREMOTE\n## Correct\ny\n' > "\$C/records/failure-modes/contested.md"
-git -C "\$C" add -A; git -C "\$C" commit -qm remote-contested; git -C "\$C" push -q
-exit 0
-EOF
-  chmod +x "$HK/pre-push"
+  _remote_fixture "records/failure-modes/contested.md" fm.contested
   _fm "$A/records/failure-modes/contested.md" fm.contested LOCAL
   # push NOT skipped here
   PROCEDURES_STATE_DIR="$FIX/state" run bash "$GATE" \
@@ -345,4 +360,211 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"BLOCK [fence-block]"* ]]
   [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC19: a non-record path in --paths is rejected before git add ----
+@test "AC19: a non-record path in --paths is rejected before git add" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  printf 'token: xoxb-1-2\n' > "$ROOT/records/failure-modes/notes.txt"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md records/failure-modes/notes.txt" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"records/failure-modes/notes.txt"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]     # nothing staged
+}
+
+# ---- AC19 compat: legacy .index in --paths still commits and stages the index ----
+@test "AC19: legacy --paths with .index still commits and includes .index/ in the commit" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md .index" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  local stat; stat="$(git -C "$ROOT" show --stat --format='' HEAD)"
+  [[ "$stat" == *"records/failure-modes/rec.md"* ]]
+  [[ "$stat" == *".index/"* ]]
+}
+
+# ---- AC19: a valid-frontmatter .md outside the record directories is refused ----
+@test "AC19: a valid-frontmatter .md outside the record directories is refused and left untouched" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  mkdir -p "$ROOT/docs"
+  _fm "$ROOT/docs/page.md" fm.page
+  local before; before=$(_commit_count)
+  local page_cs; page_cs="$(shasum < "$ROOT/docs/page.md")"
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md docs/page.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"outside the record directories"* ]]
+  [[ "$output" == *"docs/page.md"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]
+  local page_cs_after; page_cs_after="$(shasum < "$ROOT/docs/page.md")"
+  [ "$page_cs_after" = "$page_cs" ]
+}
+
+# ---- AC20: metadata cap is a byte budget, not a character count ----
+@test "AC20: commit metadata cap is measured in bytes, not characters" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  # 1500 × the 2-byte UTF-8 char é = 3000 bytes > 2048. Build it from raw bytes
+  # (\303\251) so the test does not depend on the runner locale.
+  local why; why="$(printf '\303\251%.0s' $(seq 1 1500))"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why "$why" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [metadata]"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  # exactly 2048 ASCII bytes is within the cap and commits.
+  _fm "$ROOT/records/failure-modes/ok.md" fm.ok
+  local pad; pad="$(printf 'x%.0s' $(seq 1 2048))"
+  _run_gate --root "$ROOT" --paths "records/failure-modes/ok.md" \
+    --what x --why "$pad" --source s --evidence e
+  [ "$status" -eq 0 ]
+}
+
+# ---- AC21: push retry — rebase imports an upstream DUPLICATE id and is blocked ----
+@test "AC21: push retry — rebase imports an upstream duplicate id and is blocked" {
+  _remote_fixture "records/failure-modes/remote.md" fm.same
+  _fm "$A/records/failure-modes/local.md" fm.same LOCAL
+  PROCEDURES_STATE_DIR="$FIX/state" run bash "$GATE" \
+    --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [duplicate-id]"* ]]
+  grep -q "check: duplicate-id" "$QUEUE"
+  [ ! -d "$A/.git/rebase-merge" ] && [ ! -d "$A/.git/rebase-apply" ]   # no rebase in progress
+}
+
+# ---- AC22: push retry — rebase imports a distinct upstream record, reindexes, and pushes ----
+@test "AC22: push retry — rebase imports a distinct upstream record, reindexes, and pushes" {
+  _remote_fixture "records/failure-modes/remote.md" fm.remote
+  _fm "$A/records/failure-modes/local.md" fm.local LOCAL
+  PROCEDURES_STATE_DIR="$FIX/state" run bash "$GATE" \
+    --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"committed and pushed"* ]]
+  [ "$(git -C "$A" rev-parse HEAD)" = "$(git -C "$REMOTE" rev-parse main)" ]   # remote tip == local HEAD
+  [ -z "$(git -C "$A" status --porcelain)" ]                                   # tree clean
+  grep -q "fm.local" "$A/.index/map.tsv"
+  grep -q "fm.remote" "$A/.index/map.tsv"
+  git -C "$A" diff --quiet -- .index                                           # committed index == working copy
+}
+
+# ---- AC23: -file metadata forms carry file content verbatim, no shell eval ----
+@test "AC23: --why-file/--source-file/--evidence-file pass file content verbatim into the commit body" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$PROCEDURES_STATE_DIR/tmp/commit-x"; mkdir -p "$d"
+  # First line is a shell-injection payload; second line is a heredoc-terminator
+  # lookalike. Neither must be interpreted — the value never reaches the shell.
+  local inj="x'; echo INJECTED; \$(touch \"$FIX/pwned\") \`id\`"
+  printf '%s\n__CR__\n' "$inj" > "$d/why.txt"
+  printf 's\n' > "$d/source.txt"
+  printf 'e\n' > "$d/evidence.txt"
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$d/why.txt" --source-file "$d/source.txt" --evidence-file "$d/evidence.txt"
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" log -1 --format=%B | grep -qF "$inj"   # verbatim in the body
+  [ ! -e "$FIX/pwned" ]                                 # payload never executed
+}
+
+# ---- AC23: a missing --why-file is a usage error and commits nothing ----
+@test "AC23: a missing --why-file is a usage error and nothing is committed" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$FIX/nope.txt" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--why-file"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: inline and -file forms of one field are mutually exclusive ----
+@test "AC23: --why and --why-file together are rejected" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$PROCEDURES_STATE_DIR/tmp/commit-x"; mkdir -p "$d"; printf 'w\n' > "$d/why.txt"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why w --why-file "$d/why.txt" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"exclusive"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: a directory passed to --why-file is a usage error ----
+@test "AC23: a directory passed to --why-file is a usage error and nothing is committed" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$PROCEDURES_STATE_DIR/whydir"; mkdir -p "$d"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$d" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--why-file"* ]]
+  [[ "$output" == *"regular file"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: a --why-file outside the procedures state dir is refused ----
+@test "AC23: a --why-file outside the procedures state dir is refused and nothing is committed" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  # State dir exists, so it is containment — not existence — that refuses.
+  mkdir -p "$PROCEDURES_STATE_DIR/tmp/commit-x"
+  printf 'w\n' > "$FIX/outside-why.txt"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$FIX/outside-why.txt" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"state dir"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: a symlinked --why-file is refused ----
+@test "AC23: a symlinked --why-file is refused" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  # A link that lives INSIDE the state dir but points OUTSIDE it must be refused
+  # for being a symlink — the containment case cannot vouch for the target.
+  mkdir -p "$PROCEDURES_STATE_DIR/tmp/commit-x"
+  printf 's3cr3t\n' > "$FIX/secret.txt"
+  ln -s "$FIX/secret.txt" "$PROCEDURES_STATE_DIR/tmp/commit-x/why.txt"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$PROCEDURES_STATE_DIR/tmp/commit-x/why.txt" --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"symlink"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- AC23: -file value is not trimmed through command substitution ----
+@test "AC23: --why-file does not trim the value through command substitution" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  local d="$PROCEDURES_STATE_DIR/tmp/commit-x"; mkdir -p "$d"
+  # Write a why file with exactly three trailing newlines
+  printf 'first line\n\n\n' > "$d/why.txt"
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why-file "$d/why.txt" --source s --evidence e
+  [ "$status" -eq 0 ]
+  # First prove the value landed at all (so the newline check below cannot pass
+  # vacuously — e.g. if "why:" carried no value the grep -A1 would match nothing
+  # and sed would yield empty, faking a pass).
+  git -C "$ROOT" log -1 --format=%B | grep -qF 'why: first line'
+  # Then verify trailing newlines survived. Git normalizes trailing blank lines
+  # in commit messages, so we cannot rely on log -1 --format=%B to see them all;
+  # instead, the line immediately after "why: first line" being empty proves at
+  # least one newline made it through (command-substitution trimming would have
+  # removed all of them).
+  local line_after_why
+  line_after_why="$(git -C "$ROOT" log -1 --format=%B | grep -A1 '^why: first line$' | sed -n 2p)"
+  [ -z "$line_after_why" ]
+}
+
+# ---- AC24: a symlinked record path is refused before git add ----
+@test "AC24: a symlinked .md under --root is rejected before git add" {
+  _fm "$FIX/outside.md" fm.outside
+  ln -s "$FIX/outside.md" "$ROOT/records/failure-modes/link.md"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/link.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"symlink"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]   # nothing staged
 }
