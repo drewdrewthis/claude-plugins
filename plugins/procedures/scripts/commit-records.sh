@@ -399,9 +399,11 @@ fi
 # ---- step 1: pull --rebase (only with an upstream) ----
 # Runs BEFORE normalize: normalization rewrites and `git mv`s tracked records,
 # and `git pull --rebase` refuses a dirty worktree/index. Sync first, then
-# normalize the local records against current upstream.
+# normalize the local records against current upstream. --autostash: tracked
+# files outside --paths (log-record.sh appends to mistakes.jsonl) are routinely
+# dirty; without it every pull fails and the gate blocks forever.
 if git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    if ! git -C "$ROOT" pull --rebase >/dev/null 2>&1; then
+    if ! git -C "$ROOT" pull --rebase --autostash >/dev/null 2>&1; then
         git -C "$ROOT" rebase --abort >/dev/null 2>&1 || true
         _abort pull "initial 'git pull --rebase' failed for $ROOT; tree left clean"
     fi
@@ -487,7 +489,9 @@ _rebuild_index
 # The gate — not the caller — stages the rebuilt index. FINAL_PATHS holds only
 # record .md paths (any caller-supplied .index was dropped up front); append it
 # now so the `git add` below stages the index alongside the records it describes.
-FINAL_PATHS+=(".index")
+# Stores that gitignore `.index/` keep it local-only: `git add` refuses an
+# ignored path, which would block every commit, so skip it there.
+git -C "$ROOT" check-ignore -q .index 2>/dev/null || FINAL_PATHS+=(".index")
 
 # ---- step 6: structured commit ----
 # Constrain the transcript-derived commit metadata (what/why/source/evidence)
@@ -538,7 +542,7 @@ fi
 if git -C "$ROOT" remote | grep -q .; then
     if ! git -C "$ROOT" push >/dev/null 2>&1; then
         # rejected — retry once through a rebase
-        if ! git -C "$ROOT" pull --rebase >/dev/null 2>&1; then
+        if ! git -C "$ROOT" pull --rebase --autostash >/dev/null 2>&1; then
             git -C "$ROOT" rebase --abort >/dev/null 2>&1 || true
             _abort push "push rejected and 'pull --rebase' could not fast-forward; rebase aborted, tree left clean, no force; files: ${FINAL_PATHS[*]}"
         fi

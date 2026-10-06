@@ -450,6 +450,33 @@ EOF
   git -C "$A" diff --quiet -- .index                                           # committed index == working copy
 }
 
+@test "AC25: a dirty tracked file outside --paths (mistakes.jsonl) does not block the initial pull" {
+  REMOTE="$FIX/remote.git"; git clone -q --bare "$ROOT" "$REMOTE"
+  A="$FIX/A"; git clone -q "$REMOTE" "$A"
+  git -C "$A" config user.email t@t.com; git -C "$A" config user.name t
+  git -C "$A" config commit.gpgsign false; git -C "$A" config core.hooksPath /dev/null
+  printf '{"a":1}\n' > "$A/mistakes.jsonl"
+  git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
+  printf '{"b":2}\n' >> "$A/mistakes.jsonl"                                  # log-record.sh-style append
+  _fm "$A/records/failure-modes/local.md" fm.local LOCAL
+  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+    --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$A" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
+  [ "$(git -C "$A" status --porcelain)" = " M mistakes.jsonl" ]               # left dirty, not committed
+}
+
+@test "AC26: a store that gitignores .index/ still commits the record (index left local)" {
+  printf '.index/\n' > "$ROOT/.gitignore"
+  git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index
+  _fm "$ROOT/records/failure-modes/local.md" fm.local LOCAL
+  _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
+  ! git -C "$ROOT" log -1 --name-only --format= | grep -q "^.index/"
+  [ -f "$ROOT/.index/map.tsv" ]                                                # still built locally
+}
+
 # ---- AC23: -file metadata forms carry file content verbatim, no shell eval ----
 @test "AC23: --why-file/--source-file/--evidence-file pass file content verbatim into the commit body" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec
