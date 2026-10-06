@@ -521,6 +521,21 @@ _clone() {
   [ -f "$ROOT/.index/map.tsv" ]                                                # still built locally
 }
 
+@test "AC29: index files tracked before .index/ was gitignored still get the rebuilt index staged" {
+  _fm "$ROOT/records/failure-modes/first.md" fm.first FIRST
+  _run_gate --root "$ROOT" --paths "records/failure-modes/first.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" ls-files -- .index | grep -q .                               # index tracked
+  printf '.index/\n' > "$ROOT/.gitignore"
+  git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index        # rule added afterwards
+  _fm "$ROOT/records/failure-modes/second.md" fm.second SECOND
+  _run_gate --root "$ROOT" --paths "records/failure-modes/second.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" log -1 --name-only --format= | grep -q "records/failure-modes/second.md"
+  git -C "$ROOT" log -1 --name-only --format= | grep -q "^.index/"           # rebuilt tracked index staged
+  [ -z "$(git -C "$ROOT" status --porcelain -- .index)" ]
+}
+
 # ---- AC23: -file metadata forms carry file content verbatim, no shell eval ----
 @test "AC23: --why-file/--source-file/--evidence-file pass file content verbatim into the commit body" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec

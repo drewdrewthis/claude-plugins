@@ -518,8 +518,15 @@ _rebuild_index
 # record .md paths (any caller-supplied .index was dropped up front); append it
 # now so the `git add` below stages the index alongside the records it describes.
 # Stores that gitignore `.index/` keep it local-only: `git add` refuses an
-# ignored path, which would block every commit, so skip it there.
-git -C "$ROOT" check-ignore -q .index 2>/dev/null || FINAL_PATHS+=(".index")
+# ignored path, which would block every commit, so skip it there. --no-index:
+# without it, index files tracked before the ignore rule make check-ignore say
+# "not ignored", and `git add .index` then fails on the new ignored files.
+INDEX_IGNORED=
+if git -C "$ROOT" check-ignore -q --no-index .index 2>/dev/null; then
+    INDEX_IGNORED=1
+else
+    FINAL_PATHS+=(".index")
+fi
 
 # ---- step 6: structured commit ----
 # Constrain the transcript-derived commit metadata (what/why/source/evidence)
@@ -555,6 +562,10 @@ rm -f "$_meta_tmp"
 
 git -C "$ROOT" add -- ${FINAL_PATHS[@]+"${FINAL_PATHS[@]}"} 2>/dev/null || \
     _abort commit "git add failed for: ${FINAL_PATHS[*]}"
+# Ignored .index that still has tracked files: restage just those.
+if [ -n "$INDEX_IGNORED" ]; then
+    git -C "$ROOT" add -u -- .index 2>/dev/null || _abort commit "git add -u failed for: .index"
+fi
 
 subject="records(${STORE_BASENAME}): ${WHAT}"
 body="$(printf 'why: %s\nsource: %s\nevidence: %s' "$WHY" "$SOURCE" "$EVIDENCE")"
