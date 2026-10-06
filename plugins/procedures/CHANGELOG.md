@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.3](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.2...procedures-v0.17.3) (2026-10-06)
+
+
+### Bug Fixes
+
+* **procedures:** librarian skips its own drain sessions; log batch skips ([#182](https://github.com/drewdrewthis/claude-plugins/issues/182)) ([e907b01](https://github.com/drewdrewthis/claude-plugins/commit/e907b01a46ef1857e0b3ec115bbafb63739a4afa))
+
 ## [0.17.2](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.1...procedures-v0.17.2) (2026-10-06)
 
 
