@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# PLUGIN ADAPTATION: no upstream counterpart — librarian drain machinery.
+# librarian-batch.sh — issue ONE bounded batch of unread transcript lines for a
+# librarian drain, so a backlog is read in full across drains instead of being
+# sampled in one.
+#
+#   bash librarian-batch.sh [--out FILE]
+#
+# Picks transcripts under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/*/*.jsonl the
+# same way the librarian always has: mtime within 7 days, line count greater
+# than the cursor, and a cursor past the end (truncation/compaction) resets to
+# 0. Oldest transcript first. Each unread line is distilled to readable text
+# (user/assistant text; tool calls and results clipped) and appended to the
+# batch until LIBRARIAN_BATCH_BYTES (default 200000) of text is reached. The
+# batch always ends on a line boundary, so one giant transcript is split across
+# drains with no gap or overlap. A line that fails to parse, or carries no
+# text, is skipped but still counts as read.
+#
+# Writes the batch to FILE (default <state-dir>/batch.txt — Bash tool output is
+# truncated, so the librarian Reads the file) and the issued ranges to
+# <state-dir>/batch.manifest, one `slug<TAB>start<TAB>end` per transcript: lines
+# start+1..end were issued. librarian-advance.sh moves a cursor only within the
+# range issued here. Prints a one-line summary; exit 0 with an empty manifest
+# means there is nothing to drain.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/stores.sh
+. "$SCRIPT_DIR/lib/stores.sh" 2>/dev/null || true
+STATE="$(procedures_state_dir)"
+CURSORS="$STATE/cursors"
+MANIFEST="$STATE/batch.manifest"
+OUT="$STATE/batch.txt"
+BUDGET="${LIBRARIAN_BATCH_BYTES:-200000}"
+CLIP=300
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) OUT="$2"; shift 2 ;;
+        *) printf 'librarian-batch: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+    esac
+done
+case "$BUDGET" in ''|*[!0-9]*) printf 'librarian-batch: LIBRARIAN_BATCH_BYTES must be a positive integer\n' >&2; exit 2 ;; esac
+command -v jq >/dev/null 2>&1 || { printf 'librarian-batch: jq is required\n' >&2; exit 2; }
+
+mkdir -p "$CURSORS"
+: > "$OUT"
+: > "$MANIFEST.tmp"
+
+_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+
+# One output line per input line: the distilled text with newlines folded to
+# \x1e (unfolded by awk below), or empty for unparseable / text-free lines.
+# shellcheck disable=SC2016
+DISTILL='
+def clip($n): if length > $n then .[0:$n] + "…[+\(length - $n) chars]" else . end;
+def blocks: if type == "string" then [{type: "text", text: .}] elif type == "array" then . else [] end;
+def flat: if type == "string" then . elif type == "array" then map(.text? // (tostring)) | join(" ") else tostring end;
+(try fromjson catch null) as $j
+| if ($j | type) != "object" or (($j.type // "") | IN("user", "assistant") | not) then ""
+  else $j.type as $t
+  | [ ($j.message.content // "" | blocks)[]
+      | if .type == "text" then "\($t): \(.text // "" | clip($budget))"
+        elif .type == "tool_use" then "\($t) tool_use \(.name // "?"): \(.input | tojson | clip($clip))"
+        elif .type == "tool_result" then "tool_result: \(.content | flat | clip($clip))"
+        else empty end ]
+  | join("\n")
+  end
+| gsub("\u001e"; " ") | gsub("\n"; "\u001e")'
+
+used=0
+while IFS=$'\t' read -r _ f; do
+    [ "$used" -lt "$BUDGET" ] || break
+    slug="$(basename "$f" .jsonl)"
+    total="$(wc -l < "$f" | tr -d ' ')"
+    cur=0
+    [ -f "$CURSORS/$slug.line" ] && cur="$(tr -dc '0-9' < "$CURSORS/$slug.line")"
+    cur="${cur:-0}"
+    [ "$total" -lt "$cur" ] && cur=0          # truncated/compacted: re-read from the start
+    [ "$total" -gt "$cur" ] || continue
+
+    # awk emits the kept text and, last, "END <last line issued> <bytes used>".
+    # awk exiting early on the budget SIGPIPEs jq/tail; that is expected.
+    res="$(tail -n "+$((cur + 1))" "$f" | head -n "$((total - cur))" \
+        | jq -R -r --argjson clip "$CLIP" --argjson budget "$BUDGET" "$DISTILL" \
+        | LC_ALL=C awk -v start="$cur" -v used="$used" -v budget="$BUDGET" \
+            -v hdr="=== $slug ($f) ===" '
+            { n = start + NR; t = $0
+              if (t == "") { last = n; next }
+              gsub(/\036/, "\n", t); line = "[L" n "] " t "\n"
+              cost = length(line) + (printed ? 0 : length(hdr) + 1)
+              if (used + cost > budget && used > 0) exit
+              if (!printed) { printf "%s\n", hdr; printed = 1 }
+              printf "%s", line; used += cost; last = n }
+            END { printf "END %d %d\n", (last ? last : start), used }' || true)"
+    end_line="$(printf '%s\n' "$res" | tail -n 1)"
+    read -r _ end used <<< "$end_line"
+    printf '%s\n' "$res" | sed '$d' >> "$OUT"
+    [ "$end" -gt "$cur" ] || break            # budget already spent before this transcript
+    printf '%s\t%s\t%s\n' "$slug" "$cur" "$end" >> "$MANIFEST.tmp"
+    [ "$end" -eq "$total" ] || break          # split mid-transcript: the rest is the next batch
+done < <(find "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" -mindepth 2 -maxdepth 2 \
+            -name '*.jsonl' -mtime -7 2>/dev/null \
+         | while IFS= read -r f; do printf '%s\t%s\n' "$(_mtime "$f")" "$f"; done \
+         | sort -n -k1,1)
+
+mv "$MANIFEST.tmp" "$MANIFEST"
+printf 'librarian-batch: %s transcript range(s), %s bytes -> %s (manifest %s)\n' \
+    "$(wc -l < "$MANIFEST" | tr -d ' ')" "$used" "$OUT" "$MANIFEST"
