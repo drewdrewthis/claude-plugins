@@ -61,6 +61,20 @@
       "extra-files": [
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
       ]
+    },
+    "plugins/ship": {
+      "release-type": "simple",
+      "component": "ship",
+      "extra-files": [
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
+    },
+    "plugins/decide": {
+      "release-type": "simple",
+      "component": "decide",
+      "extra-files": [
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
     }
   }
 }

@@ -44,6 +44,16 @@
       "name": "heartbeats",
       "source": "./plugins/heartbeats",
       "description": "Cron jobs as unit files: /heartbeats renders a directory of markdown units into one marker-delimited managed block of the crontab, and diffs, drift-checks, or installs it behind an explicit approval flag."
+    },
+    {
+      "name": "ship",
+      "source": "./plugins/ship",
+      "description": "The one delivery flow for shipping code: /ship:ship walks LAUNCH, IMPLEMENT, REVIEW/QA, and PR+MONITOR modes — delegate every edit, prove the change is used, drive the PR to green. Vendored from orchard-codex; the orchardist scripts/hooks and ~/.knowledge records it cites stay on the host."
+    },
+    {
+      "name": "decide",
+      "source": "./plugins/decide",
+      "description": "/decide:decide resolves a decision yourself instead of asking the human: triage, decompose consequences, run the autonomy gate, act, and write an auditable decision record — escalating only the irreversible, ruin-class, or values-laden minority."
     }
   ]
 }

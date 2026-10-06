@@ -1,0 +1,1 @@
+- 2026-05-28 — Added `Analysis-as-license-to-ask` to Subtler deferral patterns. Evidence: 2 ask-permission-on-reversible mistakes in one session (langwatch-issue4215, both tagged skill=decide), both immediately after thorough analyses — the analysis quality masked the ask as "earned". Rule: decision-quality predicts permission-asking backward.

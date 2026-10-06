@@ -19,6 +19,8 @@ design record.
 /plugin install take-note@drewdrewthis
 /plugin install recall@drewdrewthis
 /plugin install heartbeats@drewdrewthis
+/plugin install ship@drewdrewthis
+/plugin install decide@drewdrewthis
 ```
 
 ## Plugins
@@ -380,6 +382,56 @@ Tests:
 ```bash
 cd plugins/heartbeats && bats scripts/tests
 ```
+
+### ship (0.1.0)
+
+`/ship:ship` (bare `/ship` also resolves while nothing else claims the name) —
+the one delivery flow for shipping code. Four modes the skill routes between:
+**LAUNCH** (spin up a worker for an issue), **IMPLEMENT** (do the work, delegate
+every edit), **REVIEW/QA** (review + capture use-proof), **PR+MONITOR** (open the
+PR, arm a watcher, drive to green). A `/tmp/claude-ship-flow-$CLAUDE_SESSION_ID`
+flag tracks the phase.
+
+Prose-only skill — no scripts or hooks of its own, so no bats suite. Vendored
+from `orchard-codex@develop-sweatshop` (`skills/ship`); own-file references
+rewritten to `${CLAUDE_PLUGIN_ROOT}`.
+
+**Host dependencies not shipped by this plugin** (present on an orchard-codex
+checkout; absent on a box whose `~/.claude` is not one, e.g. drew-sweatshop —
+the skill's prose loads and reads, but these do not run until installed
+separately):
+
+- Scripts: `~/.claude/scripts/session-truth`, `scripts/pr-ready-check.sh`,
+  `scripts/verify-ci-shard-tally.sh`, `scripts/lib/gh-checks-rest.sh`,
+  `~/.claude/tooling/orchardist-watch/pr.sh`, `records/procedures/github/scripts/tag.sh`.
+- Hook: `~/.claude/hooks/ship-flow-stop.sh` (the Stop hook that blocks premature
+  `done`). Config: `~/.claude/fleet.env`.
+- Knowledge records: the `~/.knowledge/modules/shared/records/**` deep-dive
+  procedures/principles (launch, orchestrate, delegation-routing, browser-qa,
+  drive-pr, pr-ready-check, review-methodology, ci-green-before-ready) — cited,
+  not required for the happy path.
+- Agents from the host roster: `ac-reviewer`, `coder`, `proof-reviewer`.
+
+### decide (0.1.0)
+
+`/decide:decide` (bare `/decide` also resolves) — resolve a decision yourself
+instead of deferring it to the human. Triage (fast / lite / full), decompose
+each undesirable consequence (severity×probability, reversibility, floor test),
+run the autonomy gate, act, and write an auditable decision record. Escalates
+only the genuinely irreversible, ruin-class, or values-laden minority.
+
+Prose-only skill — no bats suite. Vendored from
+`orchard-codex@develop-sweatshop` (`skills/decide`, including its `EVOLUTION.md`).
+
+**Host dependencies not shipped by this plugin:**
+
+- Decision-record store: `~/.knowledge/modules/shared/records/decisions/`
+  (the host data root — a record store, deliberately never inside the plugin).
+- Discovery: the `procedures` plugin's `/what-do-i-know` (`procedures:how-do-i`
+  alias). `scripts/query-records.sh` is referenced for keyword discovery and is
+  not shipped here.
+- Referenced `~/.knowledge/modules/shared/records/**` principles/solutions and
+  the `decide-whitepaper.md` methodology doc.
 
 ## docs/
 
