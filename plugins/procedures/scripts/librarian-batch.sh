@@ -44,7 +44,7 @@ while [ $# -gt 0 ]; do
         *) printf 'librarian-batch: unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
 done
-case "$BUDGET" in ''|*[!0-9]*) printf 'librarian-batch: LIBRARIAN_BATCH_BYTES must be a positive integer\n' >&2; exit 2 ;; esac
+case "$BUDGET" in ''|0*|*[!0-9]*) printf 'librarian-batch: LIBRARIAN_BATCH_BYTES must be a positive integer\n' >&2; exit 2 ;; esac
 command -v jq >/dev/null 2>&1 || { printf 'librarian-batch: jq is required\n' >&2; exit 2; }
 
 mkdir -p "$CURSORS"
@@ -91,8 +91,11 @@ while IFS=$'\t' read -r _ f; do
     [ "$total" -gt "$cur" ] || continue
 
     # awk emits the kept text and, last, "END <last line issued> <bytes used>".
-    # awk exiting early on the budget SIGPIPEs jq/tail; that is expected.
-    res="$(tail -n "+$((cur + 1))" "$f" | head -n "$((total - cur))" \
+    # awk exiting early on the budget SIGPIPEs jq/head/tail: 141 from those is
+    # expected. Any other failure, or a malformed END, skips this transcript
+    # with no range issued (its cursor stays put) instead of stalling the batch.
+    set +e
+    tail -n "+$((cur + 1))" "$f" | head -n "$((total - cur))" \
         | jq -R -r --argjson clip "$CLIP" --argjson budget "$BUDGET" "$DISTILL" \
         | LC_ALL=C awk -v start="$cur" -v used="$used" -v budget="$BUDGET" \
             -v hdr="=== $slug ($f) ===" '
@@ -103,10 +106,21 @@ while IFS=$'\t' read -r _ f; do
               if (used + cost > budget && used > 0) exit
               if (!printed) { printf "%s\n", hdr; printed = 1 }
               printf "%s", line; used += cost; last = n }
-            END { printf "END %d %d\n", (last ? last : start), used }' || true)"
-    end_line="$(printf '%s\n' "$res" | tail -n 1)"
-    read -r _ end used <<< "$end_line"
-    printf '%s\n' "$res" | sed '$d' >> "$OUT"
+            END { printf "END %d %d\n", (last ? last : start), used }' > "$OUT.part"
+    ps=("${PIPESTATUS[@]}")
+    set -e
+    ok=1
+    for k in 0 1 2; do case "${ps[$k]}" in 0|141) ;; *) ok=0 ;; esac; done
+    [ "${ps[3]}" = 0 ] || ok=0
+    read -r tag end new_used < <(tail -n 1 "$OUT.part") || true
+    case "$tag:$end:$new_used" in END:[0-9]*:[0-9]*) ;; *) ok=0 ;; esac
+    case "$end$new_used" in *[!0-9]*) ok=0 ;; esac
+    if [ "$ok" != 1 ]; then
+        printf 'librarian-batch: skipped %s: distill failed (tail/head/jq/awk exit %s)\n' "$f" "${ps[*]}" >&2
+        continue
+    fi
+    used="$new_used"
+    sed '$d' "$OUT.part" >> "$OUT"
     [ "$end" -gt "$cur" ] || break            # budget already spent before this transcript
     printf '%s\t%s\t%s\n' "$slug" "$cur" "$end" >> "$MANIFEST.tmp"
     [ "$end" -eq "$total" ] || break          # split mid-transcript: the rest is the next batch
@@ -115,6 +129,7 @@ done < <(find "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" -mindepth 2 -maxdep
          | while IFS= read -r f; do printf '%s\t%s\n' "$(_mtime "$f")" "$f"; done \
          | sort -n -k1,1)
 
+rm -f "$OUT.part"
 mv "$MANIFEST.tmp" "$MANIFEST"
 printf 'librarian-batch: %s transcript range(s), %s bytes -> %s (manifest %s)\n' \
     "$(wc -l < "$MANIFEST" | tr -d ' ')" "$used" "$OUT" "$MANIFEST"

@@ -156,3 +156,52 @@ _issued() { awk -F'\t' -v s="$1" '$1 == s { print $2 " " $3 }' "$PROCEDURES_STAT
   [ "$status" -ne 0 ]
   [ ! -f "$PROCEDURES_STATE_DIR/cursors/t.line" ]
 }
+
+@test "a zero or leading-zero budget is rejected" {
+  _transcript t 3 1
+  for b in 0 00 0200000; do
+    LIBRARIAN_BATCH_BYTES=$b run bash "$SCRIPTS/librarian-batch.sh"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"positive integer"* ]]
+  done
+}
+
+# _shim <tool> <arg> <marker> <failing-body> — a PATH shim for <tool>: when
+# called with <arg> (the distill call) and its stdin contains <marker>, it runs
+# <failing-body>; every other call goes straight to the real tool.
+_shim() {
+  local real; real="$(command -v "$1")"
+  mkdir -p "$HOME/bin"
+  cat > "$HOME/bin/$1" <<EOF
+#!/usr/bin/env bash
+[[ " \$* " == *"$2"* ]] || exec "$real" "\$@"
+in="\$(cat)"
+if [[ "\$in" == *$3* ]]; then $4; fi
+printf '%s\n' "\$in" | "$real" "\$@"
+EOF
+  chmod +x "$HOME/bin/$1"
+  export PATH="$HOME/bin:$PATH"
+}
+
+@test "a jq failure skips that transcript with a message; younger ones are still issued" {
+  printf '{"type":"user","message":{"content":"BOOM"}}\n' > "$PROJ/bad.jsonl"
+  touch -t "$(date -d '2 days ago' +%Y%m%d%H%M)" "$PROJ/bad.jsonl"
+  _transcript good 2 1
+  _shim jq ' -R ' BOOM 'exit 5'
+  _batch
+  [[ "$output" == *"skipped $PROJ/bad.jsonl"* ]]
+  [ -z "$(_issued bad)" ]
+  [ "$(_issued good)" = "0 2" ]
+  ! grep -q BOOM "$PROCEDURES_STATE_DIR/batch.txt" || false
+}
+
+@test "a malformed END from the distill skips that transcript; younger ones are still issued" {
+  printf '{"type":"user","message":{"content":"GARBAGE"}}\n' > "$PROJ/bad.jsonl"
+  touch -t "$(date -d '2 days ago' +%Y%m%d%H%M)" "$PROJ/bad.jsonl"
+  _transcript good 2 1
+  _shim awk 'hdr=' GARBAGE 'echo "END x 1e9"; exit 0'
+  _batch
+  [[ "$output" == *"skipped $PROJ/bad.jsonl"* ]]
+  [ -z "$(_issued bad)" ]
+  [ "$(_issued good)" = "0 2" ]
+}
