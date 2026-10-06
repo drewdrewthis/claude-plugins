@@ -288,7 +288,7 @@ lp_worker() {
     # tool availability (mirrors LIBRARIAN_SYNC's precedent).
     if [ "${LIBRARIAN_NO_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
         local rc=0
-        flock -n "$LIBRARIAN_LOCK" $LP_TIMEOUT $LP_NICE claude -p --agent procedures:librarian "Drain the transcript queue." || rc=$?
+        flock -n "$LIBRARIAN_LOCK" $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
         lp_note_timeout "$rc"
         return 0
     fi
@@ -299,7 +299,7 @@ lp_worker() {
     if lp_claim; then
         trap 'rmdir "$LIBRARIAN_LOCK_DIR" 2>/dev/null || true' EXIT
         local rc=0
-        $LP_TIMEOUT $LP_NICE claude -p --agent procedures:librarian "Drain the transcript queue." || rc=$?
+        $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
         lp_note_timeout "$rc"
         rmdir "$LIBRARIAN_LOCK_DIR" 2>/dev/null || true
         trap - EXIT

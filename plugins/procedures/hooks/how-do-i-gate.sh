@@ -54,6 +54,10 @@ SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
 
 command -v jq >/dev/null 2>&1 || ge_release_or_failopen "HOW_DO_I_GATE" "how-do-i" "no-jq"
 
+# Headless one-shot (claude -p / SDK, e.g. the librarian drain): Skill cannot
+# run there, so the gate could never be cleared and would deny every Bash call.
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in sdk-cli) exit 0 ;; esac
+
 # Unlike gate-failopen.sh above, these fail with the recorder already loaded —
 # so they are BLIND fail-opens we can and do record, not silent ones.
 # shellcheck source=lib/turn-state.sh
