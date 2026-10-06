@@ -133,7 +133,7 @@ claude_never_ran() { [ ! -f "$CLAUDE_LOG" ]; }
   [ "$status" -eq 0 ]
   marker_present
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
-  grep -q -- '-p --agent procedures:librarian Drain the transcript queue.' "$STUB_BIN/last-claude-args"
+  grep -q -- '-p --permission-mode auto --agent procedures:librarian Drain the transcript queue.' "$STUB_BIN/last-claude-args"
 }
 
 @test "worker: a pre-seeded claim (concurrent holder) is never stolen — claude never invoked" {

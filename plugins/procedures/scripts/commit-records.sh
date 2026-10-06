@@ -396,15 +396,45 @@ if [ -n "$NORMALIZE_ONLY" ]; then
     exit 0
 fi
 
+# _safe_pull <check> <msg> — `pull --rebase --autostash` that never lets a bad
+# autostash through. A conflicting autostash pop still exits 0 and leaves
+# unmerged paths (conflict markers) that the later `git add` would commit; so on
+# any unmerged path, reset to the pre-pull HEAD and pop the stash there (it
+# applies cleanly onto the HEAD it was made from), then abort. Any other pull
+# failure restores a left-behind stash entry rather than dropping it.
+_safe_pull() {
+    local check="$1" msg="$2" pre nstash conflicts
+    pre="$(git -C "$ROOT" rev-parse HEAD)"
+    nstash="$(git -C "$ROOT" stash list | wc -l)"
+    if ! git -C "$ROOT" pull --rebase --autostash >/dev/null 2>&1; then
+        git -C "$ROOT" rebase --abort >/dev/null 2>&1 || true
+        _restore_stash "$nstash"
+        _abort "$check" "$msg"
+    fi
+    conflicts="$(git -C "$ROOT" ls-files -u | cut -f2 | sort -u | tr '\n' ' ')"
+    if [ -n "$conflicts" ]; then
+        git -C "$ROOT" reset -q --hard "$pre"
+        _restore_stash "$nstash"
+        _abort "$check" "upstream conflicts with local uncommitted edits in: ${conflicts% }; reset to pre-pull HEAD, local edits restored, nothing committed"
+    fi
+}
+
+# _restore_stash <count-before> — pop an autostash entry the pull left in
+# `git stash list`; if it will not apply, say so (it stays in the list).
+_restore_stash() {
+    [ "$(git -C "$ROOT" stash list | wc -l)" -gt "$1" ] || return 0
+    git -C "$ROOT" stash pop -q >/dev/null 2>&1 \
+        || printf '%s: WARN: autostash did not re-apply in %s; kept as stash@{0}\n' "$prog" "$ROOT" >&2
+}
+
 # ---- step 1: pull --rebase (only with an upstream) ----
 # Runs BEFORE normalize: normalization rewrites and `git mv`s tracked records,
 # and `git pull --rebase` refuses a dirty worktree/index. Sync first, then
-# normalize the local records against current upstream.
+# normalize the local records against current upstream. --autostash: tracked
+# files outside --paths (log-record.sh appends to mistakes.jsonl) are routinely
+# dirty; without it every pull fails and the gate blocks forever.
 if git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    if ! git -C "$ROOT" pull --rebase >/dev/null 2>&1; then
-        git -C "$ROOT" rebase --abort >/dev/null 2>&1 || true
-        _abort pull "initial 'git pull --rebase' failed for $ROOT; tree left clean"
-    fi
+    _safe_pull pull "initial 'git pull --rebase' failed for $ROOT; tree left clean"
 fi
 
 # ---- step 2: normalize ----
@@ -487,7 +517,16 @@ _rebuild_index
 # The gate — not the caller — stages the rebuilt index. FINAL_PATHS holds only
 # record .md paths (any caller-supplied .index was dropped up front); append it
 # now so the `git add` below stages the index alongside the records it describes.
-FINAL_PATHS+=(".index")
+# Stores that gitignore `.index/` keep it local-only: `git add` refuses an
+# ignored path, which would block every commit, so skip it there. --no-index:
+# without it, index files tracked before the ignore rule make check-ignore say
+# "not ignored", and `git add .index` then fails on the new ignored files.
+INDEX_IGNORED=
+if git -C "$ROOT" check-ignore -q --no-index .index 2>/dev/null; then
+    INDEX_IGNORED=1
+else
+    FINAL_PATHS+=(".index")
+fi
 
 # ---- step 6: structured commit ----
 # Constrain the transcript-derived commit metadata (what/why/source/evidence)
@@ -523,6 +562,10 @@ rm -f "$_meta_tmp"
 
 git -C "$ROOT" add -- ${FINAL_PATHS[@]+"${FINAL_PATHS[@]}"} 2>/dev/null || \
     _abort commit "git add failed for: ${FINAL_PATHS[*]}"
+# Ignored .index that still has tracked files: restage just those.
+if [ -n "$INDEX_IGNORED" ]; then
+    git -C "$ROOT" add -u -- .index 2>/dev/null || _abort commit "git add -u failed for: .index"
+fi
 
 subject="records(${STORE_BASENAME}): ${WHAT}"
 body="$(printf 'why: %s\nsource: %s\nevidence: %s' "$WHY" "$SOURCE" "$EVIDENCE")"
@@ -538,10 +581,7 @@ fi
 if git -C "$ROOT" remote | grep -q .; then
     if ! git -C "$ROOT" push >/dev/null 2>&1; then
         # rejected — retry once through a rebase
-        if ! git -C "$ROOT" pull --rebase >/dev/null 2>&1; then
-            git -C "$ROOT" rebase --abort >/dev/null 2>&1 || true
-            _abort push "push rejected and 'pull --rebase' could not fast-forward; rebase aborted, tree left clean, no force; files: ${FINAL_PATHS[*]}"
-        fi
+        _safe_pull push "push rejected and 'pull --rebase' could not fast-forward; rebase aborted, tree left clean, no force; files: ${FINAL_PATHS[*]}"
         # The rebase merged upstream records into the tree. Re-run the two checks
         # that the merged tree can invalidate: the fleet-safety duplicate-id scan
         # (a merged record may now collide) and the index rebuild (the committed

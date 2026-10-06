@@ -450,6 +450,92 @@ EOF
   git -C "$A" diff --quiet -- .index                                           # committed index == working copy
 }
 
+# _clone <name> — a clone of a bare remote of $ROOT (created on first call),
+# configured like _init_root. Sets REMOTE; prints nothing.
+_clone() {
+  REMOTE="$FIX/remote.git"
+  [ -d "$REMOTE" ] || git clone -q --bare "$ROOT" "$REMOTE"
+  git clone -q "$REMOTE" "$FIX/$1"
+  git -C "$FIX/$1" config user.email t@t.com; git -C "$FIX/$1" config user.name t
+  git -C "$FIX/$1" config commit.gpgsign false; git -C "$FIX/$1" config core.hooksPath /dev/null
+}
+
+@test "AC25: a dirty tracked file outside --paths (mistakes.jsonl) does not block the initial pull" {
+  _clone A; A="$FIX/A"
+  printf '{"a":1}\n' > "$A/mistakes.jsonl"
+  git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
+  printf '{"b":2}\n' >> "$A/mistakes.jsonl"                                  # log-record.sh-style append
+  _fm "$A/records/failure-modes/local.md" fm.local LOCAL
+  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+    --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$A" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
+  [ "$(git -C "$A" status --porcelain)" = " M mistakes.jsonl" ]               # left dirty, not committed
+}
+
+@test "AC27: an autostash that conflicts with upstream aborts, commits nothing, restores the local edit" {
+  _clone A; _clone B; A="$FIX/A"; B="$FIX/B"
+  _fm "$B/records/failure-modes/anchor.md" fm.anchor REMOTE-EDIT
+  git -C "$B" commit -qam remote; git -C "$B" push -q origin main
+  _fm "$A/records/failure-modes/anchor.md" fm.anchor LOCAL-EDIT
+  pre="$(git -C "$A" rev-parse HEAD)"
+  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+    --root "$A" --paths "records/failure-modes/anchor.md" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [pull]"* ]]
+  [ "$(git -C "$A" rev-parse HEAD)" = "$pre" ]                                 # nothing committed
+  grep -q LOCAL-EDIT "$A/records/failure-modes/anchor.md"                     # local edit restored
+  ! grep -q '<<<<<<<' "$A/records/failure-modes/anchor.md"
+  [ -z "$(git -C "$A" ls-files -u)" ]
+  [ -z "$(git -C "$A" stash list)" ]                                          # stash not left behind
+}
+
+@test "AC28: mistakes.jsonl appended both locally and upstream aborts cleanly, never commits markers" {
+  _clone A; _clone B; A="$FIX/A"; B="$FIX/B"
+  printf '{"a":1}\n' > "$A/mistakes.jsonl"
+  git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
+  git -C "$B" pull -q
+  printf '{"remote":1}\n' >> "$B/mistakes.jsonl"; git -C "$B" commit -qam remote; git -C "$B" push -q origin main
+  printf '{"local":1}\n' >> "$A/mistakes.jsonl"
+  _fm "$A/records/failure-modes/local.md" fm.local LOCAL
+  pre="$(git -C "$A" rev-parse HEAD)"
+  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+    --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [ "$(git -C "$A" rev-parse HEAD)" = "$pre" ]
+  grep -q '"local"' "$A/mistakes.jsonl"
+  ! grep -q '<<<<<<<' "$A/mistakes.jsonl"
+  [ -z "$(git -C "$A" ls-files -u)" ]
+  [ -z "$(git -C "$A" stash list)" ]
+  [ -f "$A/records/failure-modes/local.md" ]                                  # untracked record untouched
+}
+
+@test "AC26: a store that gitignores .index/ still commits the record (index left local)" {
+  printf '.index/\n' > "$ROOT/.gitignore"
+  git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index
+  _fm "$ROOT/records/failure-modes/local.md" fm.local LOCAL
+  _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
+  ! git -C "$ROOT" log -1 --name-only --format= | grep -q "^.index/"
+  [ -f "$ROOT/.index/map.tsv" ]                                                # still built locally
+}
+
+@test "AC29: index files tracked before .index/ was gitignored still get the rebuilt index staged" {
+  _fm "$ROOT/records/failure-modes/first.md" fm.first FIRST
+  _run_gate --root "$ROOT" --paths "records/failure-modes/first.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" ls-files -- .index | grep -q .                               # index tracked
+  printf '.index/\n' > "$ROOT/.gitignore"
+  git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index        # rule added afterwards
+  _fm "$ROOT/records/failure-modes/second.md" fm.second SECOND
+  _run_gate --root "$ROOT" --paths "records/failure-modes/second.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" log -1 --name-only --format= | grep -q "records/failure-modes/second.md"
+  git -C "$ROOT" log -1 --name-only --format= | grep -q "^.index/"           # rebuilt tracked index staged
+  [ -z "$(git -C "$ROOT" status --porcelain -- .index)" ]
+}
+
 # ---- AC23: -file metadata forms carry file content verbatim, no shell eval ----
 @test "AC23: --why-file/--source-file/--evidence-file pass file content verbatim into the commit body" {
   _fm "$ROOT/records/failure-modes/rec.md" fm.rec

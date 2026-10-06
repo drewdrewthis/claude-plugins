@@ -149,6 +149,13 @@ assistant_tool() {
   [[ "$output" == *"there is exactly one query"* ]]
 }
 
+@test "how-do-i-gate: headless sdk-cli sessions (librarian drain) are never gated" {
+  start_turn
+  run env PROCEDURES_ENABLE_HOW_DO_I_GATE=true CLAUDE_CODE_AGENT=librarian CLAUDE_CODE_ENTRYPOINT=sdk-cli bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "how-do-i-gate: a skill run in an EARLIER turn does not release this one" {
   # The invariant the deny message asserts, tested as behaviour rather than as
   # prose. Without this, the message could claim per-turn scope while the gate
