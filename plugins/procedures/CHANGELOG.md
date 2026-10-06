@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.2](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.1...procedures-v0.17.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* **procedures:** librarian drains one bounded batch; cursors advance only over issued lines ([#179](https://github.com/drewdrewthis/claude-plugins/issues/179)) ([6ed0f64](https://github.com/drewdrewthis/claude-plugins/commit/6ed0f64ca789b360f638e5dc5a706edc36248968))
+
 ## [0.17.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.0...procedures-v0.17.1) (2026-10-06)
 
 
