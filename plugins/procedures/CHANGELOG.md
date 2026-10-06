@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.17.1](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.0...procedures-v0.17.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **procedures:** --paths only accepts .md under the records dir or plans/; spec says --what is inline-only ([fd13a58](https://github.com/drewdrewthis/claude-plugins/commit/fd13a5829f19d2a23a3aab65602c5620ad7b98d8))
+* **procedures:** -file metadata flags require a regular file and keep trailing newlines ([c431aec](https://github.com/drewdrewthis/claude-plugins/commit/c431aec4b7298b30ee2f34be032c31dab561209b))
+* **procedures:** confine -file metadata to the procedures state dir; align spec and librarian doc ([fbce9f4](https://github.com/drewdrewthis/claude-plugins/commit/fbce9f4423d3339825c79ef42ff9f2c91c1af893))
+* **procedures:** file-based metadata flags and symlink rejection in commit gate ([4e27c5a](https://github.com/drewdrewthis/claude-plugins/commit/4e27c5a9f7cda8bdad7c9e912a0a77fa7bd2f284))
+* **procedures:** harden librarian commit gate per CodeRabbit round 2 ([2504038](https://github.com/drewdrewthis/claude-plugins/commit/250403836b59a6afe9042dea27413ed2cf6e22cf))
+* **procedures:** harden librarian commit gate per CodeRabbit round 2 ([2addaa7](https://github.com/drewdrewthis/claude-plugins/commit/2addaa7da8b34365aafc95e1db868d17563d2fc3))
+* **procedures:** let headless librarian drains run and commit ([#178](https://github.com/drewdrewthis/claude-plugins/issues/178)) ([91b25ff](https://github.com/drewdrewthis/claude-plugins/commit/91b25ff266ac06bc0397cd1910b1f8ad1f465a45))
+
+
+### Tests
+
+* **procedures:** AC19 asserts the index stays empty when a non-record path is rejected ([d3a06d8](https://github.com/drewdrewthis/claude-plugins/commit/d3a06d8388ef482d7e6442aa26a81c62c332f94a))
+
 ## [0.17.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.16.0...procedures-v0.17.0) (2026-09-07)
 
 
