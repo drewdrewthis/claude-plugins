@@ -450,11 +450,18 @@ EOF
   git -C "$A" diff --quiet -- .index                                           # committed index == working copy
 }
 
+# _clone <name> — a clone of a bare remote of $ROOT (created on first call),
+# configured like _init_root. Sets REMOTE; prints nothing.
+_clone() {
+  REMOTE="$FIX/remote.git"
+  [ -d "$REMOTE" ] || git clone -q --bare "$ROOT" "$REMOTE"
+  git clone -q "$REMOTE" "$FIX/$1"
+  git -C "$FIX/$1" config user.email t@t.com; git -C "$FIX/$1" config user.name t
+  git -C "$FIX/$1" config commit.gpgsign false; git -C "$FIX/$1" config core.hooksPath /dev/null
+}
+
 @test "AC25: a dirty tracked file outside --paths (mistakes.jsonl) does not block the initial pull" {
-  REMOTE="$FIX/remote.git"; git clone -q --bare "$ROOT" "$REMOTE"
-  A="$FIX/A"; git clone -q "$REMOTE" "$A"
-  git -C "$A" config user.email t@t.com; git -C "$A" config user.name t
-  git -C "$A" config commit.gpgsign false; git -C "$A" config core.hooksPath /dev/null
+  _clone A; A="$FIX/A"
   printf '{"a":1}\n' > "$A/mistakes.jsonl"
   git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
   printf '{"b":2}\n' >> "$A/mistakes.jsonl"                                  # log-record.sh-style append
@@ -464,6 +471,43 @@ EOF
   [ "$status" -eq 0 ]
   git -C "$A" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
   [ "$(git -C "$A" status --porcelain)" = " M mistakes.jsonl" ]               # left dirty, not committed
+}
+
+@test "AC27: an autostash that conflicts with upstream aborts, commits nothing, restores the local edit" {
+  _clone A; _clone B; A="$FIX/A"; B="$FIX/B"
+  _fm "$B/records/failure-modes/anchor.md" fm.anchor REMOTE-EDIT
+  git -C "$B" commit -qam remote; git -C "$B" push -q origin main
+  _fm "$A/records/failure-modes/anchor.md" fm.anchor LOCAL-EDIT
+  pre="$(git -C "$A" rev-parse HEAD)"
+  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+    --root "$A" --paths "records/failure-modes/anchor.md" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [pull]"* ]]
+  [ "$(git -C "$A" rev-parse HEAD)" = "$pre" ]                                 # nothing committed
+  grep -q LOCAL-EDIT "$A/records/failure-modes/anchor.md"                     # local edit restored
+  ! grep -q '<<<<<<<' "$A/records/failure-modes/anchor.md"
+  [ -z "$(git -C "$A" ls-files -u)" ]
+  [ -z "$(git -C "$A" stash list)" ]                                          # stash not left behind
+}
+
+@test "AC28: mistakes.jsonl appended both locally and upstream aborts cleanly, never commits markers" {
+  _clone A; _clone B; A="$FIX/A"; B="$FIX/B"
+  printf '{"a":1}\n' > "$A/mistakes.jsonl"
+  git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
+  git -C "$B" pull -q
+  printf '{"remote":1}\n' >> "$B/mistakes.jsonl"; git -C "$B" commit -qam remote; git -C "$B" push -q origin main
+  printf '{"local":1}\n' >> "$A/mistakes.jsonl"
+  _fm "$A/records/failure-modes/local.md" fm.local LOCAL
+  pre="$(git -C "$A" rev-parse HEAD)"
+  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+    --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [ "$(git -C "$A" rev-parse HEAD)" = "$pre" ]
+  grep -q '"local"' "$A/mistakes.jsonl"
+  ! grep -q '<<<<<<<' "$A/mistakes.jsonl"
+  [ -z "$(git -C "$A" ls-files -u)" ]
+  [ -z "$(git -C "$A" stash list)" ]
+  [ -f "$A/records/failure-modes/local.md" ]                                  # untracked record untouched
 }
 
 @test "AC26: a store that gitignores .index/ still commits the record (index left local)" {
