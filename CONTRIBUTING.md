@@ -1,8 +1,8 @@
 # Contributing
 
 This repo ships **machinery only** — plugins installed into agent sessions
-(`about-my-person`, `delegation`, `heartbeats`, `just-recipes`, `procedures`,
-`recall`, `take-note`). Generated knowledge (records,
+(`about-my-person`, `decide`, `delegation`, `heartbeats`, `just-recipes`,
+`procedures`, `recall`, `ship`, `take-note`). Generated knowledge (records,
 notes, ABOUT_MY_PERSON.md) lives on the host under `~/.claude/references/**`
 or `~/workspace/**`, never in this repo. If a change would write a record
 file here, it's in the wrong place.

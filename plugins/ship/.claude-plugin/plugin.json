@@ -1,0 +1,6 @@
+{
+  "name": "ship",
+  "version": "0.1.0",
+  "description": "The one delivery flow for shipping code — /ship:ship walks the four modes (LAUNCH, IMPLEMENT, REVIEW/QA, PR+MONITOR), delegating every edit, demanding use-proof, and driving the PR to green. Vendored from orchard-codex@develop-sweatshop; the orchardist scripts/hooks and ~/.knowledge records it cites stay on the host.",
+  "author": { "name": "Drü" }
+}
