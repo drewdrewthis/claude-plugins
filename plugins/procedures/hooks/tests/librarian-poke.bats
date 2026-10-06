@@ -177,6 +177,24 @@ EOF
   [ ! -d "$LIBRARIAN_LOCK.d" ]
 }
 
+@test "worker: a transcript the batch skipped is logged even when the batch succeeds" {
+  unread_line
+  printf '{"type":"user","message":{"content":"BOOM"}}\n' > "$PROJ/bad.jsonl"
+  local real; real="$(command -v jq)"
+  cat > "$STUB_BIN/jq" <<EOF
+#!/usr/bin/env bash
+[[ " \$* " == *" -R "* ]] || exec "$real" "\$@"
+in="\$(cat)"
+[[ "\$in" == *BOOM* ]] && exit 5
+printf '%s\n' "\$in" | "$real" "\$@"
+EOF
+  chmod +x "$STUB_BIN/jq"
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  grep -q "librarian-batch: skipped $PROJ/bad.jsonl" "$HOME/.local/state/procedures/librarian/librarian-poke.log"
+}
+
 # HOME is a mktemp dir (setup), so the DEFAULT state resolver lands at
 # $HOME/.local/state/procedures/librarian — already isolated inside this
 # test's tmp tree, no PROCEDURES_STATE_DIR/XDG override needed.
