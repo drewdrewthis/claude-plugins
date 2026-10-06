@@ -69,6 +69,8 @@ run_poke_payload() {
 marker_absent()  { [ ! -f "$TURN_STATE_DIR/$SID.librarian_poked" ]; }
 marker_present() { [ -f "$TURN_STATE_DIR/$SID.librarian_poked" ]; }
 claude_never_ran() { [ ! -f "$CLAUDE_LOG" ]; }
+# An unread line, so the worker's batch issues something and claude runs.
+unread_line() { user_prompt; }
 
 @test "hooks.json registers librarian-poke on Stop with async, no asyncRewake" {
   jq -e '.hooks.Stop[] | .hooks[] | select(.command == "bash ${CLAUDE_PLUGIN_ROOT}/hooks/librarian-poke.sh")
@@ -145,10 +147,34 @@ claude_never_ran() { [ ! -f "$CLAUDE_LOG" ]; }
 }
 
 @test "worker: an uncontended claim runs the librarian once and cleans up after" {
+  unread_line
   LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
   [ ! -d "$LIBRARIAN_LOCK.d" ]   # released after the run
+}
+
+@test "worker: the batch is issued before claude runs, inside the claim" {
+  unread_line
+  STATE="$HOME/.local/state/procedures/librarian"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+cp "$STATE/batch.manifest" "$STUB_BIN/manifest-at-call" 2>/dev/null || true
+EOF
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  grep -q "^$SID	0	1$" "$STUB_BIN/manifest-at-call"
+}
+
+@test "worker: an empty batch skips claude entirely" {
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  [ -f "$HOME/.local/state/procedures/librarian/batch.manifest" ]
+  [ ! -s "$HOME/.local/state/procedures/librarian/batch.manifest" ]
+  [ ! -d "$LIBRARIAN_LOCK.d" ]
 }
 
 # HOME is a mktemp dir (setup), so the DEFAULT state resolver lands at
@@ -251,6 +277,7 @@ lp_gate_setup() {
 }
 
 @test "load gate: under both ceilings proceeds — claude runs" {
+  unread_line
   lp_gate_setup
   printf '1.00 0.50 0.10 1/200 123\n' > "$LP_LOADAVG_FILE"
   printf 'cpu 1010 0 1010 8080 110 0 0 0\n' > "$BATS_TEST_TMPDIR/stat-under"
@@ -287,6 +314,7 @@ lp_gate_setup() {
 }
 
 @test "load gate: unreadable loadavg AND stat fail open — claude runs, both fail-opens logged" {
+  unread_line
   lp_gate_setup
   rm -f "$LP_LOADAVG_FILE" "$LP_STAT_FILE"   # unreadable: never created
 

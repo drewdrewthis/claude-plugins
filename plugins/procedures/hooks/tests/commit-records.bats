@@ -485,7 +485,7 @@ _clone() {
   [[ "$output" == *"BLOCK [pull]"* ]]
   [ "$(git -C "$A" rev-parse HEAD)" = "$pre" ]                                 # nothing committed
   grep -q LOCAL-EDIT "$A/records/failure-modes/anchor.md"                     # local edit restored
-  ! grep -q '<<<<<<<' "$A/records/failure-modes/anchor.md"
+  ! grep -q '<<<<<<<' "$A/records/failure-modes/anchor.md" || false
   [ -z "$(git -C "$A" ls-files -u)" ]
   [ -z "$(git -C "$A" stash list)" ]                                          # stash not left behind
 }
@@ -504,7 +504,7 @@ _clone() {
   [ "$status" -ne 0 ]
   [ "$(git -C "$A" rev-parse HEAD)" = "$pre" ]
   grep -q '"local"' "$A/mistakes.jsonl"
-  ! grep -q '<<<<<<<' "$A/mistakes.jsonl"
+  ! grep -q '<<<<<<<' "$A/mistakes.jsonl" || false
   [ -z "$(git -C "$A" ls-files -u)" ]
   [ -z "$(git -C "$A" stash list)" ]
   [ -f "$A/records/failure-modes/local.md" ]                                  # untracked record untouched
@@ -517,7 +517,7 @@ _clone() {
   _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
   [ "$status" -eq 0 ]
   git -C "$ROOT" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
-  ! git -C "$ROOT" log -1 --name-only --format= | grep -q "^.index/"
+  ! git -C "$ROOT" log -1 --name-only --format= | grep -q "^.index/" || false
   [ -f "$ROOT/.index/map.tsv" ]                                                # still built locally
 }
 
