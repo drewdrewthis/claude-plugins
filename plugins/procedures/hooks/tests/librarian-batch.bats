@@ -1,7 +1,9 @@
 #!/usr/bin/env bats
 # librarian-batch.sh issues one bounded batch of unread transcript lines;
-# librarian-advance.sh is the only way a cursor moves, and only within what
-# the batch issued — so a drain can never mark unread lines as read.
+# librarian-advance.sh refuses to move a cursor outside the range the current
+# manifest issued. What is enforced: a cursor never passes the end of what was
+# issued. That the issued lines were actually read is the librarian prompt's
+# rule, not something these scripts can check.
 #
 # Run: bats hooks/tests/librarian-batch.bats
 
@@ -123,4 +125,34 @@ _issued() { awk -F'\t' -v s="$1" '$1 == s { print $2 " " $3 }' "$PROCEDURES_STAT
   _batch
   [ "$(_issued m)" = "0 3" ]
   [ "$(grep -c '^\[L' "$PROCEDURES_STATE_DIR/batch.txt")" -eq 1 ]
+}
+
+@test "lines jq cannot distill (in the middle and last) keep line numbers and the full range" {
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"one"}}' \
+    '{"type":"user","message":"str"}' \
+    '{"type":"user","message":{"content":["bare",{"type":"text","text":{"x":1}}]}}' \
+    '{"type":"user","message":{"content":"four"}}' \
+    '{"type":"assistant","message":"str"}' > "$PROJ/m.jsonl"
+  _transcript later 2 0
+  _batch
+  [ "$(_issued m)" = "0 5" ]                                                  # bad last line does not stall
+  [ "$(_issued later)" = "0 2" ]                                              # nor block younger transcripts
+  grep -q '^\[L1\] user: one$' "$PROCEDURES_STATE_DIR/batch.txt"
+  grep -q '^\[L3\] user: bare$' "$PROCEDURES_STATE_DIR/batch.txt"
+  grep -q '^\[L4\] user: four$' "$PROCEDURES_STATE_DIR/batch.txt"
+  [ "$(grep -c '^\[L' "$PROCEDURES_STATE_DIR/batch.txt")" -eq 5 ]              # m: L1 L3 L4, later: L1 L2
+  [ "$(grep -c '^\[L5\]' "$PROCEDURES_STATE_DIR/batch.txt")" -eq 0 ]
+}
+
+@test "a failed batch leaves no manifest behind, so nothing stale can be advanced" {
+  _transcript t 3 1
+  _batch
+  [ "$(_issued t)" = "0 3" ]
+  LIBRARIAN_BATCH_BYTES=nope run bash "$SCRIPTS/librarian-batch.sh"
+  [ "$status" -ne 0 ]
+  [ ! -e "$PROCEDURES_STATE_DIR/batch.manifest" ]
+  _advance t 3
+  [ "$status" -ne 0 ]
+  [ ! -f "$PROCEDURES_STATE_DIR/cursors/t.line" ]
 }

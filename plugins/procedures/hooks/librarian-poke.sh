@@ -270,6 +270,21 @@ lp_claim() {
     return 0
 }
 
+# lp_drain — under the claim: issue this drain's batch, then run the librarian
+# only when the batch issued something. The poke, not the agent, runs
+# librarian-batch.sh, so the agent cannot re-issue itself a bigger batch; an
+# empty manifest (or a failed batch, which leaves none) spends no tokens.
+lp_drain() {
+    local out rc=0
+    if ! out="$(bash "$SCRIPT_DIR/../scripts/librarian-batch.sh" 2>&1)"; then
+        lp_log "librarian-poke: batch failed, drain skipped: $(printf '%s' "$out" | tr '\n' ' ')"
+        return 0
+    fi
+    [ -s "$(lp_state_dir)/batch.manifest" ] || return 0
+    $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
+    lp_note_timeout "$rc"
+}
+
 # lp_worker — settle, then run the librarian under a single-writer claim.
 # Everything past the settle is best-effort: no claude binary, a lost claim,
 # or a nonzero `claude -p` exit all degrade silently.
@@ -287,9 +302,7 @@ lp_worker() {
     # deterministic on any host rather than depending on this machine's own
     # tool availability (mirrors LIBRARIAN_SYNC's precedent).
     if [ "${LIBRARIAN_NO_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
-        local rc=0
-        flock -n "$LIBRARIAN_LOCK" $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
-        lp_note_timeout "$rc"
+        ( flock -n 9 || exit 0; lp_drain ) 9>"$LIBRARIAN_LOCK" 2>/dev/null || true
         return 0
     fi
 
@@ -298,9 +311,7 @@ lp_worker() {
     # trap so a crash does not wedge every future poke shut.
     if lp_claim; then
         trap 'rmdir "$LIBRARIAN_LOCK_DIR" 2>/dev/null || true' EXIT
-        local rc=0
-        $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
-        lp_note_timeout "$rc"
+        lp_drain
         rmdir "$LIBRARIAN_LOCK_DIR" 2>/dev/null || true
         trap - EXIT
     fi

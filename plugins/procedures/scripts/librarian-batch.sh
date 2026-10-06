@@ -30,6 +30,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE="$(procedures_state_dir)"
 CURSORS="$STATE/cursors"
 MANIFEST="$STATE/batch.manifest"
+# Drop the previous manifest before anything can fail: an aborted run must
+# never leave stale ranges for librarian-advance.sh to honour. The new one is
+# written to a temp file and moved into place only on success.
+rm -f "$MANIFEST"
 OUT="$STATE/batch.txt"
 BUDGET="${LIBRARIAN_BATCH_BYTES:-200000}"
 CLIP=300
@@ -49,30 +53,37 @@ mkdir -p "$CURSORS"
 
 _mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 
-# One output line per input line: the distilled text with newlines folded to
-# \x1e (unfolded by awk below), or empty for unparseable / text-free lines.
+# Exactly one output line per input line — awk numbers lines by position, so
+# a line that emitted nothing would misnumber every later one. The distilled
+# text has newlines folded to \x1e (unfolded by awk below); an unparseable,
+# text-free or unexpectedly shaped line yields "" (the try/catch guarantees it).
 # shellcheck disable=SC2016
 DISTILL='
-def clip($n): if length > $n then .[0:$n] + "…[+\(length - $n) chars]" else . end;
-def blocks: if type == "string" then [{type: "text", text: .}] elif type == "array" then . else [] end;
-def flat: if type == "string" then . elif type == "array" then map(.text? // (tostring)) | join(" ") else tostring end;
-(try fromjson catch null) as $j
-| if ($j | type) != "object" or (($j.type // "") | IN("user", "assistant") | not) then ""
-  else $j.type as $t
-  | [ ($j.message.content // "" | blocks)[]
-      | if .type == "text" then "\($t): \(.text // "" | clip($budget))"
-        elif .type == "tool_use" then "\($t) tool_use \(.name // "?"): \(.input | tojson | clip($clip))"
-        elif .type == "tool_result" then "tool_result: \(.content | flat | clip($clip))"
-        else empty end ]
-  | join("\n")
-  end
-| gsub("\u001e"; " ") | gsub("\n"; "\u001e")'
+def clip($n): tostring | if length > $n then .[0:$n] + "…[+\(length - $n) chars]" else . end;
+def blocks: if type == "string" then (if . == "" then [] else [{type: "text", text: .}] end)
+  elif type == "array" then map(if type == "string" then {type: "text", text: .} elif type == "object" then . else empty end)
+  else [] end;
+def flat: if type == "string" then . elif type == "array" then map(.text? // tostring) | join(" ") else tostring end;
+try (
+  (try fromjson catch null) as $j
+  | if ($j | type) != "object" or (($j.type // "") | IN("user", "assistant") | not) then ""
+    else $j.type as $t
+    | [ (($j.message | objects | .content) // "" | blocks)[]
+        | if .type == "text" then "\($t): \(.text // "" | clip($budget))"
+          elif .type == "tool_use" then "\($t) tool_use \(.name // "?"): \(.input | tojson | clip($clip))"
+          elif .type == "tool_result" then "tool_result: \(.content | flat | clip($clip))"
+          else empty end ]
+    | join("\n")
+    end
+  | gsub("\u001e"; " ") | gsub("\n"; "\u001e")
+) catch ""'
 
 used=0
 while IFS=$'\t' read -r _ f; do
     [ "$used" -lt "$BUDGET" ] || break
     slug="$(basename "$f" .jsonl)"
-    total="$(wc -l < "$f" | tr -d ' ')"
+    total="$(wc -l < "$f" 2>/dev/null | tr -d ' ')" || continue   # vanished/unreadable since find
+    [ -n "$total" ] || continue
     cur=0
     [ -f "$CURSORS/$slug.line" ] && cur="$(tr -dc '0-9' < "$CURSORS/$slug.line")"
     cur="${cur:-0}"

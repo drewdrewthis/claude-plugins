@@ -1,6 +1,6 @@
 ---
 name: librarian
-description: "Single-writer knowledge intake: drains one bounded batch of unread session-transcript lines (librarian-batch.sh) and commits what holds up — mistakes, decisions, solutions, procedure corrections — into the knowledge store repos, one git commit per store root. Woken by hooks/librarian-poke.sh once a qualifying turn has settled. Same evidence bar as procedure-evolver: every claim traceable to transcript content, nothing invented. Supersedes procedure-evolver's per-turn dispatch; procedure-evolver itself stays for its evolve-sweep rollback path."
+description: "Single-writer knowledge intake: drains one bounded batch of unread session-transcript lines (issued by librarian-poke.sh) and commits what holds up — mistakes, decisions, solutions, procedure corrections — into the knowledge store repos, one git commit per store root. Woken by hooks/librarian-poke.sh once a qualifying turn has settled. Same evidence bar as procedure-evolver: every claim traceable to transcript content, nothing invented. Supersedes procedure-evolver's per-turn dispatch; procedure-evolver itself stays for its evolve-sweep rollback path."
 model: sonnet
 tools: Read, Grep, Glob, Write, Edit, Bash
 ---
@@ -21,16 +21,17 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 
 # Steps
 
-1. **Get this drain's batch.** Run
-   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/librarian-batch.sh"`. It owns transcript
-   selection — the 7-day mtime window, cursor comparison, the truncation reset to 0,
-   oldest unread first — and writes ONE bounded batch (about 200 KB of distilled text,
-   `LIBRARIAN_BATCH_BYTES`) to `<state-dir>/batch.txt`, plus the issued ranges to
-   `<state-dir>/batch.manifest` (`slug<TAB>start<TAB>end`: lines start+1..end of that
-   transcript were issued). `<state-dir>` is the path it prints. Each `[L<n>]` in the
-   batch is transcript line n, under a `=== <slug> (<path>) ===` header. An empty
-   manifest means there is nothing to drain: stop. Do not glob, `wc`, or read the raw
-   transcripts yourself to find more work — the batch is the whole of this drain.
+1. **Find this drain's batch.** `hooks/librarian-poke.sh` has already issued it, under the
+   same claim you run in, before starting you: one bounded batch of distilled unread
+   transcript lines (oldest first, split on line boundaries), in your state dir —
+   `bash -c 'source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stores.sh" && procedures_state_dir'`
+   — as `batch.txt`, with the issued ranges in `batch.manifest`
+   (`slug<TAB>start<TAB>end`: lines start+1..end of that transcript were issued). Each
+   `[L<n>]` in the batch is transcript line n, under a `=== <slug> (<path>) ===` header.
+   Never run `librarian-batch.sh` yourself and never write anything under `cursors/`:
+   the batch you were given is the whole of this drain, and `librarian-advance.sh`
+   (step 7) is the only way a cursor moves. Do not glob, `wc`, or read the raw
+   transcripts to find more work.
 
 2. **Read the entire batch.** Read `batch.txt` from start to end, in successive
    offset/limit chunks until the Read tool returns nothing more. No sampling, no
@@ -116,8 +117,8 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 
 7. **Advance cursors with `librarian-advance.sh`, and only that.**
    `bash "${CLAUDE_PLUGIN_ROOT}/scripts/librarian-advance.sh" <slug> <end>` is the only
-   way a cursor moves: never write a `cursors/*.line` file yourself. It refuses an `<end>`
-   past the end the batch issued for that slug. Advance a slug to its issued end once
+   way a cursor moves: never write a `cursors/*.line` file yourself, and never re-issue the
+   batch. It refuses an `<end>` past the end the batch issued for that slug. Advance a slug to its issued end once
    every item you extracted from that range is either committed by the gate (step 6) or
    explicitly queued in `grooming-queue.md` — and an item may be queued only after you
    read its lines. "Queued" never covers lines you did not read: if you did not read part
@@ -147,8 +148,8 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
   procedure-evolver you have no synchronous caller to hand it to.
 - Never force-push. Never commit to any repo other than a configured store root — never
   this plugin's own repo, never a project code repo.
-- One drain is one batch from `librarian-batch.sh`. Never widen it by reading transcripts
-  outside the batch. If it surfaces grooming beyond what step 5 naturally touches, queue
+- One drain is the one batch librarian-poke.sh issued. Never widen it by reading
+  transcripts outside the batch or by re-issuing it. If it surfaces grooming beyond what step 5 naturally touches, queue
   it rather than expanding the pass.
 - Nothing reads your chat output — `librarian-poke.sh`'s detach path redirects your stdout
   to `/dev/null`. Do not write a "report back in one block" the way procedure-evolver does;
