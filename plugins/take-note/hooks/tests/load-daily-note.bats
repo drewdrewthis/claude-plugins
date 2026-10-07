@@ -62,7 +62,7 @@ setup() {
   [ "${#lines[@]}" -le 40 ]
   [[ "$output" == *"$TODAY"* ]]
   [[ "$output" == *"LAST_LINE_BODY_UNIQUE"* ]]
-  [[ "$output" != *"TOP_LINE_BODY_UNIQUE"* ]]
+  [[ "$output" != *"TOP_OLD_UNIQUE"* ]]
   [[ "$output" == *"EARLY_NEWEST_UNIQUE (early item)"* ]]
   [[ "$output" == *"Latest 20 entries (of 500 lines):"* ]]
 }
