@@ -23,11 +23,11 @@ fi
 chosen=""
 label=""
 today="$(notes_today_file)"
-if [ -s "$today" ]; then
+if [ -s "$today" ] && [ -r "$today" ]; then
   chosen="$today"
 else
   prev="$(notes_prev_file)"
-  if [ -n "${prev:-}" ] && [ -s "$prev" ]; then
+  if [ -n "${prev:-}" ] && [ -s "$prev" ] && [ -r "$prev" ]; then
     chosen="$prev"
     label=" (previous day — no note yet today)"
   fi

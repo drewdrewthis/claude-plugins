@@ -170,3 +170,28 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" != *"Open items from"* ]]
 }
+
+# (7) Today file is unreadable (no permissions) but not empty: falls back to
+# previous day with its label, and exit 0 (fail-open). Skip if running as root.
+@test "today file unreadable falls back to previous day, exit 0" {
+  [ "$(id -u)" -eq 0 ] && skip "Test skipped when running as root"
+
+  {
+    echo "### yesterday open item"
+    echo "- 09:00 note"
+  } > "$PREV"
+  {
+    echo "### unreadable item"
+    echo "- 10:00 note"
+  } > "$TODAY"
+  chmod 000 "$TODAY"
+
+  run "$HOOK"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$PREV"* ]]
+  [[ "$output" == *"(previous day — no note yet today)"* ]]
+  [ "$(printf '%s\n' "$output" | grep -c '^## Work notes')" -eq 1 ]
+
+  # Cleanup: restore permissions for teardown
+  chmod 644 "$TODAY"
+}
