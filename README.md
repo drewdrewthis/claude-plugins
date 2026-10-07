@@ -287,10 +287,10 @@ the file path directly.
 
 ### take-note (0.1.0)
 
-Daily working notes: `/take-note` scratchpad (one file per day, rollover with
-carry-over) + a SessionStart hook loading today's (or yesterday's) note and
-`ABOUT_MY_PERSON.md` when present. Config: `KNOWLEDGE_WS` (default
-`~/workspace`) or `NOTES_DIR` directly.
+Shared work notes for every agent on the machine: `/take-note` (one file per
+day) + a capped SessionStart loader (path, open items, yesterday's uncarried open
+items, 20 newest entries of today's or the previous day's note). Config: `NOTES_DIR` (default
+`~/agent-resources/notes`).
 
 ### recall (0.1.0)
 
