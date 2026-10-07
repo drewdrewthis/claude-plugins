@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resolve today's daily-note file for the tenant workspace.
+# Resolve today's daily-note file in the shared notes dir.
 # Prints TODAY=<path> PREV=<path|none> NEW=<yes|no>
 set -euo pipefail
 

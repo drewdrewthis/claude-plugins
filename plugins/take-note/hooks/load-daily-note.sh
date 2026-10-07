@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# SessionStart hook — load the tenant's working context into the session:
-# who their person is (ABOUT_MY_PERSON.md) + today's and the previous daily
-# note. Output goes to stdout → injected as context. Fail-open: never block
+# SessionStart hook — load working context into the session: who their person
+# is (ABOUT_MY_PERSON.md) + ONE capped daily note (today's, else the newest
+# previous) + the previous day's open items not yet carried to today. Output goes to stdout → injected as context. Fail-open: never block
 # a session over a missing file.
 set -uo pipefail
 
@@ -19,7 +19,7 @@ fi
 
 # Load exactly ONE file: today's if it has content, else the previous day's if
 # it has content, else nothing. The loader is capped — an open-item index plus
-# the file's tail — so a long shared note cannot flood the session context.
+# the 20 newest entries — so a long shared note cannot flood the session context.
 chosen=""
 label=""
 today="$(notes_today_file)"
@@ -43,8 +43,19 @@ if [ -n "$chosen" ]; then
   else
     echo "- none"
   fi
-  echo "Last 20 lines (of $total):"
-  tail -n 20 "$chosen"
+  echo "Latest 20 entries (of $total lines):"
+  notes_latest_entries "$chosen" 20
+  if [ "$chosen" = "$today" ]; then
+    prev="$(notes_prev_file)"
+    if [ -n "${prev:-}" ]; then
+      carry="$(notes_uncarried_items "$prev" "$today")"
+      if [ -n "$carry" ]; then
+        echo
+        echo "Open items from $(basename "$prev" .md) (not carried over yet — add the heading to today's file when you touch it):"
+        printf '%s\n' "$carry" | sed 's/^/- /'
+      fi
+    fi
+  fi
   echo
   echo "Read the full file when your task touches other work. Write via /take-note."
 fi

@@ -8,13 +8,14 @@ allowed-tools:
   - Write
   - Edit
   - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/note-file.sh)
+  - Bash(date +%H:%M)
 ---
 
 # /take-note — shared work notes
 
 One file per day, shared by every agent on the machine: what is live today. Matters in a month, or is a durable fact about your person → not here (`/about-my-person`, auto-memory, `/recall`).
 
-The SessionStart hook loads ONE file: today's, or if none yet, the previous day's. It prints only the path, open items, and the last 20 lines. Read the full file when your task touches other work.
+The SessionStart hook loads ONE file: today's, or if none yet, the previous day's. It prints the path, today's open items, yesterday's uncarried open items, and the 20 NEWEST entries (by time, each labelled with its item). Read the full file when your task touches other work.
 
 ## Format
 
@@ -37,9 +38,10 @@ Keep exactly (a hook parses it):
 ## Steps
 
 1. Run `bash ${CLAUDE_SKILL_DIR}/scripts/note-file.sh`. It prints `TODAY=`, `PREV=`, `NEW=`.
-2. If `NEW=yes`: `Write` TODAY with only the title line and an empty `### Scratch`. Do NOT carry items over — start-day does that. `Write` is for this case only, never an existing file; if it fails because the file now exists, go to step 3.
+2. If `NEW=yes`: `Write` TODAY with only the title line and an empty `### Scratch`. Do NOT copy yesterday's file: the SessionStart hook lists yesterday's open items not yet in today's file; when you work on one, add its heading to today's file (step 4) — that is the carry-over. `Write` is for this case only, never an existing file; if it fails because the file now exists, go to step 3.
 3. `Read` TODAY.
-4. `Edit` in one line under the item's heading, or add a new heading before `### Scratch`. Anchor on the item heading line (`### <item>`), which others do not edit. If the file changed since your Read but your anchor text did not, Edit applies cleanly and keeps the other agent's lines. If the anchor text changed, Edit fails with "File has been modified since read". On any Edit failure: re-`Read`, retry the Edit.
+4. Get the time: `date +%H:%M` (never write 00:00). `Edit` to add one line at the END of the item's block (after its last `- ` line), or a new item heading just before `### Scratch`. `old_string` must be one or more WHOLE lines including the trailing newline: the item's last `- ` line plus its `\n`, or `### <item>\n` if the item is empty. Never anchor on part of a line.
+   If Edit fails, or succeeds with a note that the file was modified on disk: re-`Read`, check your line landed intact (fix it with another Edit if not), and retry if needed.
 5. No note given: `Read` TODAY, then tidy via `Edit` only — mark finished items ` — done`, delete noise.
 
 ## Boundaries

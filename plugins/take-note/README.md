@@ -3,7 +3,7 @@
 Shared work notes for every agent on the machine.
 
 - `/take-note` skill: agents jot plans, handoffs, blockers and gotchas in one daily file.
-- SessionStart loader (capped): prints the note path, open items, and the last 20 lines. It loads one file: today's, or the previous day's if today has none.
+- SessionStart loader (capped): prints the note path, today's open items, yesterday's uncarried open items, and the 20 newest entries (by time, each labelled with its item). It loads one file: today's, or the previous day's if today has none.
 
 ## Note format
 

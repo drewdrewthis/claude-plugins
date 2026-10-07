@@ -288,8 +288,8 @@ the file path directly.
 ### take-note (0.1.0)
 
 Shared work notes for every agent on the machine: `/take-note` (one file per
-day) + a capped SessionStart loader (path, open items, last 20 lines of today's
-or the previous day's note). Config: `NOTES_DIR` (default
+day) + a capped SessionStart loader (path, open items, yesterday's uncarried open
+items, 20 newest entries of today's or the previous day's note). Config: `NOTES_DIR` (default
 `~/agent-resources/notes`).
 
 ### recall (0.1.0)

@@ -43,14 +43,16 @@ setup() {
 # top of the file is not.
 @test "long today file is capped to a small output with only the tail" {
   {
-    echo "### open item one"
-    echo "- TOP_LINE_BODY_UNIQUE"
+    echo "### early item"
+    echo "- 09:00 EARLY_NEWEST_UNIQUE"
+    echo "### busy item"
+    echo "- 01:00 TOP_OLD_UNIQUE"
     i=0
-    while [ "$i" -lt 497 ]; do
-      echo "filler line $i"
+    while [ "$i" -lt 495 ]; do
+      echo "- 02:00 filler $i"
       i=$((i + 1))
     done
-    echo "LAST_LINE_BODY_UNIQUE"
+    echo "- 03:00 LAST_LINE_BODY_UNIQUE"
   } > "$TODAY"
   # Sanity: the fixture is 500 lines.
   [ "$(wc -l < "$TODAY" | tr -d ' ')" -eq 500 ]
@@ -61,7 +63,8 @@ setup() {
   [[ "$output" == *"$TODAY"* ]]
   [[ "$output" == *"LAST_LINE_BODY_UNIQUE"* ]]
   [[ "$output" != *"TOP_LINE_BODY_UNIQUE"* ]]
-  [[ "$output" == *"Last 20 lines (of 500):"* ]]
+  [[ "$output" == *"EARLY_NEWEST_UNIQUE (early item)"* ]]
+  [[ "$output" == *"Latest 20 entries (of 500 lines):"* ]]
 }
 
 # (2) Open items are listed; closed (" — done") items and Scratch are excluded.
@@ -77,6 +80,8 @@ setup() {
     echo "- 04:00 scratch text"
     echo "### another open item"
     echo "- 05:00 note"
+    echo "### scratch  "
+    echo "- 06:00 more scratch"
   } > "$TODAY"
 
   run "$HOOK"
@@ -88,6 +93,7 @@ setup() {
   # (open items are emitted with a "- " prefix and the "### " stripped).
   [[ "$output" != *"- closed thread"* ]]
   [[ "$output" != *"- Scratch"* ]]
+  [[ "$output" != *"- scratch"* ]]
 }
 
 # (3) No today file → the previous day's file is loaded with the previous-day
@@ -125,4 +131,42 @@ setup() {
   run "$HOOK"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Read the full file when your task touches other work. Write via /take-note."* ]]
+}
+
+# (6) Previous-day open items missing from today are listed; ones today already
+# has (even closed) and ones closed yesterday are not.
+@test "uncarried previous-day items listed, carried and done ones hidden" {
+  {
+    echo "### carried item"
+    echo "- 09:00 a"
+    echo "### missing item"
+    echo "- 09:01 b"
+    echo "### finished item — done"
+    echo "- 09:02 c"
+    echo "### closed today item"
+    echo "- 09:03 d"
+  } > "$PREV"
+  {
+    echo "### carried item"
+    echo "- 10:00 a"
+    echo "### closed today item — done"
+    echo "- 10:01 e"
+  } > "$TODAY"
+
+  run "$HOOK"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Open items from 2000-01-01 (not carried over yet"* ]]
+  [[ "$output" == *"- missing item"* ]]
+  after="${output#*Open items from}"
+  [[ "$after" != *"- carried item"* ]]
+  [[ "$after" != *"finished item"* ]]
+  [[ "$after" != *"closed today item"* ]]
+}
+
+@test "no uncarried section when nothing is missing from today" {
+  echo "### same item" > "$PREV"
+  printf '### same item\n- 10:00 x\n' > "$TODAY"
+  run "$HOOK"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Open items from"* ]]
 }
