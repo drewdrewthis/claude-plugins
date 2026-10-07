@@ -28,7 +28,7 @@
     {
       "name": "take-note",
       "source": "./plugins/take-note",
-      "description": "Daily working notes: /take-note scratchpad + SessionStart daily-note loader."
+      "description": "Shared work notes for every agent on the machine: /take-note (item-keyed daily file, surgical Edit-only writes) + capped SessionStart loader."
     },
     {
       "name": "recall",
