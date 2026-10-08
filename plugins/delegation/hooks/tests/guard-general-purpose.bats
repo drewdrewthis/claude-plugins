@@ -5,7 +5,7 @@
 #   deny    Agent/Task with subagent_type general-purpose (any case) or none; the
 #           reason names the delegation plugin and an existing route-delegation.sh
 #   allow   any other subagent_type, any other tool -> empty output, exit 0
-#   open    invalid JSON -> fails open (empty output, exit 0)
+#   open    invalid JSON, or no jq on PATH -> fails open (empty stdout, exit 0; jq miss logged to stderr)
 #   bash3   every hook run goes through /bin/bash (3.2 on the macOS CI leg)
 #   wiring  hooks.json is valid JSON and its command resolves to the script
 #
@@ -71,6 +71,20 @@ assert_denied() {
   [ -z "$output" ]
 }
 
+@test "no jq on PATH -> fails open: exit 0, no stdout, stderr names the miss" {
+  err="$(mktemp)"
+  out="$(printf '%s' "$(payload Agent general-purpose)" | PATH=/nonexistent /bin/bash "$HOOK" 2>"$err")"
+  rc=$?
+  [ "$rc" -eq 0 ]
+  [ -z "$out" ]
+  grep -q "jq missing, failing open" "$err"
+}
+
+@test "reason names the built-in fallbacks" {
+  run_hook "$(payload Agent general-purpose)"
+  [[ "$output" == *"Explore"* && "$output" == *"fork"* ]]
+}
+
 @test "hooks.json is valid and its command resolves to the script" {
   jq empty "$PLUGIN/hooks/hooks.json"
   cmd="$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$PLUGIN/hooks/hooks.json")"
@@ -85,6 +99,6 @@ assert_denied() {
 @test "reason's route-delegation.sh path exists" {
   run_hook "$(payload Agent general-purpose)"
   reason="$(jq -r .hookSpecificOutput.permissionDecisionReason <<<"$output")"
-  path="$(grep -o '/[^ ]*route-delegation\.sh' <<<"$reason")"
+  path="$(sed -n 's/.*bash "\([^"]*route-delegation\.sh\)".*/\1/p' <<<"$reason")"
   [ -f "$path" ]
 }

@@ -95,8 +95,8 @@ The decision tree (task shape -> specialist):
   ac                  -> ac-reviewer       (Opus)    AC completeness + sharpness
   stress-test         -> devils-advocate   (Opus)    adversarial plan/design stress-test
   audit               -> codex-auditor     (Sonnet)  read-only codex-corpus conformance audit, drafts reorg plan
-  other / no match    -> mint the agent via /create-new-sub-agent, then reload;
-                         general-purpose is denied by the plugin hook; use the closest specialist
+  other / no match    -> no route fits: closest specialist with a sharper brief
+                         for a one-off, mint via /create-new-sub-agent for a recurring shape
 
 Model shown is read live from <roster>/<name>.md frontmatter, not hardcoded.
 The roster is the HOST's: $CLAUDE_AGENTS_DIR, else $CODEX_ROOT/agents, else

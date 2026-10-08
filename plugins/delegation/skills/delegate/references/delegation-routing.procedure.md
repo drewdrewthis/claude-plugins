@@ -22,7 +22,9 @@ status: active
 | AC sharpening | `ac-reviewer` | Opus |
 | Adversarial stress-test | `devils-advocate` | Opus |
 | Multi-file reasoning, complex debugging | `advanced-coder` | Opus |
-| Genuinely novel work no specialist fits AND not worth minting | `general-purpose` (**DENIED** — this plugin's `hooks/guard-general-purpose.sh` blocks it, an omitted `subagent_type` too; route or mint instead) | inherits session (Opus) |
+| Genuinely novel work no specialist fits AND not worth minting | closest existing specialist with a sharper brief, or mint via `/create-new-sub-agent` | per agent |
+
+Note: `general-purpose` is not a route. This plugin's `hooks/guard-general-purpose.sh` denies it, an omitted `subagent_type` too.
 
 ## Self-extension rule
 
