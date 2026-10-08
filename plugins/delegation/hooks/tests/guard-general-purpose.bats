@@ -72,7 +72,7 @@ assert_denied() {
 }
 
 @test "no jq on PATH -> fails open: exit 0, no stdout, stderr names the miss" {
-  err="$(mktemp)"
+  err="$BATS_TEST_TMPDIR/err"
   out="$(printf '%s' "$(payload Agent general-purpose)" | PATH=/nonexistent /bin/bash "$HOOK" 2>"$err")"
   rc=$?
   [ "$rc" -eq 0 ]
@@ -82,7 +82,7 @@ assert_denied() {
 
 @test "reason names the built-in fallbacks" {
   run_hook "$(payload Agent general-purpose)"
-  [[ "$output" == *"Explore"* && "$output" == *"fork"* ]]
+  [[ "$output" == *"Explore"* && "$output" == *"Plan"* && "$output" == *"fork"* ]]
 }
 
 @test "hooks.json is valid and its command resolves to the script" {

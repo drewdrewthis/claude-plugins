@@ -152,7 +152,8 @@ print_self_extension_rule() {
   cat <<'EOF'
 No specialist fits this task shape.
 
-Self-extension rule: mint the agent via /create-new-sub-agent — it writes a
+One-off: send it to the closest existing specialist with a sharper brief.
+Recurring shape: mint the agent via /create-new-sub-agent — it writes a
 right-sized model + tools allowlist into your agent roster — then reload so the
 session sees it, and dispatch the new agent by name.
 
@@ -186,7 +187,7 @@ do_list() {
     printf '%-20s -> %-20s [%s]\n    %s\n' "$key" "$agent" "$model" "$rationale"
   done
   # PLUGIN ADAPTATION: host-neutral wording, matching print_self_extension_rule.
-  printf '%-20s -> %s\n' "other/no-match" "mint via /create-new-sub-agent, then reload; general-purpose is denied"
+  printf '%-20s -> %s\n' "other/no-match" "one-off: closest specialist with a sharper brief; recurring: mint via /create-new-sub-agent"
 }
 
 # ---- parse args ----

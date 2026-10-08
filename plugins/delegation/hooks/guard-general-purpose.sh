@@ -9,8 +9,8 @@
 # ask prompt would stall them with nobody there to answer.
 # bypassPermissions does not override a hook deny.
 #
-# Only general-purpose is gated: fork is exempt because it carries the parent context,
-# which is its whole point, so it does not burn a tier on a cold start.
+# Only general-purpose is gated: fork also runs at the session tier, but it carries the
+# parent context, so the tier buys continuity, not a cold re-read.
 #
 # Fails open (bad JSON, no jq) and always exits 0, so it can never wedge a session.
 # A missing jq is a blind release, so it is logged to stderr (CONTRIBUTING ADR-001).
