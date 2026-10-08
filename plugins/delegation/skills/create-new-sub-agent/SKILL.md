@@ -13,7 +13,7 @@ argument-hint: "<what the specialist is for>"
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/route-delegation.sh" --list
 ```
 
-A task shape that already routes needs a better BRIEF, not a new agent. Mint only when the router genuinely has no row for the shape (exit 2), and the shape recurs — a one-off is a `general-purpose` call with a reason, not a roster entry.
+A task shape that already routes needs a better BRIEF, not a new agent. Mint only when the router genuinely has no row for the shape (exit 2), and the shape recurs — a one-off goes to the closest existing specialist with a better brief, not a roster entry.
 
 ## 2. Write the file
 
