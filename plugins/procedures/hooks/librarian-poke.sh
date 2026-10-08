@@ -262,6 +262,8 @@ lp_cooled_down() {
     last="$(tr -dc '0-9' < "$(lp_state_dir)/last-drain-start" 2>/dev/null)"
     now="$(date +%s 2>/dev/null)"
     [ -n "$last" ] && [ -n "$now" ] || return 0
+    # A stamp in the future (clock change, bad write) must not block forever.
+    [ "$last" -le "$now" ] || return 0
     if [ $(( now - last )) -lt "$LIBRARIAN_MIN_INTERVAL_SECS" ]; then
         [ "${1:-}" = quiet ] \
             || lp_log_defer "cooldown, last drain started $(( now - last ))s ago < ${LIBRARIAN_MIN_INTERVAL_SECS}s"
@@ -282,13 +284,18 @@ lp_advance_issued() {
     done < "$1"
 }
 
-# lp_store_status — "<root><TAB><porcelain line>" for every dirty path in each
-# configured store root (stores.sh STORE_ROOTS); nothing when none resolve.
+# lp_store_status — "<root><TAB><porcelain line><TAB><content hash>" for every
+# dirty path in each configured store root (stores.sh STORE_ROOTS); nothing
+# when none resolve. The hash catches a path that was already dirty and was
+# written again: its porcelain line alone would not change.
 lp_store_status() {
     declare -p STORE_ROOTS >/dev/null 2>&1 || return 0
-    local r
+    local r line h
     for r in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do
-        git -C "$r" status --porcelain 2>/dev/null | awk -v r="$r" '{ print r "\t" $0 }'
+        git -C "$r" status --porcelain -uall 2>/dev/null | while IFS= read -r line; do
+            h="$(git -C "$r" hash-object -- "${line:3}" 2>/dev/null)" || h="-"
+            printf '%s\t%s\t%s\n' "$r" "$line" "$h"
+        done
     done
 }
 

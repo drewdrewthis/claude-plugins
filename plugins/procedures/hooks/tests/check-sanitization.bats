@@ -145,3 +145,19 @@ _strict_case() {
   run bash "$SCRIPT" "$FIX/rec.md"
   [ "$status" -eq 0 ]
 }
+
+@test "--strict leaves placeholder and prose rows alone" {
+  printf '%s\n' \
+    '{"d":"never put a primary key: some_column_name_here in a row"}' \
+    '{"d":"see /home/<user>/ and /Users/<name> placeholders"}' \
+    '{"d":"/Users/$USER, /home/${USER}/x, /Users/me, /home/someone, /Users/example/x, /home/.../y"}' \
+    '{"d":"TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxx and token: <your-token-here-please>"}' > "$FIX/row.jsonl"
+  run bash "$SCRIPT" --strict "$FIX/row.jsonl"
+  [ "$status" -eq 0 ]
+}
+
+@test "--strict reads rows from stdin when the file is -" {
+  run bash -c "printf '%s\n' '{\"d\":\"/Users/alice\"}' | bash '$SCRIPT' --strict -"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"macOS home path (line 1)"* ]]
+}

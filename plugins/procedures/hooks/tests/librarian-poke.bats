@@ -459,3 +459,30 @@ EOF
   grep -q "wake left uncommitted store writes in $store: 1 paths" "$(lp_state)/librarian-poke.log"
   [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
 }
+
+@test "cooldown: a stamp in the future counts as stale, not as a fresh drain" {
+  mkdir -p "$(lp_state)"; echo $(( $(date +%s) + 3600 )) > "$(lp_state)/last-drain-start"
+  user_prompt
+  LIBRARIAN_MIN_INTERVAL_SECS=1800 wake 1800; [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+}
+
+@test "store visibility: a path already dirty before the wake and written again is logged" {
+  local store="$BATS_TEST_TMPDIR/store"
+  git init -q "$store"
+  git -C "$store" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  printf '{"a":1}\n' > "$store/mistakes.jsonl"
+  git -C "$store" add mistakes.jsonl
+  git -C "$store" -c user.email=t@t -c user.name=t commit -qm jsonl
+  printf '{"b":2}\n' >> "$store/mistakes.jsonl"            # dirty before the wake
+  export CODEX_STORE_ROOTS="$store"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+printf '{"c":3}\n' >> "$store/mistakes.jsonl"
+EOF
+  chmod +x "$STUB_BIN/claude"
+  user_prompt
+  wake; [ "$status" -eq 0 ]
+  grep -q "wake left uncommitted store writes in $store: 1 paths" "$(lp_state)/librarian-poke.log"
+}
