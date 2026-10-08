@@ -169,6 +169,9 @@ _strict_case() {
   _strict_case "GitHub token" 'ghp_xxxAb3Cd4Ef5Gh6Ij7Kl8Mn9Op0Qr1St2Uv3'   Cd4Ef5
   _strict_case "macOS home path" '/Users/$USER'                            USER
   _strict_case "Linux home path" '/home/example/x'                         example
+  _strict_case "credential"   'PASSWORD=Hunter2,Xyzzy99abcdefghij'        Xyzzy99
+  _strict_case "credential"   'TOKEN=abcdefghijklmnop,qrst1234567890'      qrst1234
+  _strict_case "credential"   'API_KEY=abc\"def1234567890ghij'            def12345
 }
 
 @test "--strict allows /home/ubuntu followed by punctuation" {

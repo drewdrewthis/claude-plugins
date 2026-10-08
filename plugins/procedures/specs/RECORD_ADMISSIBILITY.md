@@ -101,8 +101,9 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
    (`<state-dir>/mistakes.quarantine.lock`). Both files are rewritten through a
    temp file and a rename.
 
-   A call with nothing staged, or only a rebuilt `.index`, exits 0 with
-   `nothing to commit` and queues nothing.
+   A call with nothing staged exits 0 with `nothing to commit` and queues
+   nothing; one with only a rebuilt `.index` staged commits it as
+   `records(<store>): refresh index`.
 
    <!-- PLUGIN ADAPTATION: no upstream counterpart — documents the plugin-local librarian commit-gate machinery. -->
 7. **Push** — `git push`; on rejection, `git pull --rebase` and retry once; if

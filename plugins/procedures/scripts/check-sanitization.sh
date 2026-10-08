@@ -91,14 +91,17 @@ _home_real() {
     _home_trim | grep -viE '[/\\](user|username|name|me|you|someone|<[^>]*>)$'
 }
 
-# _cred_real — credential hits whose value (cut at the first \ " , or space)
-# is 16+ chars mixing letters and digits and is not wholly a placeholder, so
-# `key: some_column_name_here` and `TOKEN=${GITHUB_TOKEN}` are not secrets.
+# _cred_real — credential hits whose value, minus its surrounding quotes, is
+# 16+ chars mixing letters and digits, so `key: some_column_name_here` is not
+# a secret. Only the placeholder check (<...>, $VAR, example) reads the value
+# cut at the first \ " , or space: cutting before the length test would let
+# `PASSWORD=Hunter2,Xyzzy99abcdefghij` through.
 _cred_real() {
-    awk '{ v = $0; sub(/^[0-9]+:[^=:]*[=:][ \t]*/, "", v); sub(/^[\\"\047]+/, "", v)
+    awk '{ v = $0; sub(/^[0-9]+:[^=:]*[=:][ \t]*/, "", v); sub(/^(\\?"|\047)/, "", v)
+           w = v; sub(/(\\?"[,}]*|\047)$/, "", w)
            sub(/[\\", \t].*$/, "", v)
            if (v ~ /^<[^>]*>$/ || v ~ /^[$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?$/ || tolower(v) ~ /example/) next
-           if (length(v) >= 16 && v ~ /[A-Za-z]/ && v ~ /[0-9]/) print }'
+           if (length(w) >= 16 && w ~ /[A-Za-z]/ && w ~ /[0-9]/) print }'
 }
 
 # _report <class> <grep -n hits> — one FAIL line naming the class and the first

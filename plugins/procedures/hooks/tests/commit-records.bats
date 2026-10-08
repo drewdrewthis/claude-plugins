@@ -972,12 +972,29 @@ _glued_head() {
   [[ "$(git -C "$ROOT" log -1 --format=%s)" == *": 1 failure-mode, 0 mistakes (1 quarantined)" ]]
 }
 
-@test "AC38: when quarantine leaves only the rebuilt .index staged, nothing is committed" {
+@test "AC38: quarantine with HEAD's .index current commits nothing and leaves the tree clean" {
   _committed_jsonl '{"old":1}'
+  printf '{"ok":1}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
   _leak_row
   local before; before=$(_commit_count)
   _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
   [ "$status" -eq 0 ]
   [[ "$output" == *"nothing to commit"* ]]
   [ "$(_commit_count)" -eq "$before" ]
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+}
+
+@test "AC38: quarantine on a store whose .index is missing from HEAD commits a refresh index" {
+  _committed_jsonl '{"old":1}'
+  run git -C "$ROOT" cat-file -e HEAD:.index; [ "$status" -ne 0 ]
+  _leak_row
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(_commit_count)" -eq $((before + 1)) ]
+  [ "$(git -C "$ROOT" log -1 --format=%s)" = "records($(basename "$ROOT")): refresh index" ]
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+  run grep -q ghp_ <(git -C "$ROOT" show HEAD:mistakes.jsonl); [ "$status" -ne 0 ]
 }

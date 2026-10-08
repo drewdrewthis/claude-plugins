@@ -810,14 +810,17 @@ _drop_lines() {
 
 JSONL_QUARANTINED=""
 [ -z "$JSONL" ] || _stage_jsonl
-# A rebuilt .index alone describes no new record: not worth a commit.
-if [ -z "$(git -C "$ROOT" diff --cached --name-only | grep -v '^\.index/')" ]; then
+if git -C "$ROOT" diff --cached --quiet; then
     printf '%s: nothing to commit\n' "$prog"
     exit 0
 fi
 
 subject="records(${STORE_BASENAME}): ${WHAT}"
-if [ -n "$JSONL_QUARANTINED" ]; then
+# Only the rebuilt .index is left (e.g. every row quarantined): commit it under
+# its own subject, so the tree stays clean and WHAT does not claim records.
+if [ -z "$(git -C "$ROOT" diff --cached --name-only | grep -v '^\.index/')" ]; then
+    subject="records(${STORE_BASENAME}): refresh index"
+elif [ -n "$JSONL_QUARANTINED" ]; then
     # The caller counted rows before the quarantine: restate what commits.
     _kept=$(( JSONL_ADDED - JSONL_QUARANTINED ))
     _noun="mistakes"; [ "$_kept" -ne 1 ] || _noun="mistake"
