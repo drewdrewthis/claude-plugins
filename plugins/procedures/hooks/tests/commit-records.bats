@@ -490,7 +490,9 @@ _clone() {
   [ -z "$(git -C "$A" stash list)" ]                                          # stash not left behind
 }
 
-@test "AC28: mistakes.jsonl appended both locally and upstream aborts cleanly, never commits markers" {
+# mistakes.jsonl is append-only on every machine, so the gate sets merge=union
+# for it: two machines' appends merge instead of wedging the store forever.
+@test "AC28: mistakes.jsonl appended both locally and upstream merges by union, never commits markers" {
   _clone A; _clone B; A="$FIX/A"; B="$FIX/B"
   printf '{"a":1}\n' > "$A/mistakes.jsonl"
   git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
@@ -498,16 +500,33 @@ _clone() {
   printf '{"remote":1}\n' >> "$B/mistakes.jsonl"; git -C "$B" commit -qam remote; git -C "$B" push -q origin main
   printf '{"local":1}\n' >> "$A/mistakes.jsonl"
   _fm "$A/records/failure-modes/local.md" fm.local LOCAL
-  pre="$(git -C "$A" rev-parse HEAD)"
   COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
     --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
-  [ "$status" -ne 0 ]
-  [ "$(git -C "$A" rev-parse HEAD)" = "$pre" ]
+  [ "$status" -eq 0 ]
+  git -C "$A" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
   grep -q '"local"' "$A/mistakes.jsonl"
-  ! grep -q '<<<<<<<' "$A/mistakes.jsonl" || false
+  grep -q '"remote"' "$A/mistakes.jsonl"
+  run grep -q '<<<<<<<' "$A/mistakes.jsonl"
+  [ "$status" -ne 0 ]
   [ -z "$(git -C "$A" ls-files -u)" ]
   [ -z "$(git -C "$A" stash list)" ]
-  [ -f "$A/records/failure-modes/local.md" ]                                  # untracked record untouched
+  [ "$(git -C "$A" status --porcelain)" = " M mistakes.jsonl" ]               # not in --paths: left dirty
+}
+
+@test "AC31: two clones append to mistakes.jsonl; B pushes first; A's gate commits and pushes both rows" {
+  _clone A; _clone B; A="$FIX/A"; B="$FIX/B"
+  printf '{"a":1}\n' > "$A/mistakes.jsonl"
+  git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
+  git -C "$B" pull -q
+  printf '{"fromB":1}\n' >> "$B/mistakes.jsonl"; git -C "$B" commit -qam b; git -C "$B" push -q origin main
+  printf '{"fromA":1}\n' >> "$A/mistakes.jsonl"
+  run bash "$GATE" --root "$A" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"committed and pushed"* ]]
+  local remote_rows; remote_rows="$(git -C "$REMOTE" show main:mistakes.jsonl)"
+  [[ "$remote_rows" == *'"fromA"'* ]]
+  [[ "$remote_rows" == *'"fromB"'* ]]
+  [ -z "$(git -C "$A" status --porcelain)" ]
 }
 
 @test "AC26: a store that gitignores .index/ still commits the record (index left local)" {
@@ -699,13 +718,40 @@ _committed_jsonl() {
   [ "$(_commit_count)" -eq "$before" ]
 }
 
-@test "AC30: a leaky added mistakes.jsonl row aborts the commit" {
+@test "AC30: a leaky added row is quarantined; the clean rows still commit" {
   _committed_jsonl '{"old":1}'
-  printf '{"new":"/Users/alice/secret"}\n' >> "$ROOT/mistakes.jsonl"
+  printf '{"leak":"ghp_abcdefghijklmnopqrstuvwxyz0123456789"}\n{"clean":1}\n' >> "$ROOT/mistakes.jsonl"
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md mistakes.jsonl" \
+    --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  local committed; committed="$(git -C "$ROOT" show HEAD:mistakes.jsonl)"
+  [[ "$committed" == *'"clean"'* ]]
+  [[ "$committed" != *ghp_* ]]
+  git -C "$ROOT" log -1 --name-only --format= | grep -q "records/failure-modes/rec.md"
+  grep -q 'ghp_abcdefghij' "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"
+  grep -q 'mistakes.jsonl line 2.*GitHub token' "$QUEUE"
+  run grep -q 'ghp_' "$QUEUE"
+  [ "$status" -ne 0 ]                                                         # queue never holds the secret
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+}
+
+@test "AC30: mistakes.jsonl is append-only — a removed row aborts" {
+  _committed_jsonl '{"one":1}' '{"two":2}'
+  printf '{"one":1}\n{"three":3}\n' > "$ROOT/mistakes.jsonl"
   local before; before=$(_commit_count)
   _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
   [ "$status" -ne 0 ]
-  [[ "$output" == *"BLOCK [sanitization]"* ]]
+  [[ "$output" == *"append-only"* ]]
   [ "$(_commit_count)" -eq "$before" ]
-  [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]
+}
+
+@test "AC30: a NUL byte in mistakes.jsonl aborts instead of scanning nothing" {
+  _committed_jsonl '{"one":1}'
+  printf '{"two":"/Users/alice/x"}\0\n' >> "$ROOT/mistakes.jsonl"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"NUL"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
 }

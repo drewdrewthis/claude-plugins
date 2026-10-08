@@ -19,6 +19,7 @@ setup() {
   export LIBRARIAN_SETTLE_SECS=0
   export LIBRARIAN_LOCK="$TURN_STATE_DIR/librarian.lock"
   unset PROCEDURES_ENABLE_LIBRARIAN CLAUDE_CODE_ENTRYPOINT LIBRARIAN_SYNC LIBRARIAN_NO_FLOCK
+  unset LIBRARIAN_MIN_INTERVAL_SECS LIBRARIAN_CLAIM_TTL_SECS LIBRARIAN_MAX_RUNTIME_SEC CODEX_STORE_ROOTS
 
   SID="bats-lp-$$-$BATS_TEST_NUMBER"
   PROJ="$HOME/.claude/projects/-bats-lp-$$-$BATS_TEST_NUMBER"
@@ -373,7 +374,8 @@ wake() { LIBRARIAN_MIN_INTERVAL_SECS="${1:-0}" LIBRARIAN_NO_FLOCK=1 run bash "$H
   user_prompt                                        # L2, appended after wake 1
   wake; [ "$status" -eq 0 ]
   grep -q '^\[L2\] ' "$STUB_BIN/batch-2.txt"
-  ! grep -q '^\[L1\] ' "$STUB_BIN/batch-2.txt" || false
+  run grep -q '^\[L1\] ' "$STUB_BIN/batch-2.txt"
+  [ "$status" -ne 0 ]
   [ "$(cat "$(lp_state)/cursors/$SID.line")" = "2" ]
   wake; [ "$status" -eq 0 ]                          # nothing new: no session
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 2 ]
@@ -406,4 +408,54 @@ wake() { LIBRARIAN_MIN_INTERVAL_SECS="${1:-0}" LIBRARIAN_NO_FLOCK=1 run bash "$H
   user_prompt
   wake 0; [ "$status" -eq 0 ]
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 2 ]
+}
+
+@test "cursors: a manifest changed during the wake is not advanced from" {
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+printf 'other\t0\t5\n' >> "$(lp_state)/batch.manifest"
+EOF
+  chmod +x "$STUB_BIN/claude"
+  user_prompt
+  wake; [ "$status" -eq 0 ]
+  [ ! -f "$(lp_state)/cursors/$SID.line" ]
+  grep -q 'manifest changed during drain, not advancing' "$(lp_state)/librarian-poke.log"
+}
+
+# The claim TTL must outlive a drain at its runtime cap, or a live drain's
+# claim is stolen and two librarians write at once.
+@test "claim: the default TTL derives from the runtime cap — a 1000s-old claim is kept, then stolen under a 100s cap" {
+  user_prompt
+  mkdir -p "$LIBRARIAN_LOCK.d"; touch -d "@$(( $(date +%s) - 1000 ))" "$LIBRARIAN_LOCK.d"
+  wake; [ "$status" -eq 0 ]
+  claude_never_ran
+  [ -d "$LIBRARIAN_LOCK.d" ]
+  LIBRARIAN_MAX_RUNTIME_SEC=100 wake; [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+}
+
+@test "cooldown: the gating half defers before spawning any worker" {
+  mkdir -p "$(lp_state)"; date +%s > "$(lp_state)/last-drain-start"
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  run grep -q 'deferred, cooldown' "$(lp_state)/librarian-poke.log"
+  [ "$status" -ne 0 ]                     # no worker ran to log its under-lock defer
+}
+
+@test "store visibility: a wake that leaves uncommitted store writes logs them, cursors still advance" {
+  local store="$BATS_TEST_TMPDIR/store"
+  git init -q "$store"
+  export CODEX_STORE_ROOTS="$store"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+echo x > "$store/stray.md"
+EOF
+  chmod +x "$STUB_BIN/claude"
+  user_prompt
+  wake; [ "$status" -eq 0 ]
+  grep -q "wake left uncommitted store writes in $store: 1 paths" "$(lp_state)/librarian-poke.log"
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
 }

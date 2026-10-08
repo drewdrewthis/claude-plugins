@@ -30,7 +30,9 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
 `scripts/lib/stores.sh` `procedures_state_dir`).
 
 1. **Pull** — `git pull --rebase` when an upstream is configured (skipped for a
-   local-only repo).
+   local-only repo). Before it, the gate sets `mistakes.jsonl merge=union` in
+   the clone's `info/attributes`, so two machines' appends merge instead of
+   conflicting.
 2. **Clean-up (normalize)** — for each record path: canonical frontmatter key
    order (the seven keys of `std.record-frontmatter`, then any extra keys in
    original order), `links: {}` when empty, trailing whitespace stripped, and
@@ -78,6 +80,14 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
    `check-sanitization.sh` leak classes before the commit, so a personal path,
    token, or key cannot ride into history via a trailer. A new commit every
    drain, never `--amend`, never `--force`.
+
+   **`mistakes.jsonl`** — the root-relative `mistakes.jsonl` is the one non-`.md`
+   path `--paths` accepts. It skips steps 2–4. Here it is staged, and only the
+   rows the staged blob ADDS vs `HEAD` are vetted with
+   `check-sanitization.sh --strict`. It is append-only: a removed row, a NUL
+   byte, or an unreadable diff aborts. A row that leaks moves to
+   `<state-dir>/mistakes.quarantine.jsonl` (outside git) with a queue note
+   (line and leak class only); the clean rows still commit.
 
    <!-- PLUGIN ADAPTATION: no upstream counterpart — documents the plugin-local librarian commit-gate machinery. -->
 7. **Push** — `git push`; on rejection, `git pull --rebase` and retry once; if

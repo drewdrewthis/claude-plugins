@@ -119,10 +119,10 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    queued. The gate never `--amend`s, never `--force`s, and cites its rubric in
    `${CLAUDE_PLUGIN_ROOT}/specs/RECORD_ADMISSIBILITY.md`.
 
-7. **Exit once every commit is done.** You run no cursor command. After you exit
-   cleanly, the poke hook advances every range in `batch.manifest` to its issued end, so
-   read the whole batch and finish every commit (or queue the item in
-   `grooming-queue.md`) before you exit. A crash or timeout leaves the cursors where they
+7. **Exit once every commit is done.** You run no cursor command. Exit 0 means the
+   whole batch counts as read: the poke hook then advances every range in
+   `batch.manifest` to its issued end. So read all of `batch.txt` and finish every
+   commit (or queue the item in `grooming-queue.md`) before you exit. A crash or timeout leaves the cursors where they
    were, so the next drain re-issues the same lines; a re-mint of an already-committed
    decision/solution fails loudly (`log-record.sh` refuses to overwrite without
    `--force`) rather than duplicating silently.

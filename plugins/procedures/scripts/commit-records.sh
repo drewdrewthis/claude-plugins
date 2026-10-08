@@ -22,12 +22,14 @@
 # The root-relative `mistakes.jsonl` (log-record.sh's append-only mistake log)
 # is the one non-.md path accepted, so a wake's mistake appends commit with its
 # records instead of sitting uncommitted. It skips the record-only checks
-# (normalize, fence/size, sections, lint); only its ADDED lines go through
-# check-sanitization.sh, so a row already in history never blocks an append.
+# (normalize, fence/size, sections, lint); step 6 vets only the rows the commit
+# ADDS, from the staged blob, with check-sanitization.sh --strict, and moves a
+# leaking row to <state-dir>/mistakes.quarantine.jsonl instead of blocking.
 #
 # Runs, in order, aborting ATOMICALLY (no commit, no push) on the first failure
 # and appending an actionable note (root, failing path(s), which check) to the
 # grooming queue (<state-dir>/grooming-queue.md via stores.sh procedures_state_dir):
+#   0. set `mistakes.jsonl merge=union` in this clone's info/attributes
 #   1. pull --rebase (only when an upstream is configured)
 #   2. normalize frontmatter of the record paths (idempotent, in place)
 #   3. validate — baseline: fence-block, size cap, check-sanitization.sh,
@@ -35,7 +37,8 @@
 #      lint-frontmatter.sh
 #   4. validate — per-store: <root>/scripts/validate.sh if executable
 #   5. build-record-index.sh --root <root> --out <root>/.index
-#   6. structured commit (records(<store>): <what> + why/source/evidence trailers)
+#   6. stage + vet mistakes.jsonl (when given), then structured commit
+#      (records(<store>): <what> + why/source/evidence trailers)
 #   7. push (retry once via pull --rebase; else rebase --abort + queue; never --force)
 #
 # Test seams:
@@ -173,14 +176,15 @@ RECDIR="$(stores_records_dir "$ROOT")"
 read -ra PATHS <<< "$PATHS_RAW"
 
 # --paths filter. What this loop enforces: every entry is a root-relative path
-# ending in .md, located under the record directories ($RECDIR/ or plans/). Absolute
-# paths and any `..` segment are rejected so a caller cannot reach outside the
-# selected store. A non-.md entry is rejected so a sensitive non-record file cannot
-# ride in unvalidated; the root-relative `mistakes.jsonl` is the one exception, held
-# apart in JSONL and checked by its added lines only. The literal `.index` is also
-# tolerated: accepted for caller compatibility and dropped, since the gate adds `.index` itself (step 5);
-# the drop is announced once on stderr so a caller is not left believing it selected
-# the index.
+# ending in .md, located under the record directories ($RECDIR/ or plans/).
+# Absolute paths and any `..` segment are rejected so a caller cannot reach
+# outside the selected store. A non-.md entry is rejected so a sensitive
+# non-record file cannot ride in unvalidated; the root-relative
+# `mistakes.jsonl` is the one exception, held apart in JSONL and vetted in
+# step 6. The literal `.index` is also tolerated: accepted for caller
+# compatibility and dropped, since the gate adds `.index` itself (step 5); the
+# drop is announced once on stderr so a caller is not left believing it
+# selected the index.
 ROOT_PHYS="$(cd "$ROOT" && pwd -P)"
 _FILTERED=() JSONL=""
 for _p in ${PATHS[@]+"${PATHS[@]}"}; do
@@ -221,6 +225,15 @@ unset _schema_raw _k
 # to the grooming queue and exit non-zero. The message names the failing
 # path(s) so the librarian can re-invoke with them removed.
 _abort() {
+    _queue "$1" "$2"
+    printf '%s: BLOCK [%s]: %s\n' "$prog" "$1" "$2" >&2
+    printf '%s: re-invoke this root with the offending path(s) removed once fixed/queued.\n' "$prog" >&2
+    exit 1
+}
+
+# _queue <check> <message> — append one note to the grooming queue. Shared by
+# _abort and by the non-blocking mistakes.jsonl quarantine.
+_queue() {
     local check="$1" msg="$2" qdir qfile
     qdir="$(procedures_state_dir)"
     qfile="$qdir/grooming-queue.md"
@@ -232,9 +245,6 @@ _abort() {
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ROOT" "$check" "$msg" >> "$qfile" 2>/dev/null; then
         printf '%s: QUEUE-WRITE-FAILED: could not record this block in %s\n' "$prog" "$qfile" >&2
     fi
-    printf '%s: BLOCK [%s]: %s\n' "$prog" "$check" "$msg" >&2
-    printf '%s: re-invoke this root with the offending path(s) removed once fixed/queued.\n' "$prog" >&2
-    exit 1
 }
 
 # ---- step 2: normalize ----
@@ -436,6 +446,22 @@ _restore_stash() {
         || printf '%s: WARN: autostash did not re-apply in %s; kept as stash@{0}\n' "$prog" "$ROOT" >&2
 }
 
+# ---- step 0: union-merge mistakes.jsonl ----
+# Every machine appends to mistakes.jsonl, so two machines' appends conflict
+# under a plain merge and step 1's autostash/rebase would abort this store's
+# gate on every later run. info/attributes is per-clone, so set it here, once.
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    _attrs="$(git -C "$ROOT" rev-parse --git-path info/attributes)"
+    case "$_attrs" in /*) ;; *) _attrs="$ROOT/$_attrs" ;; esac
+    if ! grep -qxF 'mistakes.jsonl merge=union' "$_attrs" 2>/dev/null; then
+        { mkdir -p "$(dirname "$_attrs")" \
+            && { [ ! -s "$_attrs" ] || [ -z "$(tail -c1 "$_attrs")" ] || echo; } >> "$_attrs" \
+            && printf 'mistakes.jsonl merge=union\n' >> "$_attrs"; } 2>/dev/null \
+            || _abort union-merge "cannot write $_attrs"
+    fi
+    unset _attrs
+fi
+
 # ---- step 1: pull --rebase (only with an upstream) ----
 # Runs BEFORE normalize: normalization rewrites and `git mv`s tracked records,
 # and `git pull --rebase` refuses a dirty worktree/index. Sync first, then
@@ -470,27 +496,6 @@ if [ "${#REC_PATHS[@]}" -gt 0 ]; then
     if ! san_out="$(bash "$SCRIPT_DIR/check-sanitization.sh" "${SAN_ABS[@]}" 2>&1)"; then
         _abort sanitization "$(printf '%s' "$san_out" | tr '\n' ' ')"
     fi
-fi
-
-# mistakes.jsonl — sanitization over the lines this commit ADDS (vs HEAD, or
-# the whole file when untracked). Scanning the whole tracked file would let one
-# historic row block every later append forever.
-if [ -n "$JSONL" ]; then
-    [ -L "$ROOT/$JSONL" ] && _abort path "$JSONL is a symlink (refusing to follow)"
-    [ -f "$ROOT/$JSONL" ] || _abort path "path does not exist: $JSONL"
-    _added="$(mktemp)"
-    if git -C "$ROOT" ls-files --error-unmatch -- "$JSONL" >/dev/null 2>&1; then
-        git -C "$ROOT" diff --no-color -U0 HEAD -- "$JSONL" \
-            | awk '/^@@/ { h = 1; next } h && /^\+/ { print substr($0, 2) }' > "$_added"
-    else
-        cat -- "$ROOT/$JSONL" > "$_added"
-    fi
-    if ! san_out="$(bash "$SCRIPT_DIR/check-sanitization.sh" "$_added" 2>&1)"; then
-        rm -f "$_added"
-        _abort sanitization "$JSONL added lines: $(printf '%s' "$san_out" | tr '\n' ' ')"
-    fi
-    rm -f "$_added"
-    FINAL_PATHS+=("$JSONL")
 fi
 
 # check-sections.sh (WARN default; blocks only under LINT_SECTIONS_REQUIRED=1)
@@ -544,10 +549,10 @@ fi
 
 # ---- step 5: rebuild index into the same commit ----
 _rebuild_index
-# The gate — not the caller — stages the rebuilt index. FINAL_PATHS holds the
-# record .md paths plus any mistakes.jsonl (a caller-supplied .index was dropped
-# up front); append it now so the `git add` below stages the index alongside the
-# records it describes.
+# The gate — not the caller — stages the rebuilt index. FINAL_PATHS holds only
+# record .md paths (any caller-supplied .index was dropped up front; mistakes.jsonl
+# is staged separately in step 6); append it now so the `git add` below stages
+# the index alongside the records it describes.
 # Stores that gitignore `.index/` keep it local-only: `git add` refuses an
 # ignored path, which would block every commit, so skip it there. --no-index:
 # without it, index files tracked before the ignore rule make check-ignore say
@@ -591,11 +596,88 @@ if ! _meta_out="$(bash "$SCRIPT_DIR/check-sanitization.sh" "$_meta_tmp" 2>&1)"; 
 fi
 rm -f "$_meta_tmp"
 
-git -C "$ROOT" add -- ${FINAL_PATHS[@]+"${FINAL_PATHS[@]}"} 2>/dev/null || \
-    _abort commit "git add failed for: ${FINAL_PATHS[*]}"
+if [ "${#FINAL_PATHS[@]}" -gt 0 ]; then
+    git -C "$ROOT" add -- "${FINAL_PATHS[@]}" 2>/dev/null || \
+        _abort commit "git add failed for: ${FINAL_PATHS[*]}"
+fi
 # Ignored .index that still has tracked files: restage just those.
 if [ -n "$INDEX_IGNORED" ]; then
     git -C "$ROOT" add -u -- .index 2>/dev/null || _abort commit "git add -u failed for: .index"
+fi
+
+# _stage_jsonl — stage mistakes.jsonl and vet exactly the rows this commit adds:
+# the STAGED blob vs HEAD (the whole blob on an unborn branch), so what was
+# scanned is what gets committed. Fails closed: a git error, a NUL byte (git
+# would call the file binary and show no rows), a removed row (the file is
+# append-only), or a change that yields no added rows all abort. A row that
+# trips check-sanitization --strict moves to <state-dir>/mistakes.quarantine.jsonl
+# (local, outside git) with a queue note naming only its line and leak class,
+# so one leak cannot wedge every later append.
+_stage_jsonl() {
+    local f="$JSONL" n_all n_text diff added="" ln row tmp out cls drop="" qf mode blob
+    [ -L "$ROOT/$f" ] && _abort path "$f is a symlink (refusing to follow)"
+    [ -f "$ROOT/$f" ] || _abort path "path does not exist: $f"
+    git -C "$ROOT" add -- "$f" 2>/dev/null || _abort commit "git add failed for: $f"
+    n_all="$(git -C "$ROOT" cat-file blob ":$f" | LC_ALL=C wc -c)" \
+        && n_text="$(git -C "$ROOT" cat-file blob ":$f" | LC_ALL=C tr -d '\000' | LC_ALL=C wc -c)" \
+        || _abort jsonl "cannot read the staged $f"
+    [ "$n_all" = "$n_text" ] || _abort jsonl "$f contains a NUL byte; refusing to treat it as text"
+    if git -C "$ROOT" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        diff="$(git -C "$ROOT" diff --cached -U0 --text --no-ext-diff --no-textconv HEAD -- "$f")" \
+            || _abort jsonl "git diff of the staged $f failed"
+        printf '%s\n' "$diff" | awk '/^@@/ { h = 1; next } h && /^-/ { exit 1 }' \
+            || _abort jsonl "$f is append-only, but this commit removes or rewrites a row"
+        # -U0 hunk header "@@ -a,b +c,d @@": added rows are numbered from c.
+        added="$(printf '%s\n' "$diff" | awk '
+            /^@@/ { split($3, a, ","); n = substr(a[1], 2) + 0; h = 1; next }
+            h && /^\+/ { printf "%d\t%s\n", n, substr($0, 2); n++ }')"
+        if [ -z "$added" ] && ! git -C "$ROOT" diff --cached --quiet HEAD -- "$f"; then
+            _abort jsonl "$f differs from HEAD but no added rows could be read; failing closed"
+        fi
+    else
+        added="$(git -C "$ROOT" cat-file blob ":$f" | awk '{ printf "%d\t%s\n", NR, $0 }')" \
+            || _abort jsonl "cannot read the staged $f"
+    fi
+
+    tmp="$(mktemp)"
+    qf="$(procedures_state_dir)/mistakes.quarantine.jsonl"
+    while IFS=$'\t' read -r ln row; do
+        [ -n "$ln" ] || continue
+        printf '%s\n' "$row" > "$tmp"
+        out="$(bash "$SCRIPT_DIR/check-sanitization.sh" --strict "$tmp" 2>&1)" && continue
+        cls="$(printf '%s\n' "$out" | sed -n 's/^.* — \(.*\) (line [0-9]*)$/\1/p' | paste -sd, -)"
+        mkdir -p "${qf%/*}" && printf '%s\n' "$row" >> "$qf" \
+            || { rm -f "$tmp"; _abort jsonl "cannot quarantine $f line $ln to $qf"; }
+        _queue jsonl-quarantine "$f line $ln: ${cls:-unscannable}; row moved to $qf, not committed"
+        drop="$drop $ln"
+    done <<< "$added"
+    rm -f "$tmp"
+    [ -n "$drop" ] || return 0
+
+    # Drop the quarantined rows from the staged blob AND the working file, by
+    # line number, so the tree stays clean and matches the commit.
+    mode="$(git -C "$ROOT" ls-files -s -- "$f" | awk '{ print $1; exit }')"
+    blob="$(git -C "$ROOT" cat-file blob ":$f" | _drop_lines "$drop" \
+        | git -C "$ROOT" hash-object -w --stdin)" \
+        && git -C "$ROOT" update-index --cacheinfo "${mode:-100644},$blob,$f" \
+        || _abort jsonl "cannot restage $f without its quarantined rows"
+    tmp="$(mktemp)"
+    _drop_lines "$drop" < "$ROOT/$f" > "$tmp" && cat "$tmp" > "$ROOT/$f" \
+        || { rm -f "$tmp"; _abort jsonl "cannot remove quarantined rows from $f"; }
+    rm -f "$tmp"
+    JSONL_QUARANTINED=1
+}
+
+# _drop_lines "<n> <n>..." — copy stdin to stdout without those line numbers.
+_drop_lines() {
+    awk -v d="$1" 'BEGIN { n = split(d, a, " "); for (i = 1; i <= n; i++) x[a[i]] = 1 } !(NR in x)'
+}
+
+JSONL_QUARANTINED=""
+[ -z "$JSONL" ] || _stage_jsonl
+if [ -n "$JSONL_QUARANTINED" ] && git -C "$ROOT" diff --cached --quiet; then
+    printf '%s: nothing left to commit after quarantining %s rows\n' "$prog" "$JSONL"
+    exit 0
 fi
 
 subject="records(${STORE_BASENAME}): ${WHAT}"

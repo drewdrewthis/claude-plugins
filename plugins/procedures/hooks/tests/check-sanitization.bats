@@ -98,3 +98,50 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"private key material"* ]]
 }
+
+@test "Slack token: the report names the line, never the token" {
+  _clean_record
+  printf 'token: xoxb-123-abcsecret\n' >> "$FIX/rec.md"
+  run bash "$SCRIPT" "$FIX/rec.md"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Slack token"*"line 12"* ]]
+  [[ "$output" != *"abcsecret"* ]]
+}
+
+# ---- --strict: the extra classes for transcript-derived jsonl rows ----
+# _strict_case <label> <row-text> <secret> — one row, rejected under --strict
+# with <label> and a line number, and <secret> never echoed.
+_strict_case() {
+  printf '{"a":1}\n{"d":"%s"}\n' "$2" > "$FIX/row.jsonl"
+  run bash "$SCRIPT" --strict "$FIX/row.jsonl"
+  [ "$status" -ne 0 ] || { echo "not rejected: $2"; return 1; }
+  [[ "$output" == *"$1"*"line 2"* ]] || { echo "wrong report for $2: $output"; return 1; }
+  [[ "$output" != *"$3"* ]] || { echo "echoed secret $3: $output"; return 1; }
+}
+
+@test "--strict rejects each extra leak class without echoing it" {
+  _strict_case "macOS home path"   '/Users/alice'                              alice
+  _strict_case "Linux home path"   '/home/bob'                                 bob
+  _strict_case "macOS home path"   '\/Users\/alice\/x'                          alice
+  _strict_case "Windows home path" 'C:\\Users\\alice'                          alice
+  _strict_case "GitHub token"      'ghp_abcdefghijklmnopqrstuvwxyz0123456789'  abcdefghij
+  _strict_case "GitHub token"      'github_pat_11ABCDEFG0abcdefghijklmnop'     abcdefghij
+  _strict_case "API key"           'sk-ant-api03-zzzzzzzz'                     zzzzzzzz
+  _strict_case "API key"           'sk-abcdefghijklmnopqrstuvwx'               abcdefghij
+  _strict_case "AWS key"           'AKIAABCDEFGHIJKLMNOP'                      ABCDEFGHIJ
+  _strict_case "bearer token"      'Bearer abcdefghijklmnopqrstuvwxyz'         abcdefghij
+  _strict_case "credential"        'PASSWORD=hunter2hunter2xx'                 hunter2
+}
+
+@test "--strict still allows /home/ubuntu and a clean row" {
+  printf '{"d":"ran in /home/ubuntu and /home/ubuntu/work, sk-short, a ghp_ mention"}\n' > "$FIX/row.jsonl"
+  run bash "$SCRIPT" --strict "$FIX/row.jsonl"
+  [ "$status" -eq 0 ]
+}
+
+@test "without --strict a slashless /Users/alice is not flagged (.md behaviour unchanged)" {
+  _clean_record
+  printf 'see /Users/alice\n' >> "$FIX/rec.md"
+  run bash "$SCRIPT" "$FIX/rec.md"
+  [ "$status" -eq 0 ]
+}
