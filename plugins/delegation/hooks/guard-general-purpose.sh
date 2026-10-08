@@ -23,6 +23,8 @@ command -v jq >/dev/null 2>&1 || { echo "guard-general-purpose: jq missing, fail
 input="$(cat 2>/dev/null || true)"
 field() { jq -r "$1 // empty" <<<"$input" 2>/dev/null || true; }
 
+jq -e . >/dev/null 2>&1 <<<"$input" || { echo "guard-general-purpose: unparseable input, failing open" >&2; exit 0; }
+
 tool="$(field .tool_name)"
 [[ "$tool" == Agent || "$tool" == Task ]] || exit 0
 

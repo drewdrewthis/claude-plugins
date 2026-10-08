@@ -59,4 +59,7 @@ jobs:
           jq --version
       - name: Run the delegation suite
         working-directory: plugins/delegation
-        run: bats ${{ matrix.suites }}
+        env:
+          SUITES: ${{ matrix.suites }}
+        # Unquoted on purpose: SUITES is a space-separated list of suite dirs.
+        run: bats $SUITES

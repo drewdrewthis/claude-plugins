@@ -267,12 +267,15 @@ agents gets the self-extension rule ("mint one via `/create-new-sub-agent`"),
 not a drift error about a corruption that does not exist. A matched agent
 missing while *other* agents exist is still exit 3 — real drift.
 
-Vendored from the codex with three adaptation classes, each marked
-`PLUGIN ADAPTATION`: data-root defaults, host-neutral wording in place of
-codex-internal file/hook references, and the guard hook's host-neutrality (no
-pinned `PATH`, since jq lives in `/opt/homebrew/bin` on macOS; no hardcoded
-roster, since the roster is the host's). (No fork-skill model pin here
-— this plugin ships no `context: fork` skill.) Tests:
+Vendored from the codex, with these adaptation classes marked
+`PLUGIN ADAPTATION`:
+
+- **Data-root defaults:** as in `procedures`.
+- **Host-neutral wording:** in place of codex-internal file/hook references.
+- **Guard hook:** no pinned `PATH`, no hardcoded roster, no bash 4+ syntax.
+
+(No fork-skill model pin here — this plugin ships no `context: fork` skill.)
+Tests:
 
 ```
 cd plugins/delegation && bats hooks/tests scripts/tests
