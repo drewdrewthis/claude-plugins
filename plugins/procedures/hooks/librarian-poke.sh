@@ -2,9 +2,10 @@
 # librarian-poke.sh — Stop hook (async).
 #
 # SINGLE RESPONSIBILITY: once per qualifying turn, wake the librarian agent to
-# drain whatever transcript backlog has built up. This hook decides only WHEN
-# to poke; agents/librarian.md decides WHAT is worth extracting, from its own
-# per-transcript cursors, and is safe to poke more often than it has new work.
+# drain whatever transcript backlog has built up. This hook decides WHEN to
+# poke (cooldown, load gate) and owns the per-transcript cursors (advanced
+# only after a clean wake); agents/librarian.md decides WHAT is worth
+# extracting, and is safe to poke more often than it has new work.
 #
 # DIVERGES FROM evolve-sweep.sh ON PURPOSE: no per-turn classifier call, no
 # digest of the final message, no asyncRewake wake-the-caller trick. The
@@ -41,8 +42,8 @@
 # FAIL-OPEN on the gating half, same posture as every gate in this plugin: no
 # jq, an unreadable lib, or an unwired reset hook releases via
 # ge_release_or_failopen. The poke itself (the detached half) is best-effort
-# and UNRECORDED on failure — no claude binary, lost claim, or nonzero
-# `claude -p` exit all degrade silently. A background knowledge-intake poke
+# and UNRECORDED on failure — no claude binary or a lost claim degrade
+# silently (a nonzero `claude -p` exit logs one line: its lines are re-issued). A background knowledge-intake poke
 # that occasionally no-ops costs nothing; recording every miss would grow the
 # fail-open log one row per turn forever for a condition that is not one.
 
@@ -237,6 +238,42 @@ lp_note_timeout() {
     return 0
 }
 
+# LIBRARIAN_MIN_INTERVAL_SECS (default 1800, 0 disables) — minimum gap between
+# the STARTS of two drains that ran claude. Every wake is a fresh model session
+# whose prompt is a cache write, so waking on every qualifying turn (258/day)
+# spent most of the box's cache-write tokens re-reading a few lines each time.
+# A deferred poke loses nothing: the cursors stay put, so the next drain past
+# the interval issues everything that built up meanwhile in one batch.
+LIBRARIAN_MIN_INTERVAL_SECS="$(lp_num_or_default LIBRARIAN_MIN_INTERVAL_SECS "${LIBRARIAN_MIN_INTERVAL_SECS:-1800}" 1800 '^[0-9]+$')"
+
+# lp_cooled_down — 0 when no drain started within LIBRARIAN_MIN_INTERVAL_SECS,
+# 1 (logged) otherwise. An absent or unreadable stamp never blocks a drain.
+lp_cooled_down() {
+    [ "$LIBRARIAN_MIN_INTERVAL_SECS" -gt 0 ] || return 0
+    local last now
+    last="$(tr -dc '0-9' < "$(lp_state_dir)/last-drain-start" 2>/dev/null)"
+    now="$(date +%s 2>/dev/null)"
+    [ -n "$last" ] && [ -n "$now" ] || return 0
+    if [ $(( now - last )) -lt "$LIBRARIAN_MIN_INTERVAL_SECS" ]; then
+        lp_log_defer "cooldown, last drain started $(( now - last ))s ago < ${LIBRARIAN_MIN_INTERVAL_SECS}s"
+        return 1
+    fi
+    return 0
+}
+
+# lp_advance_issued — move every cursor the manifest issued to its issued end,
+# through librarian-advance.sh (the one place cursor rules live). The hook, not
+# the model, does this: model-run advances got the arguments wrong, the cursors
+# never moved, and the same lines were re-issued as duplicate records.
+lp_advance_issued() {
+    local slug end out
+    while IFS=$'\t' read -r slug _ end; do
+        [ -n "$slug" ] || continue
+        out="$(bash "$SCRIPT_DIR/../scripts/librarian-advance.sh" "$slug" "$end" 2>&1)" \
+            || lp_log "librarian-poke: advance refused: $(printf '%s' "$out" | tr '\n' ' ')"
+    done < "$(lp_state_dir)/batch.manifest"
+}
+
 # --- the poke, and its portable claim fallback ------------------------------
 
 # lp_marker_age <dir> — seconds since the claim dir was created, or nonzero
@@ -273,9 +310,12 @@ lp_claim() {
 # lp_drain — under the claim: issue this drain's batch, then run the librarian
 # only when the batch issued something. The poke, not the agent, runs
 # librarian-batch.sh, so the agent cannot re-issue itself a bigger batch; an
-# empty manifest (or a failed batch, which leaves none) spends no tokens.
+# empty manifest (or a failed batch, which leaves none) spends no tokens. Only
+# a clean exit advances the cursors: a crash or timeout leaves them, so the
+# next drain re-issues the same lines (at-least-once).
 lp_drain() {
     local out rc=0
+    lp_cooled_down || return 0
     if ! out="$(bash "$SCRIPT_DIR/../scripts/librarian-batch.sh" 2>&1)"; then
         lp_log "librarian-poke: batch failed, drain skipped: $(printf '%s' "$out" | tr '\n' ' ')"
         return 0
@@ -286,13 +326,19 @@ lp_drain() {
         case "$line" in "librarian-batch: skipped "*) lp_log "librarian-poke: $line" ;; esac
     done <<< "$out"
     [ -s "$(lp_state_dir)/batch.manifest" ] || return 0
+    date +%s > "$(lp_state_dir)/last-drain-start" 2>/dev/null || true
     $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
     lp_note_timeout "$rc"
+    if [ "$rc" -ne 0 ]; then
+        lp_log "librarian-poke: drain exited $rc, cursors not advanced; lines re-issued next drain"
+        return 0
+    fi
+    lp_advance_issued
 }
 
 # lp_worker — settle, then run the librarian under a single-writer claim.
-# Everything past the settle is best-effort: no claude binary, a lost claim,
-# or a nonzero `claude -p` exit all degrade silently.
+# Everything past the settle is best-effort: no claude binary or a lost claim
+# degrade silently.
 lp_worker() {
     sleep "$LIBRARIAN_SETTLE_SECS" 2>/dev/null || true
     command -v claude >/dev/null 2>&1 || return 0

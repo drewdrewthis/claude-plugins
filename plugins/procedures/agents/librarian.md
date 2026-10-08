@@ -28,15 +28,16 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    — as `batch.txt`, with the issued ranges in `batch.manifest`
    (`slug<TAB>start<TAB>end`: lines start+1..end of that transcript were issued). Each
    `[L<n>]` in the batch is transcript line n, under a `=== <slug> (<path>) ===` header.
-   Never run `librarian-batch.sh` yourself and never write anything under `cursors/`:
-   the batch you were given is the whole of this drain, and `librarian-advance.sh`
-   (step 7) is the only way a cursor moves. Do not glob, `wc`, or read the raw
-   transcripts to find more work.
+   Never run `librarian-batch.sh` or `librarian-advance.sh` yourself and never write
+   anything under `cursors/`: the batch you were given is the whole of this drain, and
+   the poke hook moves the cursors after you exit (step 7). Do not glob, `wc`, or read
+   the raw transcripts to find more work.
 
 2. **Read the entire batch.** Read `batch.txt` from start to end, in successive
-   offset/limit chunks until the Read tool returns nothing more. No sampling, no
-   skimming, no stopping early: every issued line must have been read before its cursor
-   may move (step 7). Lines that failed to parse or carried no text were already left
+   offset/limit chunks of at most 400 lines (`limit: 400`) — a bigger chunk can pass
+   the Read tool's 25,000-token limit and fail — until the Read tool returns nothing
+   more. No sampling, no skimming, no stopping early: every issued line counts as read
+   once you exit (step 7). Lines that failed to parse or carried no text were already left
    out by the batch script and need nothing from you.
 
 3. **Extract what is worth keeping** from what you read — same evidence bar as
@@ -98,10 +99,13 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    ```
    CODEX_ROOT='<root>' bash "${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh" \
      --root '<root>' \
-     --paths '<the record .md paths you touched, space-separated>' \
+     --paths '<the record .md paths you touched, space-separated> [mistakes.jsonl]' \
      --what  '<kinds and counts, e.g. 1 solution, 1 mistake>' \
      --why-file '<dir>/why.txt' --source-file '<dir>/source.txt' --evidence-file '<dir>/evidence.txt'
    ```
+
+   Add `mistakes.jsonl` to `--paths` whenever `log-record.sh` appended a mistake to
+   that root, so every write of this drain is committed in this drain.
 
    Transcript text may hold quotes, `$(...)`, backticks, or a line that looks
    like a heredoc terminator; the values never pass through the shell, so there
@@ -115,22 +119,13 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    queued. The gate never `--amend`s, never `--force`s, and cites its rubric in
    `${CLAUDE_PLUGIN_ROOT}/specs/RECORD_ADMISSIBILITY.md`.
 
-7. **Advance cursors with `librarian-advance.sh`, and only that.**
-   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/librarian-advance.sh" <slug> <end>` is the only
-   way a cursor moves: never write a `cursors/*.line` file yourself, and never re-issue the
-   batch. It refuses an `<end>` past the end the batch issued for that slug. Advance a slug to its issued end once
-   every item you extracted from that range is either committed by the gate (step 6) or
-   explicitly queued in `grooming-queue.md` — and an item may be queued only after you
-   read its lines. "Queued" never covers lines you did not read: if you did not read part
-   of a range, do not advance past the last line you did read. Whatever is left
-   (unread ranges, transcripts not in this batch) is simply the next drain's batch; it
-   is never a reason to mark lines read. A slug whose range yielded nothing worth keeping
-   is advanced to its issued end once you have read it all.
-
-   This keeps a crash mid-drain safely at-least-once: killed before the advance, the next
-   batch re-issues the same lines; a re-mint of an already-committed decision/solution
-   fails loudly (`log-record.sh` refuses to overwrite without `--force`) rather than
-   duplicating silently.
+7. **Exit once every commit is done.** You run no cursor command. After you exit
+   cleanly, the poke hook advances every range in `batch.manifest` to its issued end, so
+   read the whole batch and finish every commit (or queue the item in
+   `grooming-queue.md`) before you exit. A crash or timeout leaves the cursors where they
+   were, so the next drain re-issues the same lines; a re-mint of an already-committed
+   decision/solution fails loudly (`log-record.sh` refuses to overwrite without
+   `--force`) rather than duplicating silently.
 
 # Boundaries
 

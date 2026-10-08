@@ -343,3 +343,67 @@ lp_gate_setup() {
   grep -q "librarian-poke: fail-open, loadavg unreadable" "$LOG"
   grep -q "librarian-poke: fail-open, iowait unreadable" "$LOG"
 }
+
+# ---------- the hook owns the cursors (issue #25) ----------------------------
+#
+# The model no longer moves cursors: after `claude -p` exits 0 the worker
+# advances every manifest range to its issued end; on a nonzero exit it
+# advances nothing, so the same lines are re-issued (at-least-once).
+# LIBRARIAN_MIN_INTERVAL_SECS=0 disables the cooldown so back-to-back wakes run.
+
+lp_state() { printf '%s' "$HOME/.local/state/procedures/librarian"; }
+# Copies the batch the hook issued, so a later wake cannot overwrite it.
+claude_keeps_batch() {
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+cp "$(lp_state)/batch.txt" "$STUB_BIN/batch-\$(wc -l < "$CLAUDE_LOG" | tr -d ' ').txt"
+exit ${1:-0}
+EOF
+  chmod +x "$STUB_BIN/claude"
+}
+wake() { LIBRARIAN_MIN_INTERVAL_SECS="${1:-0}" LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker; }
+
+@test "cursors: a clean exit advances every issued range; the next wake gets only newer lines" {
+  claude_keeps_batch 0
+  user_prompt                                        # L1
+  wake; [ "$status" -eq 0 ]
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+  grep -q '^\[L1\] ' "$STUB_BIN/batch-1.txt"
+  user_prompt                                        # L2, appended after wake 1
+  wake; [ "$status" -eq 0 ]
+  grep -q '^\[L2\] ' "$STUB_BIN/batch-2.txt"
+  ! grep -q '^\[L1\] ' "$STUB_BIN/batch-2.txt" || false
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "2" ]
+  wake; [ "$status" -eq 0 ]                          # nothing new: no session
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 2 ]
+}
+
+@test "cursors: a nonzero claude exit advances nothing and the lines are re-issued" {
+  claude_keeps_batch 1
+  user_prompt
+  wake; [ "$status" -eq 0 ]
+  [ ! -f "$(lp_state)/cursors/$SID.line" ]
+  grep -q 'librarian-poke: drain exited 1, cursors not advanced' "$(lp_state)/librarian-poke.log"
+  wake; [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 2 ]
+  grep -q '^\[L1\] ' "$STUB_BIN/batch-2.txt"
+}
+
+@test "cooldown: a drain started under LIBRARIAN_MIN_INTERVAL_SECS ago defers — claude never runs" {
+  user_prompt
+  mkdir -p "$(lp_state)"; date +%s > "$(lp_state)/last-drain-start"
+  wake 1800; [ "$status" -eq 0 ]
+  claude_never_ran
+  grep -q 'librarian-poke: deferred, cooldown' "$(lp_state)/librarian-poke.log"
+}
+
+@test "cooldown: the first drain stamps its start; LIBRARIAN_MIN_INTERVAL_SECS=0 disables the cooldown" {
+  user_prompt
+  wake 1800; [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ -s "$(lp_state)/last-drain-start" ]
+  user_prompt
+  wake 0; [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 2 ]
+}

@@ -8,7 +8,7 @@
 # Per store root the librarian wrote into, ONE call replaces step 6's git block:
 #
 #   CODEX_ROOT=<root> bash commit-records.sh \
-#     --root <root> --paths "<record .md paths>" --what "<kinds and counts>" \
+#     --root <root> --paths "<record .md paths> [mistakes.jsonl]" --what "<kinds and counts>" \
 #     --why-file <dir>/why.txt --source-file <dir>/source.txt \
 #     --evidence-file <dir>/evidence.txt
 #
@@ -18,6 +18,12 @@
 # A -file path must live under the procedures state dir (the same dir as the
 # librarian's cursors and grooming queue, `$(procedures_state_dir)`), typically
 # <state-dir>/tmp/commit-<root-slug>/; a path outside it is refused.
+#
+# The root-relative `mistakes.jsonl` (log-record.sh's append-only mistake log)
+# is the one non-.md path accepted, so a wake's mistake appends commit with its
+# records instead of sitting uncommitted. It skips the record-only checks
+# (normalize, fence/size, sections, lint); only its ADDED lines go through
+# check-sanitization.sh, so a row already in history never blocks an append.
 #
 # Runs, in order, aborting ATOMICALLY (no commit, no push) on the first failure
 # and appending an actionable note (root, failing path(s), which check) to the
@@ -71,15 +77,16 @@ SIZE_CAP=32768
 # under the procedures state dir (`$(procedures_state_dir)`).
 usage() {
     cat <<'EOF'
-Usage: commit-records.sh --root PATH --paths "p1.md p2.md" \
+Usage: commit-records.sh --root PATH --paths "p1.md p2.md [mistakes.jsonl]" \
          --what STR --why STR --source STR --evidence STR
-       commit-records.sh --root PATH --paths "p1.md p2.md" --what STR \
+       commit-records.sh --root PATH --paths "p1.md p2.md [mistakes.jsonl]" --what STR \
          --why-file PATH --source-file PATH --evidence-file PATH
        commit-records.sh --normalize --root PATH --paths "p1.md p2.md"
 
 Prefer the -file forms for transcript-derived text; nothing is ever
 assembled into shell source. A -file path must live under the procedures
-state dir, typically <state-dir>/tmp/commit-<root-slug>/.
+state dir, typically <state-dir>/tmp/commit-<root-slug>/. The
+root-relative mistakes.jsonl is the one non-.md path --paths accepts.
 EOF
 }
 # _read_meta_file FILE OPT — read a metadata file verbatim into _META_VALUE
@@ -169,12 +176,13 @@ read -ra PATHS <<< "$PATHS_RAW"
 # ending in .md, located under the record directories ($RECDIR/ or plans/). Absolute
 # paths and any `..` segment are rejected so a caller cannot reach outside the
 # selected store. A non-.md entry is rejected so a sensitive non-record file cannot
-# ride in unvalidated. The literal `.index` is the one tolerated exception: accepted
-# for caller compatibility and dropped, since the gate adds `.index` itself (step 5);
+# ride in unvalidated; the root-relative `mistakes.jsonl` is the one exception, held
+# apart in JSONL and checked by its added lines only. The literal `.index` is also
+# tolerated: accepted for caller compatibility and dropped, since the gate adds `.index` itself (step 5);
 # the drop is announced once on stderr so a caller is not left believing it selected
 # the index.
 ROOT_PHYS="$(cd "$ROOT" && pwd -P)"
-_FILTERED=()
+_FILTERED=() JSONL=""
 for _p in ${PATHS[@]+"${PATHS[@]}"}; do
     case "$_p" in
         /*) usage_err "--paths entry must be root-relative, not absolute: $_p" ;;
@@ -183,6 +191,7 @@ for _p in ${PATHS[@]+"${PATHS[@]}"}; do
             [ -n "${_index_noted:-}" ] || printf '%s: note: ".index" in --paths is ignored; the gate stages the index itself\n' "$prog" >&2
             _index_noted=1
             continue ;;
+        mistakes.jsonl) JSONL=mistakes.jsonl; continue ;;
         *.md)
             case "$_p" in
                 "$RECDIR"/*|plans/*) _FILTERED+=("$_p") ;;
@@ -193,8 +202,8 @@ for _p in ${PATHS[@]+"${PATHS[@]}"}; do
     esac
 done
 unset _p _index_noted
-[ "${#_FILTERED[@]}" -gt 0 ] || usage_err "--paths has no record .md entries"
-PATHS=("${_FILTERED[@]}")
+[ "${#_FILTERED[@]}" -gt 0 ] || [ -n "$JSONL" ] || usage_err "--paths has no record .md entries"
+PATHS=(${_FILTERED[@]+"${_FILTERED[@]}"})
 unset _FILTERED
 
 # Load the canonical seven-key schema order for normalize. A loader failure
@@ -303,7 +312,7 @@ _slug_of_id() {
 FINAL_PATHS=() REC_PATHS=()
 normalize_and_collect() {
     local rel abs newrel newabs id slug base want dir
-    for rel in "${PATHS[@]}"; do
+    for rel in ${PATHS[@]+"${PATHS[@]}"}; do
         case "$rel" in
             *.md)
                 abs="$ROOT/$rel"
@@ -463,6 +472,27 @@ if [ "${#REC_PATHS[@]}" -gt 0 ]; then
     fi
 fi
 
+# mistakes.jsonl — sanitization over the lines this commit ADDS (vs HEAD, or
+# the whole file when untracked). Scanning the whole tracked file would let one
+# historic row block every later append forever.
+if [ -n "$JSONL" ]; then
+    [ -L "$ROOT/$JSONL" ] && _abort path "$JSONL is a symlink (refusing to follow)"
+    [ -f "$ROOT/$JSONL" ] || _abort path "path does not exist: $JSONL"
+    _added="$(mktemp)"
+    if git -C "$ROOT" ls-files --error-unmatch -- "$JSONL" >/dev/null 2>&1; then
+        git -C "$ROOT" diff --no-color -U0 HEAD -- "$JSONL" \
+            | awk '/^@@/ { h = 1; next } h && /^\+/ { print substr($0, 2) }' > "$_added"
+    else
+        cat -- "$ROOT/$JSONL" > "$_added"
+    fi
+    if ! san_out="$(bash "$SCRIPT_DIR/check-sanitization.sh" "$_added" 2>&1)"; then
+        rm -f "$_added"
+        _abort sanitization "$JSONL added lines: $(printf '%s' "$san_out" | tr '\n' ' ')"
+    fi
+    rm -f "$_added"
+    FINAL_PATHS+=("$JSONL")
+fi
+
 # check-sections.sh (WARN default; blocks only under LINT_SECTIONS_REQUIRED=1)
 if [ "${#REC_PATHS[@]}" -gt 0 ]; then
     SEC_ABS=(); for rel in "${REC_PATHS[@]}"; do SEC_ABS+=("$ROOT/$rel"); done
@@ -506,7 +536,7 @@ if [ "${#REC_PATHS[@]}" -gt 0 ]; then
 fi
 
 # ---- step 4: validate — per-store ----
-if [ -x "$ROOT/scripts/validate.sh" ]; then
+if [ "${#REC_PATHS[@]}" -gt 0 ] && [ -x "$ROOT/scripts/validate.sh" ]; then
     if ! vs_out="$( cd "$ROOT" && ./scripts/validate.sh ${REC_PATHS[@]+"${REC_PATHS[@]}"} 2>&1 )"; then
         _abort per-store-validate "$(printf '%s' "$vs_out" | tr '\n' ' ')"
     fi
@@ -514,9 +544,10 @@ fi
 
 # ---- step 5: rebuild index into the same commit ----
 _rebuild_index
-# The gate — not the caller — stages the rebuilt index. FINAL_PATHS holds only
-# record .md paths (any caller-supplied .index was dropped up front); append it
-# now so the `git add` below stages the index alongside the records it describes.
+# The gate — not the caller — stages the rebuilt index. FINAL_PATHS holds the
+# record .md paths plus any mistakes.jsonl (a caller-supplied .index was dropped
+# up front); append it now so the `git add` below stages the index alongside the
+# records it describes.
 # Stores that gitignore `.index/` keep it local-only: `git add` refuses an
 # ignored path, which would block every commit, so skip it there. --no-index:
 # without it, index files tracked before the ignore rule make check-ignore say

@@ -4,6 +4,9 @@
 #
 #   bash librarian-advance.sh <slug> <end>
 #
+# Its caller is hooks/librarian-poke.sh, which advances every issued range to its
+# end after a librarian wake exits 0; the librarian model never runs it.
+#
 # Sets <state-dir>/cursors/<slug>.line to <end>, but only within the range the
 # current batch issued for <slug> (<state-dir>/batch.manifest, written by
 # librarian-batch.sh): <end> may not exceed the issued end, so a cursor can

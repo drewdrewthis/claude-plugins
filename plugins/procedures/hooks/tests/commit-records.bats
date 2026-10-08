@@ -654,3 +654,58 @@ _clone() {
   [ "$(_commit_count)" -eq "$before" ]
   [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]   # nothing staged
 }
+
+# ---- AC30: root-relative mistakes.jsonl rides in --paths (issue #25) ----
+# log-record.sh appends mistakes to <root>/mistakes.jsonl; the librarian must be
+# able to commit those appends in the same wake. Only ADDED rows are scanned, so
+# an old row already in history never blocks a new append.
+
+# _committed_jsonl <rows…> — commit mistakes.jsonl at the root with these rows.
+_committed_jsonl() {
+  printf '%s\n' "$@" > "$ROOT/mistakes.jsonl"
+  git -C "$ROOT" add mistakes.jsonl; git -C "$ROOT" commit -qm jsonl
+}
+
+@test "AC30: --paths mistakes.jsonl alone commits the appended rows" {
+  _committed_jsonl '{"old":"/Users/alice/x"}'      # historic leak: not an added line
+  printf '{"new":1}\n' >> "$ROOT/mistakes.jsonl"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(_commit_count)" -eq "$((before + 1))" ]
+  git -C "$ROOT" log -1 --name-only --format= | grep -qx "mistakes.jsonl"
+  [ -z "$(git -C "$ROOT" status --porcelain -- mistakes.jsonl)" ]
+}
+
+@test "AC30: mistakes.jsonl (untracked) and a record .md land in one commit" {
+  printf '{"new":1}\n' > "$ROOT/mistakes.jsonl"
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md mistakes.jsonl" \
+    --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  local files; files="$(git -C "$ROOT" log -1 --name-only --format=)"
+  [[ "$files" == *"mistakes.jsonl"* ]]
+  [[ "$files" == *"records/failure-modes/rec.md"* ]]
+}
+
+@test "AC30: only the root-relative mistakes.jsonl is accepted; other non-.md paths are still refused" {
+  mkdir -p "$ROOT/sub"; printf '{}\n' > "$ROOT/sub/mistakes.jsonl"; printf '{}\n' > "$ROOT/other.jsonl"
+  local before; before=$(_commit_count)
+  for p in sub/mistakes.jsonl other.jsonl; do
+    _run_gate --root "$ROOT" --paths "$p" --what x --why w --source s --evidence e
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not a record .md file: $p"* ]]
+  done
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+@test "AC30: a leaky added mistakes.jsonl row aborts the commit" {
+  _committed_jsonl '{"old":1}'
+  printf '{"new":"/Users/alice/secret"}\n' >> "$ROOT/mistakes.jsonl"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [sanitization]"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]
+}
