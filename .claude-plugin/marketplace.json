@@ -18,7 +18,7 @@
     {
       "name": "delegation",
       "source": "./plugins/delegation",
-      "description": "Delegation machinery: /delegate routes a task shape to a specialist from the host's own agent roster, /create-new-sub-agent mints one when none fits (template + linter)."
+      "description": "Delegation machinery: /delegate routes a task shape to a specialist from the host's own agent roster, /create-new-sub-agent mints one when none fits (template + linter); a hook denies the general-purpose subagent."
     },
     {
       "name": "about-my-person",

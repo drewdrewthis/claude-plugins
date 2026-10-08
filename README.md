@@ -253,6 +253,7 @@ one plugin serves a fleet whose rosters differ.
 | `/delegate` | classify the task shape (kind / difficulty / focus), run `scripts/route-delegation.sh` for the agent + model + why, then build the briefing — self-contained, result-demanding, coding/docs standards woven in — and verify what comes back |
 | `/create-new-sub-agent` | mint the specialist the router had no row for: `templates/agent.template.md` (single mandate, right-sized tier, tools allowlist, tripwires) + `references/write-agent-doc.procedure.md`, written into the host roster |
 | `scripts/route-delegation.sh` | the routing table AS A SCRIPT — one row per task shape, each agent's model read LIVE from the roster's `model:` frontmatter, so retuning the roster propagates without editing prose. `--list` dumps every route |
+| `hooks/guard-general-purpose.sh` | PreToolUse (`Agent\|Task`) hook: denies the `general-purpose` subagent (or an omitted `subagent_type`), which inherits the session model tier, and points at `/delegate` and `route-delegation.sh --list`. Deny, not ask, so unattended sessions never stall; fails open |
 | `scripts/lint-agent-files.sh` | structural lint for agent files: frontmatter + `Role` + `Boundaries`, no dates, no issue refs (hard); size budget and missing `model:` (warn) |
 
 Config: `CLAUDE_AGENTS_DIR` for the roster, else `$CODEX_ROOT/agents`, else
@@ -266,13 +267,15 @@ agents gets the self-extension rule ("mint one via `/create-new-sub-agent`"),
 not a drift error about a corruption that does not exist. A matched agent
 missing while *other* agents exist is still exit 3 — real drift.
 
-Vendored from the codex with two of the adaptation classes `procedures` uses,
-each marked `PLUGIN ADAPTATION`: data-root defaults, and host-neutral wording
-in place of codex-internal file/hook references. (No fork-skill model pin here
+Vendored from the codex with three adaptation classes, each marked
+`PLUGIN ADAPTATION`: data-root defaults, host-neutral wording in place of
+codex-internal file/hook references, and the guard hook's host-neutrality (no
+pinned `PATH`, since jq lives in `/opt/homebrew/bin` on macOS; no hardcoded
+roster, since the roster is the host's). (No fork-skill model pin here
 — this plugin ships no `context: fork` skill.) Tests:
 
 ```
-cd plugins/delegation && bats scripts/tests
+cd plugins/delegation && bats hooks/tests scripts/tests
 ```
 
 ### about-my-person (0.1.0)

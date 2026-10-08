@@ -1,0 +1,13 @@
+{
+  "description": "Deny the general-purpose subagent (it inherits the session model tier); route by task shape via /delegation:delegate instead",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/guard-general-purpose.sh", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
