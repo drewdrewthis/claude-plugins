@@ -95,8 +95,8 @@ The decision tree (task shape -> specialist):
   ac                  -> ac-reviewer       (Opus)    AC completeness + sharpness
   stress-test         -> devils-advocate   (Opus)    adversarial plan/design stress-test
   audit               -> codex-auditor     (Sonnet)  read-only codex-corpus conformance audit, drafts reorg plan
-  other / no match    -> mint the agent via /create-new-sub-agent, then reload;
-                         general-purpose is the last resort on both axes
+  other / no match    -> no route fits: closest specialist with a sharper brief
+                         for a one-off, mint via /create-new-sub-agent for a recurring shape
 
 Model shown is read live from <roster>/<name>.md frontmatter, not hardcoded.
 The roster is the HOST's: $CLAUDE_AGENTS_DIR, else $CODEX_ROOT/agents, else
@@ -152,12 +152,13 @@ print_self_extension_rule() {
   cat <<'EOF'
 No specialist fits this task shape.
 
-Self-extension rule: mint the agent via /create-new-sub-agent — it writes a
+One-off: send it to the closest existing specialist with a sharper brief.
+Recurring shape: mint the agent via /create-new-sub-agent — it writes a
 right-sized model + tools allowlist into your agent roster — then reload so the
 session sees it, and dispatch the new agent by name.
 
-general-purpose is the LAST RESORT on both axes (coding and non-coding), not a
-default. Reaching for it quietly on mechanical or prose work burns Opus on tasks
+general-purpose is DENIED by this plugin's guard hook on both axes (coding and
+non-coding). Reaching for it quietly on mechanical or prose work burns Opus on tasks
 Haiku/Sonnet would do faster and cheaper.
 EOF
 }
@@ -186,7 +187,7 @@ do_list() {
     printf '%-20s -> %-20s [%s]\n    %s\n' "$key" "$agent" "$model" "$rationale"
   done
   # PLUGIN ADAPTATION: host-neutral wording, matching print_self_extension_rule.
-  printf '%-20s -> %s\n' "other/no-match" "mint via /create-new-sub-agent, then reload; general-purpose = last resort"
+  printf '%-20s -> %s\n' "other/no-match" "one-off: closest specialist with a sharper brief; recurring: mint via /create-new-sub-agent"
 }
 
 # ---- parse args ----

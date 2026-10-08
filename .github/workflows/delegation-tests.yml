@@ -1,0 +1,65 @@
+name: delegation-tests
+
+# The delegation guard hook is shared by every agent on the machine, so the
+# bats suite runs on every change to the plugin. Paths-filtered: nothing else
+# in the repo affects this result. Runs on pull_request AND on push to main so
+# a merge can't land a combination no single PR tested.
+on:
+  pull_request:
+    paths:
+      - "plugins/delegation/**"
+      - ".github/workflows/delegation-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/delegation/**"
+      - ".github/workflows/delegation-tests.yml"
+
+permissions:
+  contents: read
+
+# On a push the PR number is empty; fall back to the ref so pushes don't all
+# collapse into one self-cancelling group.
+concurrency:
+  group: delegation-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bats:
+    # The macOS leg is the portability gate: stock macOS ships bash 3.2, and the
+    # suite runs the hook via /bin/bash.
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runs hooks/tests only: scripts/tests use GNU-only tools (sed -i) and
+        # lint-agent-files.sh output differs there; its macOS portability is a separate fix.
+        include:
+          - os: ubuntu-latest
+            suites: hooks/tests scripts/tests
+          - os: macos-latest
+            suites: hooks/tests
+    runs-on: ${{ matrix.os }}
+    # Seconds of work, no network. A ceiling turns a hang into a failed check.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install bats and jq (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+      - name: Install bats and jq (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bats-core jq
+      - name: Record the toolchain under test
+        run: |
+          /bin/bash --version | head -1
+          bats --version
+          jq --version
+      - name: Run the delegation suite
+        working-directory: plugins/delegation
+        env:
+          SUITES: ${{ matrix.suites }}
+        # Unquoted on purpose: SUITES is a space-separated list of suite dirs.
+        run: bats $SUITES

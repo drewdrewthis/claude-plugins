@@ -20,4 +20,4 @@ status: active
 3. For an `agents/*.md` file, run `scripts/lint-agent-files.sh` — it enforces the template's hard rules R1-R5 (BLOCK) and size budget (WARN). A file listed in `agents/.lint-legacy` gets hard-rule violations downgraded to WARN until converted; once it passes, remove it from that list.
 4. Commit and push your changes.
 
-> **Dispatch note:** a newly-written agent file is NOT dispatchable as a native `subagent_type` in the session that created it — agents load at session start. Run `/reload-plugins` (or start a fresh session) before invoking the new agent by name. Once loaded, dispatch the new agent directly by its `subagent_type` name — do NOT route through `general-purpose`, which is hook-blocked.
+> **Dispatch note:** a newly-written agent file is NOT dispatchable as a native `subagent_type` in the session that created it — agents load at session start. Run `/reload-plugins` (or start a fresh session) before invoking the new agent by name. Once loaded, dispatch the new agent directly by its `subagent_type` name — do NOT route through `general-purpose`, which the delegation plugin's hook denies.

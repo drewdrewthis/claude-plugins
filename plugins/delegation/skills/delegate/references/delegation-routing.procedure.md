@@ -22,8 +22,10 @@ status: active
 | AC sharpening | `ac-reviewer` | Opus |
 | Adversarial stress-test | `devils-advocate` | Opus |
 | Multi-file reasoning, complex debugging | `advanced-coder` | Opus |
-| Genuinely novel work no specialist fits AND not worth minting | `general-purpose` (**HOOK-BLOCKED** — harness surfaces an ask; last resort only) | inherits session (Opus) |
+| No specialist fits | closest existing specialist with a sharper brief, or mint via `/create-new-sub-agent` | per agent |
+
+Note: `general-purpose` is not a route. This plugin's `hooks/guard-general-purpose.sh` denies it, an omitted `subagent_type` too.
 
 ## Self-extension rule
 
-When no existing specialist fits, write `agents/<name>.md` with a right-sized model + tools, then `/reload-plugins`. Tier guidance: haiku for mechanical fully-specified execution; sonnet for standard implementation and research; opus for judgment-bearing design, debugging-of-unknowns, and verification. Only a genuine one-off that is not worth minting justifies an approved `general-purpose` call.
+When no existing specialist fits, write `agents/<name>.md` with a right-sized model + tools, then `/reload-plugins`. Tier guidance: haiku for mechanical fully-specified execution; sonnet for standard implementation and research; opus for judgment-bearing design, debugging-of-unknowns, and verification.
