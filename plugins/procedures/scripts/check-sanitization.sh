@@ -23,8 +23,10 @@
 #     value is 16+ chars mixing letters and digits
 # Free-text rows carry transcript prose, which leaks in more shapes than a
 # hand-written record does. Prose also NAMES these shapes, so --strict skips a
-# hit that is a placeholder: <...>, $VAR / ${VAR}, example, xxx, ..., or a home
-# dir named user, username, name, me, you or someone.
+# hit whose WHOLE value is a placeholder: a home dir named <...>, user,
+# username, name, me, you or someone (trailing .,;:) ignored); a credential
+# value that is <...>, $VAR / ${VAR}, or contains "example". Token classes
+# skip nothing.
 #
 # Usage:
 #   check-sanitization.sh [--strict] <file|-> [file..]  # check the named files;
@@ -80,16 +82,23 @@ _scan() {
         | grep "$@" 2>/dev/null
 }
 
-# _real_hits — drop placeholder hits from `grep -no` output (--strict only).
-_real_hits() {
-    grep -viE '^[0-9]+:.*(<[^>]*>|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|example|xxx|\.\.\.)' \
-        | grep -viE '[/\\](user|username|name|me|you|someone)$'
+# _home_trim — `grep -no` home-path hits without trailing sentence punctuation.
+_home_trim() { sed -E 's/[.,;:)]+$//'; }
+
+# _home_real — trimmed home-path hits minus those whose name segment is wholly
+# a placeholder or an allow name.
+_home_real() {
+    _home_trim | grep -viE '[/\\](user|username|name|me|you|someone|<[^>]*>)$'
 }
 
-# _value_mixed — keep credential hits whose value mixes letters and digits, so
-# a plain identifier like `key: some_column_name_here` is not a secret.
-_value_mixed() {
-    awk '{ v = $0; sub(/^[0-9]+:[^=:]*[=:][ \t]*/, "", v); if (v ~ /[A-Za-z]/ && v ~ /[0-9]/) print }'
+# _cred_real — credential hits whose value (cut at the first \ " , or space)
+# is 16+ chars mixing letters and digits and is not wholly a placeholder, so
+# `key: some_column_name_here` and `TOKEN=${GITHUB_TOKEN}` are not secrets.
+_cred_real() {
+    awk '{ v = $0; sub(/^[0-9]+:[^=:]*[=:][ \t]*/, "", v); sub(/^[\\"\047]+/, "", v)
+           sub(/[\\", \t].*$/, "", v)
+           if (v ~ /^<[^>]*>$/ || v ~ /^[$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?$/ || tolower(v) ~ /example/) next
+           if (length(v) >= 16 && v ~ /[A-Za-z]/ && v ~ /[0-9]/) print }'
 }
 
 # _report <class> <grep -n hits> — one FAIL line naming the class and the first
@@ -100,8 +109,8 @@ _report() {
 }
 
 # _class <class> <grep-args...> — scan $f for one leak class; a scan error
-# fails closed like a hit. _sclass <class> <-o grep-args...> is the --strict
-# form: placeholder hits are dropped first.
+# fails closed like a hit. _sclass <class> <filter> <-o grep-args...> is the
+# --strict form: <filter> drops placeholder hits first.
 _class() {
     local label="$1" hits rc; shift
     hits="$(_scan "$f" "$@")"; rc=$?
@@ -113,11 +122,10 @@ _class() {
     fi
 }
 _sclass() {
-    local label="$1" hits rc; shift
+    local label="$1" filter="$2" hits rc; shift 2
     hits="$(_scan "$f" "$@")"; rc=$?
     if [ "$rc" -eq 0 ]; then
-        hits="$(printf '%s\n' "$hits" | _real_hits)"
-        [ "$label" = "credential assignment" ] && hits="$(printf '%s\n' "$hits" | _value_mixed)"
+        hits="$(printf '%s\n' "$hits" | "$filter")"
         [ -n "$hits" ] && _report "$label" "$hits"
     elif [ "$rc" -gt 1 ]; then
         echo "$prog: FAIL: $f — could not scan (grep exit $rc); failing closed"
@@ -144,7 +152,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
     # insensitive, matched per occurrence so a mixed-content line cannot hide it.
     # --strict drops the trailing-slash requirement.
     if [ -n "$STRICT" ]; then
-        _sclass "personal macOS home path" -nioE "/Users/$NAME"
+        _sclass "personal macOS home path" _home_real -nioE "/Users/$NAME"
     else
         _class "personal macOS home path" -nioE '/Users/[^/]+/'
     fi
@@ -163,8 +171,11 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
         echo "$prog: FAIL: $f — could not scan (grep exit $rc); failing closed"
         FAIL=1
     elif [ "$rc" -eq 0 ]; then
-        bad="$(printf '%s\n' "$hits" | grep -vE "$ok")"
-        [ -n "$STRICT" ] && bad="$(printf '%s\n' "$bad" | _real_hits)"
+        if [ -n "$STRICT" ]; then
+            bad="$(printf '%s\n' "$hits" | _home_trim | grep -vE "$ok" | _home_real)"
+        else
+            bad="$(printf '%s\n' "$hits" | grep -vE "$ok")"
+        fi
         trav="$(_scan "$f" -nioE '/home/[^/]+/\.\.')"
         both="$(printf '%s\n%s\n' "$bad" "$trav" | grep -v '^$')"
         [ -n "$both" ] && _report "personal Linux home path" "$both"
@@ -174,13 +185,13 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
     _class "private key material" -n -- '-----BEGIN .*PRIVATE KEY-----'
 
     if [ -n "$STRICT" ]; then
-        _sclass "personal Windows home path" -nioE "[a-z]:\\\\Users\\\\$NAME"
-        _sclass "GitHub token" \
-            -noE '(^|[^A-Za-z0-9_])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})'
-        _sclass "API key" -noE '(^|[^A-Za-z0-9_-])(sk-ant-[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{20,})'
-        _sclass "AWS key" -noE '(^|[^A-Z0-9])AKIA[0-9A-Z]{16}'
-        _sclass "bearer token" -noE 'Bearer[[:space:]]+[A-Za-z0-9._~+/=-]{20,}'
-        _sclass "credential assignment" \
+        _sclass "personal Windows home path" _home_real -nioE "[a-z]:\\\\Users\\\\$NAME"
+        _class "GitHub token" \
+            -nE '(^|[^A-Za-z0-9_])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})'
+        _class "API key" -nE '(^|[^A-Za-z0-9_-])(sk-ant-[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{20,})'
+        _class "AWS key" -nE '(^|[^A-Z0-9])AKIA[0-9A-Z]{16}'
+        _class "bearer token" -nE 'Bearer[[:space:]]+[A-Za-z0-9._~+/=-]{20,}'
+        _sclass "credential assignment" _cred_real \
             -nioE '(KEY|TOKEN|SECRET|PASSWORD)[[:space:]]*[=:][[:space:]]*[^[:space:]]{16,}'
     fi
 done

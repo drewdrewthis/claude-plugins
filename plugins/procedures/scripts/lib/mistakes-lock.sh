@@ -33,17 +33,35 @@ mistakes_locked() {
         return
     fi
     until mkdir "$lock.d" 2>/dev/null; do
-        # The holder only appends or rewrites one small file; a dir older
-        # than a minute is a crashed holder, so take it over.
-        if [ -n "$(find "$lock.d" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-            rmdir "$lock.d" 2>/dev/null
+        # The holder only appends or rewrites one small file; a dir older than
+        # a minute is a crashed holder. Rename it away (atomic: one waiter
+        # wins) rather than rmdir the live path, which a racing waiter may
+        # already have re-created.
+        if [ -n "$(find "$lock.d" -maxdepth 0 -mmin +1 2>/dev/null)" ] \
+            && mv "$lock.d" "$lock.d.stale.$$" 2>/dev/null; then
+            rmdir "$lock.d.stale.$$" 2>/dev/null
             continue
         fi
         [ "$tries" -lt $(( wait * 10 )) ] || return 75
         tries=$(( tries + 1 ))
         sleep 0.1
     done
+    _MISTAKES_HELD+=("$lock.d")
+    trap _mistakes_release_all EXIT
+    trap '_mistakes_release_all; exit 130' INT
+    trap '_mistakes_release_all; exit 143' TERM
     "$@"; rc=$?
     rmdir "$lock.d" 2>/dev/null
+    unset '_MISTAKES_HELD[${#_MISTAKES_HELD[@]}-1]'
+    [ "${#_MISTAKES_HELD[@]}" -gt 0 ] || trap - EXIT INT TERM
     return "$rc"
+}
+
+# Lock dirs this shell holds (nested calls stack), released by the traps if
+# the holder exits or is killed mid-command.
+_MISTAKES_HELD=()
+_mistakes_release_all() {
+    local d
+    for d in ${_MISTAKES_HELD[@]+"${_MISTAKES_HELD[@]}"}; do rmdir "$d" 2>/dev/null; done
+    _MISTAKES_HELD=()
 }

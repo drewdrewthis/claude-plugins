@@ -284,17 +284,20 @@ lp_advance_issued() {
     done < "$1"
 }
 
-# lp_store_status — "<root><TAB><porcelain line><TAB><content hash>" for every
+# lp_store_status — "<root><TAB><XY> <path><TAB><content hash>" for every
 # dirty path in each configured store root (stores.sh STORE_ROOTS); nothing
 # when none resolve. The hash catches a path that was already dirty and was
-# written again: its porcelain line alone would not change.
+# written again: its status alone would not change. -z keeps paths unquoted
+# (a quoted "b c" would not hash); a rename record is "XY new\0old\0".
 lp_store_status() {
     declare -p STORE_ROOTS >/dev/null 2>&1 || return 0
-    local r line h
+    local r rec old p h
     for r in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do
-        git -C "$r" status --porcelain -uall 2>/dev/null | while IFS= read -r line; do
-            h="$(git -C "$r" hash-object -- "${line:3}" 2>/dev/null)" || h="-"
-            printf '%s\t%s\t%s\n' "$r" "$line" "$h"
+        git -C "$r" status --porcelain -z -uall 2>/dev/null | while IFS= read -r -d '' rec; do
+            case "$rec" in [RC]?\ * | ?[RC]\ *) IFS= read -r -d '' old ;; esac
+            p="${rec:3}"
+            h="$(git -C "$r" hash-object -- "$p" 2>/dev/null)" || h="-"
+            printf '%s\t%s\t%s\n' "$r" "${rec//$'\n'/?}" "$h"
         done
     done
 }

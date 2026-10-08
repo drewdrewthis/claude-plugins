@@ -79,6 +79,7 @@ source "$SCRIPT_DIR/lib/mistakes-lock.sh"
 
 SIZE_CAP=32768
 JSONL_QUARANTINE="$(procedures_state_dir)/mistakes.quarantine.jsonl"
+JSONL_QUARANTINE_LOCK="${JSONL_QUARANTINE%.jsonl}.lock"
 
 # usage — print the supported invocation forms to stdout. Prefer the -file
 # forms (--why-file/--source-file/--evidence-file) for transcript-derived
@@ -127,29 +128,77 @@ _read_meta_file() {
 # usage_err — print "prog: msg" plus the usage text to stderr, then exit 2.
 usage_err() { printf '%s: %s\n' "$prog" "$1" >&2; usage >&2; exit 2; }
 
-# _release_quarantine — under the mistakes lock: move the quarantined rows of
-# root $1 (physical path) back into its mistakes.jsonl; other roots' rows stay.
+# _write_via_tmp <path> <mode|keep> — replace <path> with stdin through a temp
+# file in the same dir and a rename, so no reader or crash sees it truncated.
+# `keep` carries over the current file's mode.
+_write_via_tmp() {
+    local tmp
+    tmp="$(mktemp "${1%/*}/.${1##*/}.XXXXXX")" || return 1
+    if [ "$2" = keep ]; then
+        if [ -e "$1" ]; then cp -p -- "$1" "$tmp" || return 1; fi
+    else
+        chmod "$2" "$tmp" || return 1
+    fi
+    cat > "$tmp" && mv -f -- "$tmp" "$1"
+}
+
+# _read_all <path> — print a file verbatim (empty when absent); fails when it
+# exists but cannot be read, so a rewrite never drops what it could not read.
+_read_all() { [ ! -e "$1" ] || cat -- "$1"; }
+
+# _qrows <root> <match|rest> — quarantine rows of <root> as "<row|tail>\t<row>"
+# (match), or every other root's lines unchanged (rest). Quarantine lines are
+# "<root>\t<row|tail>\t<row>"; a "tail" is the new text of a glued row.
+_qrows() {
+    awk -F'\t' -v r="$1" -v m="$2" '
+        m == "rest" { if ($1 != r) print; next }
+        $1 == r { sub(/^[^\t]*\t/, ""); print }' <<< "$QALL"
+}
+
+# _release_quarantine <root> — under <root>'s mistakes lock: refuse unless its
+# mistakes.jsonl is committed, then (quarantine lock) move the root's rows back.
 _release_quarantine() {
-    local all mine rest jsonl="$1/mistakes.jsonl"
-    all="$(cat -- "$JSONL_QUARANTINE" 2>/dev/null && printf x)"; all="${all%x}"
-    mine="$(printf '%s' "$all" | awk -F'\t' -v r="$1" '$1 == r { sub(/^[^\t]*\t/, ""); print }')"
-    rest="$(printf '%s' "$all" | awk -F'\t' -v r="$1" '$1 != r')"
+    local st
+    if ! st="$(git -C "$1" status --porcelain -- mistakes.jsonl 2>&1)" || [ -n "$st" ]; then
+        printf '%s: %s/mistakes.jsonl has uncommitted changes (or git status failed); commit or discard them first\n' \
+            "$prog" "$1" >&2
+        return 2
+    fi
+    mkdir -p "${JSONL_QUARANTINE%/*}" || return 1
+    mistakes_locked "$JSONL_QUARANTINE_LOCK" _release_rows "$1"
+}
+
+_release_rows() {
+    local mine rest old jsonl="$1/mistakes.jsonl" n tails
+    QALL="$(_read_all "$JSONL_QUARANTINE" && printf x)" || return 1
+    QALL="${QALL%x}"
+    mine="$(_qrows "$1" match)"
+    rest="$(_qrows "$1" rest)"
     if [ -z "$mine" ]; then
         printf '%s: no quarantined rows for %s\n' "$prog" "$1"
         return 0
     fi
-    if [ -s "$jsonl" ] && [ -n "$(tail -c1 "$jsonl")" ]; then printf '\n' >> "$jsonl" || return 1; fi
-    printf '%s\n' "$mine" >> "$jsonl" || return 1
-    ( umask 077; if [ -n "$rest" ]; then printf '%s\n' "$rest"; fi > "$JSONL_QUARANTINE" ) || return 1
-    printf '%s: released %s quarantined rows into %s; edit them, then re-run the gate\n' \
-        "$prog" "$(printf '%s\n' "$mine" | wc -l | tr -d ' ')" "$jsonl"
+    old="$(_read_all "$jsonl" && printf x)" || return 1
+    old="${old%x}"
+    [ -z "$old" ] || [ "${old: -1}" = $'\n' ] || old="$old"$'\n'
+    { printf '%s' "$old"; printf '%s\n' "$mine" | cut -f2-; } | _write_via_tmp "$jsonl" keep || return 1
+    if [ -n "$rest" ]; then printf '%s\n' "$rest"; fi | _write_via_tmp "$JSONL_QUARANTINE" 600 || return 1
+    n="$(printf '%s\n' "$mine" | wc -l | tr -d ' ')"
+    tails="$(printf '%s\n' "$mine" | grep -c '^tail'$'\t')"
+    {
+        printf '%s: WARNING: released %s quarantined rows into %s.\n' "$prog" "$n" "$jsonl"
+        printf '%s: WARNING: they will be re-scanned by the gate; edit out the leak first, and do not commit them by hand.\n' "$prog"
+        [ "$tails" -eq 0 ] || printf '%s: WARNING: %s of them are tails of a glued row and may not be valid JSON.\n' "$prog" "$tails"
+    } >&2
 }
 
 if [ "${1:-}" = "--release-quarantine" ]; then
     [ "$#" -eq 2 ] && [ -d "$2" ] || usage_err "--release-quarantine needs an existing root dir"
     _rq_root="$(cd "$2" && pwd -P)" || usage_err "cannot resolve root: $2"
-    mistakes_locked "$(mistakes_lock_path "$_rq_root")" _release_quarantine "$_rq_root" \
-        || { printf '%s: could not release the quarantine (lock busy or write failed)\n' "$prog" >&2; exit 1; }
+    mistakes_locked "$(mistakes_lock_path "$_rq_root")" _release_quarantine "$_rq_root"
+    _rq_rc=$?
+    [ "$_rq_rc" -ne 75 ] || printf '%s: a mistakes lock stayed busy; nothing released\n' "$prog" >&2
+    [ "$_rq_rc" -eq 0 ] || exit 1
     exit 0
 fi
 
@@ -644,12 +693,13 @@ fi
 # would call the file binary and show no rows), a removed row (the file is
 # append-only), a change that yields no added rows, or a scanner failure all
 # abort. One removal is allowed: HEAD's newline-less last row, when the first
-# added row starts with it (re-terminated, or a row glued on); only the text
-# after it is new. A row that trips check-sanitization --strict moves to the
-# quarantine (local, outside git, mode 600) with a queue note naming only its
-# line and leak class, so one leak cannot wedge every later append.
+# added row starts with it (re-terminated, or a row glued on); the glued line
+# is scanned whole, since a token can straddle the join. A row that trips
+# check-sanitization --strict moves to the quarantine (local, outside git,
+# mode 600) with a queue note naming only its line and leak class, so one
+# leak cannot wedge every later append; of a glued row only the new tail moves.
 _stage_jsonl() {
-    local f="$JSONL" n_all n_text diff added="" ln keep row out cls
+    local f="$JSONL" n_all n_text diff added="" ln keep row cls pcls kind
     [ -L "$ROOT/$f" ] && _abort path "$f is a symlink (refusing to follow)"
     [ -f "$ROOT/$f" ] || _abort path "path does not exist: $f"
     git -C "$ROOT" add -- "$f" 2>/dev/null || _abort commit "git add failed for: $f"
@@ -661,7 +711,7 @@ _stage_jsonl() {
         diff="$(git -C "$ROOT" diff --cached -U0 --text --no-ext-diff --no-textconv HEAD -- "$f")" \
             || _abort jsonl "git diff of the staged $f failed"
         # -U0 hunk header "@@ -a,b +c,d @@": added rows are numbered from c.
-        # Emits "<line>\t<kept-prefix-bytes>\t<new text>"; exits 1 on a removal
+        # Emits "<line>\t<prefix-bytes-from-HEAD>\t<line text>"; exits 1 on a removal
         # other than the newline-less last row described above.
         added="$(printf '%s\n' "$diff" | LC_ALL=C awk '
             /^@@/ { if (pend) exit 1
@@ -672,7 +722,7 @@ _stage_jsonl() {
             /^\+/ { row = substr($0, 2); keep = 0
                     if (pend) {
                         if (!eof || index(row, rem) != 1) exit 1
-                        keep = length(rem); row = substr(row, keep + 1); pend = 0
+                        keep = length(rem); pend = 0
                     }
                     printf "%d\t%d\t%s\n", n, keep, row; n++; add = 1 }
             END { if (pend) exit 1 }')" \
@@ -685,13 +735,21 @@ _stage_jsonl() {
             || _abort jsonl "cannot read the staged $f"
     fi
 
-    JSONL_DROP="" JSONL_QROWS=()
+    JSONL_DROP="" JSONL_QROWS=() JSONL_ADDED=0
     while IFS=$'\t' read -r ln keep row; do
-        [ -n "$row" ] || continue
-        out="$(printf '%s\n' "$row" | bash "$SCRIPT_DIR/check-sanitization.sh" --strict - 2>&1)" && continue
-        cls="$(printf '%s\n' "$out" | sed -n 's/^.* — \(.*\) (line [0-9]*)$/\1/p' | paste -sd, -)"
-        [ -n "$cls" ] || _abort jsonl "the scanner failed on $f line $ln; failing closed"
-        JSONL_QROWS+=("$ROOT_PHYS"$'\t'"$row")
+        _split_glued "$row" "$keep"
+        [ -n "$JSONL_TAIL" ] || continue
+        JSONL_ADDED=$(( JSONL_ADDED + 1 ))
+        cls="$(_leak_class "$row")" || _abort jsonl "the scanner failed on $f line $ln; failing closed"
+        [ -n "$cls" ] || continue
+        # The prefix is already in history: if it alone leaks, quarantining
+        # cannot unleak it, so judge the new tail alone or the store wedges.
+        if [ "$keep" -gt 0 ] && pcls="$(_leak_class "$JSONL_HEAD")" && [ -n "$pcls" ]; then
+            cls="$(_leak_class "$JSONL_TAIL")" || _abort jsonl "the scanner failed on $f line $ln; failing closed"
+            [ -n "$cls" ] || continue
+        fi
+        if [ "$keep" -gt 0 ]; then kind=tail; else kind=row; fi
+        JSONL_QROWS+=("$ROOT_PHYS"$'\t'"$kind"$'\t'"$JSONL_TAIL")
         JSONL_DROP="$JSONL_DROP $ln:$keep"
         _queue jsonl-quarantine "$f line $ln: $cls; row moved to $JSONL_QUARANTINE, not committed; after review: commit-records.sh --release-quarantine $ROOT"
     done <<< "$added"
@@ -711,15 +769,34 @@ _stage_jsonl() {
     JSONL_QUARANTINED="${#JSONL_QROWS[@]}"
 }
 
-# _quarantine_rows — under the mistakes lock: append JSONL_QROWS to the private
-# quarantine, then drop JSONL_DROP from the working mistakes.jsonl.
+# _split_glued <line> <n> — JSONL_HEAD = its first <n> bytes (HEAD's glued
+# prefix), JSONL_TAIL = the rest (the new text).
+_split_glued() { local LC_ALL=C; JSONL_HEAD="${1:0:$2}"; JSONL_TAIL="${1:$2}"; }
+
+# _leak_class <text> — the --strict leak classes <text> trips, comma-joined
+# (empty when clean); fails when the scanner fails without naming a class.
+_leak_class() {
+    local out cls
+    out="$(printf '%s\n' "$1" | bash "$SCRIPT_DIR/check-sanitization.sh" --strict - 2>&1)" && return 0
+    cls="$(printf '%s\n' "$out" | sed -n 's/^.* — \(.*\) (line [0-9]*)$/\1/p' | paste -sd, -)"
+    [ -n "$cls" ] && printf '%s' "$cls"
+}
+
+# _quarantine_rows — under the mistakes lock: add JSONL_QROWS to the private
+# quarantine (under its own lock: it is shared by every root), then drop
+# JSONL_DROP from the working mistakes.jsonl.
 _quarantine_rows() {
     local content
     mkdir -p "${JSONL_QUARANTINE%/*}" \
-        && ( umask 077; printf '%s\n' "${JSONL_QROWS[@]}" >> "$JSONL_QUARANTINE" ) \
-        && chmod 600 "$JSONL_QUARANTINE" || return 1
+        && mistakes_locked "$JSONL_QUARANTINE_LOCK" _append_quarantine || return 1
     content="$(_drop_lines "$JSONL_DROP" < "$ROOT/$JSONL" && printf x)" || return 1
-    printf '%s' "${content%x}" > "$ROOT/$JSONL"
+    printf '%s' "${content%x}" | _write_via_tmp "$ROOT/$JSONL" keep
+}
+
+_append_quarantine() {
+    local old
+    old="$(_read_all "$JSONL_QUARANTINE" && printf x)" || return 1
+    { printf '%s' "${old%x}"; printf '%s\n' "${JSONL_QROWS[@]}"; } | _write_via_tmp "$JSONL_QUARANTINE" 600
 }
 
 # _drop_lines "<n>:<keep> ..." — copy stdin to stdout, dropping line <n>, or
@@ -733,13 +810,19 @@ _drop_lines() {
 
 JSONL_QUARANTINED=""
 [ -z "$JSONL" ] || _stage_jsonl
-if git -C "$ROOT" diff --cached --quiet; then
+# A rebuilt .index alone describes no new record: not worth a commit.
+if [ -z "$(git -C "$ROOT" diff --cached --name-only | grep -v '^\.index/')" ]; then
     printf '%s: nothing to commit\n' "$prog"
     exit 0
 fi
 
 subject="records(${STORE_BASENAME}): ${WHAT}"
-[ -z "$JSONL_QUARANTINED" ] || subject="$subject ($JSONL_QUARANTINED quarantined)"
+if [ -n "$JSONL_QUARANTINED" ]; then
+    # The caller counted rows before the quarantine: restate what commits.
+    _kept=$(( JSONL_ADDED - JSONL_QUARANTINED ))
+    _noun="mistakes"; [ "$_kept" -ne 1 ] || _noun="mistake"
+    subject="$(printf '%s' "$subject" | sed -E "s/[0-9]+ mistakes?/$_kept $_noun/") ($JSONL_QUARANTINED quarantined)"
+fi
 body="$(printf 'why: %s\nsource: %s\nevidence: %s' "$WHY" "$SOURCE" "$EVIDENCE")"
 if ! git -C "$ROOT" commit -m "$subject" -m "$body" >/dev/null 2>&1; then
     _abort commit "git commit produced no commit (nothing staged, or hook rejected) for $ROOT"

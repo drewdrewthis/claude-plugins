@@ -150,8 +150,8 @@ _strict_case() {
   printf '%s\n' \
     '{"d":"never put a primary key: some_column_name_here in a row"}' \
     '{"d":"see /home/<user>/ and /Users/<name> placeholders"}' \
-    '{"d":"/Users/$USER, /home/${USER}/x, /Users/me, /home/someone, /Users/example/x, /home/.../y"}' \
-    '{"d":"TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxx and token: <your-token-here-please>"}' > "$FIX/row.jsonl"
+    '{"d":"see /home/<user>/x, /Users/me, /home/someone/, C:\\Users\\<name>"}' \
+    '{"d":"set API_KEY=<your-key> or TOKEN=${GITHUB_TOKEN} or PASSWORD=example1234567890abc"}' > "$FIX/row.jsonl"
   run bash "$SCRIPT" --strict "$FIX/row.jsonl"
   [ "$status" -eq 0 ]
 }
@@ -160,4 +160,19 @@ _strict_case() {
   run bash -c "printf '%s\n' '{\"d\":\"/Users/alice\"}' | bash '$SCRIPT' --strict -"
   [ "$status" -ne 0 ]
   [[ "$output" == *"macOS home path (line 1)"* ]]
+}
+
+@test "--strict skips a hit only when the whole value is a placeholder" {
+  _strict_case "credential"   'API_KEY=Abc123def4567890xyzQ\nPATH=$PATH'   Abc123def
+  _strict_case "credential"   'TOKEN=Abc123def4567890xyzQ\n<user>'         Abc123def
+  _strict_case "credential"   'API_KEY=Ab3$Dxyz1234567890qq'               Dxyz1234
+  _strict_case "GitHub token" 'ghp_xxxAb3Cd4Ef5Gh6Ij7Kl8Mn9Op0Qr1St2Uv3'   Cd4Ef5
+  _strict_case "macOS home path" '/Users/$USER'                            USER
+  _strict_case "Linux home path" '/home/example/x'                         example
+}
+
+@test "--strict allows /home/ubuntu followed by punctuation" {
+  printf '{"d":"ran in /home/ubuntu. then /home/ubuntu, and (/home/ubuntu)"}\n' > "$FIX/row.jsonl"
+  run bash "$SCRIPT" --strict "$FIX/row.jsonl"
+  [ "$status" -eq 0 ]
 }

@@ -810,7 +810,7 @@ _leak_row() { printf '{"leak":"ghp_abcdefghijklmnopqrstuvwxyz0123456789"}\n' >> 
   _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "2 mistakes" --why w --source s --evidence e
   [ "$status" -eq 0 ]
   [ "$(stat -c %a "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl")" = "600" ]
-  [[ "$(git -C "$ROOT" log -1 --format=%s)" == *"2 mistakes (1 quarantined)" ]]
+  [[ "$(git -C "$ROOT" log -1 --format=%s)" == *": 1 mistake (1 quarantined)" ]]
   grep -q -- '--release-quarantine' "$QUEUE"
 }
 
@@ -886,4 +886,98 @@ EOF
   [ "$(git -C "$ROOT" show HEAD:mistakes.jsonl)" = "$(printf '{"a":1}\n{"b":2}')" ]
   grep -q 'ghp_abcdefghij' "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"
   [ -z "$(git -C "$ROOT" status --porcelain)" ]
+}
+
+# ---- round 3: split tokens, quarantine lock + atomic rewrite, safe release ----
+
+# _glued_head <text> — commit mistakes.jsonl holding <text> with no newline.
+_glued_head() {
+  printf '%s' "$1" > "$ROOT/mistakes.jsonl"
+  git -C "$ROOT" add mistakes.jsonl; git -C "$ROOT" commit -qm jsonl
+}
+
+@test "AC35: a token split across a glued row is quarantined; HEAD never holds it whole" {
+  _glued_head '{"n":"ghp_AbCdEfGhIj'
+  printf 'KlMnOpQrStUvWxYz0123456789"}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" show HEAD:mistakes.jsonl > "$FIX/head"
+  run grep -q KlMnOp "$FIX/head"; [ "$status" -ne 0 ]
+  grep -q KlMnOp "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"
+  [ -z "$(git -C "$ROOT" status --porcelain -- mistakes.jsonl)" ]
+}
+
+@test "AC35: a glued prefix that already leaks in history does not wedge a clean suffix" {
+  _glued_head '{"n":"ghp_abcdefghijklmnopqrstuvwxyz0123'
+  printf '","ok":1}\n{"b":2}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" show HEAD:mistakes.jsonl | grep -q '"ok":1'
+  [ ! -e "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl" ]
+}
+
+@test "AC36: the quarantine waits on its own lock under the state dir" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  mkdir -p "$PROCEDURES_STATE_DIR/mistakes.quarantine.lock.d"
+  local before; before="$(cat "$ROOT/mistakes.jsonl")"
+  MISTAKES_NO_FLOCK=1 MISTAKES_LOCK_WAIT_SECS=0 \
+    _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"lock"* ]]
+  [ "$(cat "$ROOT/mistakes.jsonl")" = "$before" ]
+}
+
+@test "AC36: the quarantine replaces mistakes.jsonl via a temp file, keeping its mode" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  chmod 640 "$ROOT/mistakes.jsonl"
+  local ino; ino="$(stat -c %i "$ROOT/mistakes.jsonl")"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %i "$ROOT/mistakes.jsonl")" != "$ino" ]
+  [ "$(stat -c %a "$ROOT/mistakes.jsonl")" = "640" ]
+}
+
+@test "AC37: --release-quarantine refuses while mistakes.jsonl has uncommitted changes" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  printf '{"pending":1}\n' >> "$ROOT/mistakes.jsonl"
+  run bash "$GATE" --release-quarantine "$ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"uncommitted"* ]]
+  run grep -q ghp_ "$ROOT/mistakes.jsonl"; [ "$status" -ne 0 ]
+  grep -q ghp_ "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"
+}
+
+@test "AC37: --release-quarantine warns that rows are re-scanned and tails may not be JSON" {
+  _glued_head '{"n":"ghp_AbCdEfGhIj'
+  printf 'KlMnOpQrStUvWxYz0123456789"}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  run bash "$GATE" --release-quarantine "$ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"re-scanned by the gate"* ]]
+  [[ "$output" == *"may not be valid JSON"* ]]
+}
+
+@test "AC38: quarantine of every mistake row recounts the subject; records still commit" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md mistakes.jsonl" \
+    --what "1 failure-mode, 1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [[ "$(git -C "$ROOT" log -1 --format=%s)" == *": 1 failure-mode, 0 mistakes (1 quarantined)" ]]
+}
+
+@test "AC38: when quarantine leaves only the rebuilt .index staged, nothing is committed" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to commit"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
 }

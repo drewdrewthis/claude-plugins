@@ -20,6 +20,12 @@ setup() {
   export LIBRARIAN_LOCK="$TURN_STATE_DIR/librarian.lock"
   unset PROCEDURES_ENABLE_LIBRARIAN CLAUDE_CODE_ENTRYPOINT LIBRARIAN_SYNC LIBRARIAN_NO_FLOCK
   unset LIBRARIAN_MIN_INTERVAL_SECS LIBRARIAN_CLAIM_TTL_SECS LIBRARIAN_MAX_RUNTIME_SEC CODEX_STORE_ROOTS
+  # Pin a calm load so a busy box cannot defer the worker; an exported
+  # LP_LOADAVG_FILE (e.g. /proc/loadavg) still wins for a real-load run.
+  if [ -z "${LP_LOADAVG_FILE:-}" ]; then
+    printf '0.10 0.10 0.10 1/100 1\n' > "$TURN_STATE_DIR/loadavg"
+    export LP_LOADAVG_FILE="$TURN_STATE_DIR/loadavg"
+  fi
 
   SID="bats-lp-$$-$BATS_TEST_NUMBER"
   PROJ="$HOME/.claude/projects/-bats-lp-$$-$BATS_TEST_NUMBER"
@@ -480,6 +486,26 @@ EOF
 #!/usr/bin/env bash
 echo ran >> "$CLAUDE_LOG"
 printf '{"c":3}\n' >> "$store/mistakes.jsonl"
+EOF
+  chmod +x "$STUB_BIN/claude"
+  user_prompt
+  wake; [ "$status" -eq 0 ]
+  grep -q "wake left uncommitted store writes in $store: 1 paths" "$(lp_state)/librarian-poke.log"
+}
+
+@test "store visibility: a renamed path with a space, written during the wake, is logged" {
+  local store="$BATS_TEST_TMPDIR/store"
+  git init -q "$store"
+  printf 'a\n' > "$store/a.md"
+  git -C "$store" add a.md
+  git -C "$store" -c user.email=t@t -c user.name=t commit -qm init
+  git -C "$store" mv a.md "b c.md"                          # staged rename before the wake,
+  printf 'dirty\n' >> "$store/b c.md"                        # already modified too
+  export CODEX_STORE_ROOTS="$store"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+printf 'more\n' >> "$store/b c.md"
 EOF
   chmod +x "$STUB_BIN/claude"
   user_prompt
