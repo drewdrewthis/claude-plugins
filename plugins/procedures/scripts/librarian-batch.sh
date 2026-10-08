@@ -19,8 +19,8 @@
 # Writes the batch to FILE (default <state-dir>/batch.txt — Bash tool output is
 # truncated, so the librarian Reads the file) and the issued ranges to
 # <state-dir>/batch.manifest, one `slug<TAB>start<TAB>end` per transcript: lines
-# start+1..end were issued. librarian-advance.sh moves a cursor only within the
-# range issued here. Prints a one-line summary; exit 0 with an empty manifest
+# start+1..end were issued. Cursors are advanced by the poke hook via
+# librarian-advance.sh, only within the range issued here. Prints a one-line summary; exit 0 with an empty manifest
 # means there is nothing to drain.
 set -euo pipefail
 

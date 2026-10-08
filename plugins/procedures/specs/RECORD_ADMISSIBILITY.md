@@ -30,7 +30,9 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
 `scripts/lib/stores.sh` `procedures_state_dir`).
 
 1. **Pull** — `git pull --rebase` when an upstream is configured (skipped for a
-   local-only repo).
+   local-only repo). Before it, the gate sets `mistakes.jsonl merge=union` in
+   the clone's `info/attributes`, so two machines' appends merge instead of
+   conflicting.
 2. **Clean-up (normalize)** — for each record path: canonical frontmatter key
    order (the seven keys of `std.record-frontmatter`, then any extra keys in
    original order), `links: {}` when empty, trailing whitespace stripped, and
@@ -78,6 +80,30 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
    `check-sanitization.sh` leak classes before the commit, so a personal path,
    token, or key cannot ride into history via a trailer. A new commit every
    drain, never `--amend`, never `--force`.
+
+   **`mistakes.jsonl`** — the root-relative `mistakes.jsonl` is the one non-`.md`
+   path `--paths` accepts. It skips steps 2–4. Here it is staged, and only the
+   rows the staged blob ADDS vs `HEAD` are vetted with
+   `check-sanitization.sh --strict`, which skips a hit only when its whole
+   value is a placeholder (`/home/<user>`, `KEY=<your-key>`, `TOKEN=${VAR}`). It is append-only: a removed row, a NUL byte, a
+   scanner failure, or an unreadable diff aborts. The one allowed removal is a
+   newline-less last row that the first added row starts with; the glued line
+   is scanned whole (a token can straddle the join) and only its new tail is
+   quarantined, unless the old prefix alone already leaks, when the tail is
+   judged alone. A row that leaks moves to
+   `<state-dir>/mistakes.quarantine.jsonl` (outside git, mode 600) with a queue
+   note (line and leak class only); the clean rows still commit, and the subject
+   gets the recounted `<n> mistakes (<k> quarantined)`.
+   `commit-records.sh --release-quarantine <root>` puts a root's quarantined
+   rows back for review; it refuses while that `mistakes.jsonl` has uncommitted
+   changes. The quarantine rewrite and `log-record.sh`'s append share one lock
+   (`<git-dir>/mistakes.lock`); the quarantine file has its own
+   (`<state-dir>/mistakes.quarantine.lock`). Both files are rewritten through a
+   temp file and a rename.
+
+   A call with nothing staged exits 0 with `nothing to commit` and queues
+   nothing; one with only a rebuilt `.index` staged commits it as
+   `records(<store>): refresh index`.
 
    <!-- PLUGIN ADAPTATION: no upstream counterpart — documents the plugin-local librarian commit-gate machinery. -->
 7. **Push** — `git push`; on rejection, `git pull --rebase` and retry once; if

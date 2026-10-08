@@ -16,7 +16,9 @@
 # that quoted literal truncates the JSON). This script fixes it by construction.
 #
 # Subcommands:
-#   mistake       append a row to mistakes.jsonl
+#   mistake       append a row to mistakes.jsonl (under the mistakes lock that
+#                 commit-records.sh's quarantine rewrite also takes, see
+#                 lib/mistakes-lock.sh; an unterminated last row is ended first)
 #   decision      write records/decisions/<date>-<slug>.md
 #   solution      write records/solutions/<date>-<slug>.md
 #   failure-mode  write/update records/failure-modes/<slug>.md
@@ -41,6 +43,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stores.sh
 source "$SCRIPT_DIR/lib/stores.sh"
+# shellcheck source=lib/mistakes-lock.sh
+source "$SCRIPT_DIR/lib/mistakes-lock.sh"
 # PLUGIN ADAPTATION: data root defaults to the host codex (~/.claude), not this
 # plugin install dir — upstream these scripts live inside the codex repo itself.
 ROOT="${CODEX_ROOT:-$HOME/.claude}"
@@ -123,8 +127,19 @@ cmd_mistake() {
     )"
 
     mkdir -p "$(dirname "$MISTAKES_JSONL")"
-    printf '%s\n' "$row" >> "$MISTAKES_JSONL"
+    mistakes_locked "$(mistakes_lock_path "$(dirname "$MISTAKES_JSONL")")" _append_row "$row" \
+        || die "could not take the mistakes.jsonl lock; row not appended"
     printf 'log-record: appended mistake to %s\n' "$MISTAKES_JSONL" >&2
+}
+
+# _append_row <row> — append one row, first ending an unterminated last row:
+# a row glued onto it would read as a rewrite of a committed row, which
+# commit-records.sh refuses.
+_append_row() {
+    if [ -s "$MISTAKES_JSONL" ] && [ -n "$(tail -c1 "$MISTAKES_JSONL")" ]; then
+        printf '\n' >> "$MISTAKES_JSONL"
+    fi
+    printf '%s\n' "$1" >> "$MISTAKES_JSONL"
 }
 
 # ===========================================================================

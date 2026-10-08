@@ -490,7 +490,9 @@ _clone() {
   [ -z "$(git -C "$A" stash list)" ]                                          # stash not left behind
 }
 
-@test "AC28: mistakes.jsonl appended both locally and upstream aborts cleanly, never commits markers" {
+# mistakes.jsonl is append-only on every machine, so the gate sets merge=union
+# for it: two machines' appends merge instead of wedging the store forever.
+@test "AC28: mistakes.jsonl appended both locally and upstream merges by union, never commits markers" {
   _clone A; _clone B; A="$FIX/A"; B="$FIX/B"
   printf '{"a":1}\n' > "$A/mistakes.jsonl"
   git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
@@ -498,16 +500,33 @@ _clone() {
   printf '{"remote":1}\n' >> "$B/mistakes.jsonl"; git -C "$B" commit -qam remote; git -C "$B" push -q origin main
   printf '{"local":1}\n' >> "$A/mistakes.jsonl"
   _fm "$A/records/failure-modes/local.md" fm.local LOCAL
-  pre="$(git -C "$A" rev-parse HEAD)"
   COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
     --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
-  [ "$status" -ne 0 ]
-  [ "$(git -C "$A" rev-parse HEAD)" = "$pre" ]
+  [ "$status" -eq 0 ]
+  git -C "$A" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
   grep -q '"local"' "$A/mistakes.jsonl"
-  ! grep -q '<<<<<<<' "$A/mistakes.jsonl" || false
+  grep -q '"remote"' "$A/mistakes.jsonl"
+  run grep -q '<<<<<<<' "$A/mistakes.jsonl"
+  [ "$status" -ne 0 ]
   [ -z "$(git -C "$A" ls-files -u)" ]
   [ -z "$(git -C "$A" stash list)" ]
-  [ -f "$A/records/failure-modes/local.md" ]                                  # untracked record untouched
+  [ "$(git -C "$A" status --porcelain)" = " M mistakes.jsonl" ]               # not in --paths: left dirty
+}
+
+@test "AC31: two clones append to mistakes.jsonl; B pushes first; A's gate commits and pushes both rows" {
+  _clone A; _clone B; A="$FIX/A"; B="$FIX/B"
+  printf '{"a":1}\n' > "$A/mistakes.jsonl"
+  git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
+  git -C "$B" pull -q
+  printf '{"fromB":1}\n' >> "$B/mistakes.jsonl"; git -C "$B" commit -qam b; git -C "$B" push -q origin main
+  printf '{"fromA":1}\n' >> "$A/mistakes.jsonl"
+  run bash "$GATE" --root "$A" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"committed and pushed"* ]]
+  local remote_rows; remote_rows="$(git -C "$REMOTE" show main:mistakes.jsonl)"
+  [[ "$remote_rows" == *'"fromA"'* ]]
+  [[ "$remote_rows" == *'"fromB"'* ]]
+  [ -z "$(git -C "$A" status --porcelain)" ]
 }
 
 @test "AC26: a store that gitignores .index/ still commits the record (index left local)" {
@@ -653,4 +672,329 @@ _clone() {
   [[ "$output" == *"symlink"* ]]
   [ "$(_commit_count)" -eq "$before" ]
   [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]   # nothing staged
+}
+
+# ---- AC30: root-relative mistakes.jsonl rides in --paths (issue #25) ----
+# log-record.sh appends mistakes to <root>/mistakes.jsonl; the librarian must be
+# able to commit those appends in the same wake. Only ADDED rows are scanned, so
+# an old row already in history never blocks a new append.
+
+# _committed_jsonl <rows…> — commit mistakes.jsonl at the root with these rows.
+_committed_jsonl() {
+  printf '%s\n' "$@" > "$ROOT/mistakes.jsonl"
+  git -C "$ROOT" add mistakes.jsonl; git -C "$ROOT" commit -qm jsonl
+}
+
+@test "AC30: --paths mistakes.jsonl alone commits the appended rows" {
+  _committed_jsonl '{"old":"/Users/alice/x"}'      # historic leak: not an added line
+  printf '{"new":1}\n' >> "$ROOT/mistakes.jsonl"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(_commit_count)" -eq "$((before + 1))" ]
+  git -C "$ROOT" log -1 --name-only --format= | grep -qx "mistakes.jsonl"
+  [ -z "$(git -C "$ROOT" status --porcelain -- mistakes.jsonl)" ]
+}
+
+@test "AC30: mistakes.jsonl (untracked) and a record .md land in one commit" {
+  printf '{"new":1}\n' > "$ROOT/mistakes.jsonl"
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md mistakes.jsonl" \
+    --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  local files; files="$(git -C "$ROOT" log -1 --name-only --format=)"
+  [[ "$files" == *"mistakes.jsonl"* ]]
+  [[ "$files" == *"records/failure-modes/rec.md"* ]]
+}
+
+@test "AC30: only the root-relative mistakes.jsonl is accepted; other non-.md paths are still refused" {
+  mkdir -p "$ROOT/sub"; printf '{}\n' > "$ROOT/sub/mistakes.jsonl"; printf '{}\n' > "$ROOT/other.jsonl"
+  local before; before=$(_commit_count)
+  for p in sub/mistakes.jsonl other.jsonl; do
+    _run_gate --root "$ROOT" --paths "$p" --what x --why w --source s --evidence e
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not a record .md file: $p"* ]]
+  done
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+@test "AC30: a leaky added row is quarantined; the clean rows still commit" {
+  _committed_jsonl '{"old":1}'
+  printf '{"leak":"ghp_abcdefghijklmnopqrstuvwxyz0123456789"}\n{"clean":1}\n' >> "$ROOT/mistakes.jsonl"
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md mistakes.jsonl" \
+    --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  local committed; committed="$(git -C "$ROOT" show HEAD:mistakes.jsonl)"
+  [[ "$committed" == *'"clean"'* ]]
+  [[ "$committed" != *ghp_* ]]
+  git -C "$ROOT" log -1 --name-only --format= | grep -q "records/failure-modes/rec.md"
+  grep -q 'ghp_abcdefghij' "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"
+  grep -q 'mistakes.jsonl line 2.*GitHub token' "$QUEUE"
+  run grep -q 'ghp_' "$QUEUE"
+  [ "$status" -ne 0 ]                                                         # queue never holds the secret
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+}
+
+@test "AC30: mistakes.jsonl is append-only — a removed row aborts" {
+  _committed_jsonl '{"one":1}' '{"two":2}'
+  printf '{"one":1}\n{"three":3}\n' > "$ROOT/mistakes.jsonl"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"append-only"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+@test "AC30: a NUL byte in mistakes.jsonl aborts instead of scanning nothing" {
+  _committed_jsonl '{"one":1}'
+  printf '{"two":"/Users/alice/x"}\0\n' >> "$ROOT/mistakes.jsonl"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"NUL"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+# ---- round 2: glued rows, quarantine mode/lock/release, honest subject ----
+LOG_RECORD_SH="$BATS_TEST_DIRNAME/../../scripts/log-record.sh"
+
+# _log_mistake — append one row to $ROOT/mistakes.jsonl through log-record.sh.
+_log_mistake() {
+  CODEX_ROOT="$ROOT" MISTAKES_JSONL="$ROOT/mistakes.jsonl" bash "$LOG_RECORD_SH" mistake \
+    --category c --trigger t --description "${1:-d}" --correction x --severity low
+}
+
+@test "AC32: log-record terminates a newline-less last row before appending" {
+  printf '{"a":1}' > "$ROOT/mistakes.jsonl"
+  run _log_mistake
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$ROOT/mistakes.jsonl")" -eq 2 ]
+  [ "$(head -1 "$ROOT/mistakes.jsonl")" = '{"a":1}' ]
+}
+
+@test "AC32: a committed row with no trailing newline does not wedge the next append" {
+  printf '{"a":1}' > "$ROOT/mistakes.jsonl"
+  git -C "$ROOT" add mistakes.jsonl; git -C "$ROOT" commit -qm jsonl
+  _log_mistake new-row
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$ROOT" show HEAD:mistakes.jsonl | wc -l)" -eq 2 ]
+  git -C "$ROOT" show HEAD:mistakes.jsonl | grep -q new-row
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+}
+
+@test "AC32: a row glued onto a newline-less last row commits; its new text is scanned" {
+  printf '{"a":1}' > "$ROOT/mistakes.jsonl"
+  git -C "$ROOT" add mistakes.jsonl; git -C "$ROOT" commit -qm jsonl
+  printf '{"b":2}\n' >> "$ROOT/mistakes.jsonl"              # an old writer glued it on
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" show HEAD:mistakes.jsonl | grep -q '"b":2'
+}
+
+@test "AC32: a removed row elsewhere still aborts even when a row is appended" {
+  _committed_jsonl '{"one":1}' '{"two":2}'
+  printf '{"two":2}\n{"three":3}\n' > "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"append-only"* ]]
+}
+
+# _leak_row — a row --strict quarantines.
+_leak_row() { printf '{"leak":"ghp_abcdefghijklmnopqrstuvwxyz0123456789"}\n' >> "$ROOT/mistakes.jsonl"; }
+
+@test "AC33: the quarantine file is private (mode 600) and the subject counts what was quarantined" {
+  _committed_jsonl '{"old":1}'
+  _leak_row; printf '{"clean":1}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "2 mistakes" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %a "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl")" = "600" ]
+  [[ "$(git -C "$ROOT" log -1 --format=%s)" == *": 1 mistake (1 quarantined)" ]]
+  grep -q -- '--release-quarantine' "$QUEUE"
+}
+
+@test "AC33: --release-quarantine puts this root's quarantined rows back for a re-run" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  run grep -q ghp_ "$ROOT/mistakes.jsonl"; [ "$status" -ne 0 ]
+  run bash "$GATE" --release-quarantine "$ROOT"
+  [ "$status" -eq 0 ]
+  grep -q 'ghp_abcdefghij' "$ROOT/mistakes.jsonl"
+  run grep -q ghp_ "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"; [ "$status" -ne 0 ]
+}
+
+@test "AC33: the quarantine rewrite waits on the mistakes lock and aborts when it stays held" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  mkdir "$ROOT/.git/mistakes.lock.d"
+  local before; before="$(cat "$ROOT/mistakes.jsonl")"
+  MISTAKES_NO_FLOCK=1 MISTAKES_LOCK_WAIT_SECS=0 \
+    _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"lock"* ]]
+  [ "$(cat "$ROOT/mistakes.jsonl")" = "$before" ]
+}
+
+@test "AC33: log-record's append takes the same mistakes lock" {
+  mkdir "$ROOT/.git/mistakes.lock.d"
+  MISTAKES_NO_FLOCK=1 MISTAKES_LOCK_WAIT_SECS=0 run _log_mistake
+  [ "$status" -ne 0 ]
+  [ ! -s "$ROOT/mistakes.jsonl" ]
+}
+
+@test "AC33: a scanner failure aborts instead of quarantining" {
+  local bin="$FIX/plugin/scripts"                          # a plugin copy whose strict scan breaks
+  mkdir -p "$FIX/plugin"
+  cp -R "$BATS_TEST_DIRNAME/../../scripts" "$bin"
+  ln -s "$(cd "$BATS_TEST_DIRNAME/../../skills" && pwd)" "$FIX/plugin/skills"
+  mv "$bin/check-sanitization.sh" "$bin/real-check-sanitization.sh"
+  cat > "$bin/check-sanitization.sh" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "--strict" ] && { echo "check-sanitization: FAIL: - — could not scan (grep exit 2); failing closed"; exit 1; }
+exec bash "$(dirname "$0")/real-check-sanitization.sh" "$@"
+EOF
+  _committed_jsonl '{"old":1}'
+  printf '{"new":1}\n' >> "$ROOT/mistakes.jsonl"
+  COMMIT_RECORDS_NO_PUSH=1 run bash "$bin/commit-records.sh" \
+    --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [jsonl]"* ]]
+  [ ! -e "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl" ]
+}
+
+@test "AC34: a gate call with nothing to stage exits 0 and queues nothing" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to commit"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  [ ! -e "$QUEUE" ]
+}
+
+@test "AC32: a leaky row glued onto the last row is quarantined; the old row stays" {
+  printf '{"a":1}' > "$ROOT/mistakes.jsonl"
+  git -C "$ROOT" add mistakes.jsonl; git -C "$ROOT" commit -qm jsonl
+  printf '{"leak":"ghp_abcdefghijklmnopqrstuvwxyz0123456789"}\n{"b":2}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$ROOT" show HEAD:mistakes.jsonl)" = "$(printf '{"a":1}\n{"b":2}')" ]
+  grep -q 'ghp_abcdefghij' "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+}
+
+# ---- round 3: split tokens, quarantine lock + atomic rewrite, safe release ----
+
+# _glued_head <text> — commit mistakes.jsonl holding <text> with no newline.
+_glued_head() {
+  printf '%s' "$1" > "$ROOT/mistakes.jsonl"
+  git -C "$ROOT" add mistakes.jsonl; git -C "$ROOT" commit -qm jsonl
+}
+
+@test "AC35: a token split across a glued row is quarantined; HEAD never holds it whole" {
+  _glued_head '{"n":"ghp_AbCdEfGhIj'
+  printf 'KlMnOpQrStUvWxYz0123456789"}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" show HEAD:mistakes.jsonl > "$FIX/head"
+  run grep -q KlMnOp "$FIX/head"; [ "$status" -ne 0 ]
+  grep -q KlMnOp "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"
+  [ -z "$(git -C "$ROOT" status --porcelain -- mistakes.jsonl)" ]
+}
+
+@test "AC35: a glued prefix that already leaks in history does not wedge a clean suffix" {
+  _glued_head '{"n":"ghp_abcdefghijklmnopqrstuvwxyz0123'
+  printf '","ok":1}\n{"b":2}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  git -C "$ROOT" show HEAD:mistakes.jsonl | grep -q '"ok":1'
+  [ ! -e "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl" ]
+}
+
+@test "AC36: the quarantine waits on its own lock under the state dir" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  mkdir -p "$PROCEDURES_STATE_DIR/mistakes.quarantine.lock.d"
+  local before; before="$(cat "$ROOT/mistakes.jsonl")"
+  MISTAKES_NO_FLOCK=1 MISTAKES_LOCK_WAIT_SECS=0 \
+    _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"lock"* ]]
+  [ "$(cat "$ROOT/mistakes.jsonl")" = "$before" ]
+}
+
+@test "AC36: the quarantine replaces mistakes.jsonl via a temp file, keeping its mode" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  chmod 640 "$ROOT/mistakes.jsonl"
+  local ino; ino="$(stat -c %i "$ROOT/mistakes.jsonl")"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %i "$ROOT/mistakes.jsonl")" != "$ino" ]
+  [ "$(stat -c %a "$ROOT/mistakes.jsonl")" = "640" ]
+}
+
+@test "AC37: --release-quarantine refuses while mistakes.jsonl has uncommitted changes" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  printf '{"pending":1}\n' >> "$ROOT/mistakes.jsonl"
+  run bash "$GATE" --release-quarantine "$ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"uncommitted"* ]]
+  run grep -q ghp_ "$ROOT/mistakes.jsonl"; [ "$status" -ne 0 ]
+  grep -q ghp_ "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl"
+}
+
+@test "AC37: --release-quarantine warns that rows are re-scanned and tails may not be JSON" {
+  _glued_head '{"n":"ghp_AbCdEfGhIj'
+  printf 'KlMnOpQrStUvWxYz0123456789"}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  run bash "$GATE" --release-quarantine "$ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"re-scanned by the gate"* ]]
+  [[ "$output" == *"may not be valid JSON"* ]]
+}
+
+@test "AC38: quarantine of every mistake row recounts the subject; records still commit" {
+  _committed_jsonl '{"old":1}'
+  _leak_row
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md mistakes.jsonl" \
+    --what "1 failure-mode, 1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [[ "$(git -C "$ROOT" log -1 --format=%s)" == *": 1 failure-mode, 0 mistakes (1 quarantined)" ]]
+}
+
+@test "AC38: quarantine with HEAD's .index current commits nothing and leaves the tree clean" {
+  _committed_jsonl '{"old":1}'
+  printf '{"ok":1}\n' >> "$ROOT/mistakes.jsonl"
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  _leak_row
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to commit"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+}
+
+@test "AC38: quarantine on a store whose .index is missing from HEAD commits a refresh index" {
+  _committed_jsonl '{"old":1}'
+  run git -C "$ROOT" cat-file -e HEAD:.index; [ "$status" -ne 0 ]
+  _leak_row
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(_commit_count)" -eq $((before + 1)) ]
+  [ "$(git -C "$ROOT" log -1 --format=%s)" = "records($(basename "$ROOT")): refresh index" ]
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+  run grep -q ghp_ <(git -C "$ROOT" show HEAD:mistakes.jsonl); [ "$status" -ne 0 ]
 }
