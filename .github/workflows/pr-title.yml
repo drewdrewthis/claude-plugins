@@ -31,7 +31,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # Kept identical to release-please-config.json's changelog-sections,
-          # plus the three that legitimately release nothing. If these two lists
+          # plus the types that legitimately release nothing
+          # (chore is hidden; ci, build, revert are unlisted). If these two lists
           # disagree, a title can pass here and still produce no release.
           types: |
             feat
@@ -49,3 +50,39 @@ jobs:
           # "BREAKING CHANGE:" footer from a branch commit is discarded by the
           # squash, so `!` in the title is the only reliable major-bump signal.
           validateSingleCommit: false
+
+  # `lint` only checks the title is well-formed. A well-formed `chore:` title
+  # that touches plugins/<name>/ still releases nothing, so installed boxes
+  # never see the change. Lives here (not a new workflow) to inherit `edited`.
+  # Script tests: release-title-tests.yml.
+  release-title:
+    # release-please PRs are opened by github-actions[bot] and touch plugin
+    # files by design. Matching the author stops a branch name alone from
+    # skipping the check. Release PRs run no checks today (default GITHUB_TOKEN),
+    # so this skip is forward-looking. If https://github.com/drewdrewthis/claude-plugins/issues/204
+    # changes the release-please token, update this login to match its bot/user.
+    if: ${{ !(startsWith(github.head_ref, 'release-please--') && github.event.pull_request.user.login == 'github-actions[bot]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check title releases every changed plugin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Via env, never interpolated into the script: titles are attacker-controlled.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          # A failed fetch must fail the step, not pass with an empty list.
+          # previous_filename catches files moved out of a plugin.
+          # The PR files API caps at 3000 files, far above this repo's PR sizes.
+          files="$RUNNER_TEMP/changed-files"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)' > "$files"
+          .github/scripts/check-release-title.sh release-please-config.json < "$files"

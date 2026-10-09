@@ -108,14 +108,25 @@ release-please parses. Branch commit messages are collapsed into the body and
 never read. A branch of immaculate `feat:` commits under a PR titled
 `update stuff` releases nothing.
 
-`.github/workflows/pr-title.yml` enforces this on every PR.
+`.github/workflows/pr-title.yml` enforces this on every PR. Its `release-title`
+job fails a PR that touches `plugins/<name>/` with a non-releasing title, or
+whose plugin is missing from `release-please-config.json`.
+
+Release-please PRs are opened with the default `GITHUB_TOKEN`, so no checks run
+on them. If `release-title` becomes a required check, release PRs need an
+App/PAT token for release-please first (tracked in https://github.com/drewdrewthis/claude-plugins/issues/204).
+
+A version reaches boxes only when the release-please PR
+(`chore(main): release <plugin> …`) is merged. An open release PR means the
+change has not shipped.
 
 | PR title prefix | Bump |
 | --- | --- |
 | `fix:` / `perf:` | patch |
 | `feat:` | minor |
 | any type with `!` (e.g. `feat(procedures)!:`) | major |
-| `chore:` / `docs:` / `test:` / `ci:` / `build:` | none — **ships nothing to installed boxes** |
+| `docs:` / `test:` / `refactor:` | patch (visible changelog sections) |
+| `chore:` / `ci:` / `build:` / `revert:` (without `!`) | none — **ships nothing to installed boxes** |
 
 ⚠ A `BREAKING CHANGE:` footer in a *branch commit* does not survive the squash.
 Put `!` in the PR title — it is the only reliable major-bump signal here.
