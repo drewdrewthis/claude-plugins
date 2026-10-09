@@ -40,6 +40,10 @@
 # gitleaks-failed — a caller that redacts secrets with gitleaks on top of its
 # built-in rules saw gitleaks error or time out. NOT a failure of the write: the
 # built-ins ran and the row is complete; the note says the second layer was out.
+# redact-failed — a caller that redacts secrets before writing hit a RUNTIME
+# error inside redaction (the lib imported fine; that is lib-unreadable:*).
+# Unlike gitleaks-failed this is a closed gate: no row is written, because a
+# row whose redaction did not complete may hold a secret.
 # non-object-payload — stdin parsed, but the top-level value is not an envelope
 # (a bare string, an array, a number). Kept distinct from malformed-payload:
 # that one says the transport is broken, this one says something is plumbing
@@ -111,7 +115,7 @@ gate_failopen() {
         store-unwritable|payload-shape-unrecognized|malformed-payload) ;;
         non-object-payload|skill-unresolvable) ;;
         transcript-unreadable|judgment-unavailable|detach-failed) ;;
-        no-timeout|gitleaks-failed) ;;
+        no-timeout|gitleaks-failed|redact-failed) ;;
         *) why="unrecognized:${why}" ;;
     esac
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \

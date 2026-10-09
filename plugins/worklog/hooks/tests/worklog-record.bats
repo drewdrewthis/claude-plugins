@@ -87,6 +87,40 @@ printf '%s' "${CLAUDE_STUB:-}"
 SH
   chmod +x "$STUB/claude"
 
+  # The stub gitleaks. First on PATH so the real binary is never used by
+  # default (non-deterministic across versions and absent on some CI images).
+  # GITLEAKS_STUB selects the behaviour:
+  #   unset             read stdin, report no findings
+  #   fail              exit 2
+  #   find:<Rule>:<s>   one finding when stdin contains <s>, else none
+  #   passthrough       exec the real gitleaks found outside this dir
+  # GITLEAKS_CALL_LOG, when set, gets one line per invocation.
+  export GITLEAKS_CALL_LOG="$SCRATCH/gitleaks-calls.txt"
+  cat > "$STUB/gitleaks" <<'SH'
+#!/usr/bin/env bash
+[ -n "${GITLEAKS_CALL_LOG:-}" ] && echo "$*" >>"$GITLEAKS_CALL_LOG"
+case "${GITLEAKS_STUB:-}" in
+  fail) cat >/dev/null; exit 2 ;;
+  passthrough)
+    here="$(cd "$(dirname "$0")" && pwd)"
+    IFS=: read -ra dirs <<<"$PATH"
+    for d in "${dirs[@]}"; do
+      [ -n "$d" ] && [ "$(cd "$d" 2>/dev/null && pwd)" != "$here" ] && [ -x "$d/gitleaks" ] && exec "$d/gitleaks" "$@"
+    done
+    cat >/dev/null; exit 2 ;;
+  find:*)
+    spec="${GITLEAKS_STUB#find:}"; rule="${spec%%:*}"; secret="${spec#*:}"
+    in="$(cat)"
+    case "$in" in
+      *"$secret"*) jq -nc --arg r "$rule" --arg s "$secret" '[{RuleID:$r,Secret:$s,Match:$s}]' ;;
+      *) echo '[]' ;;
+    esac ;;
+  *) cat >/dev/null; echo '[]' ;;
+esac
+exit 0
+SH
+  chmod +x "$STUB/gitleaks"
+
   # A PATH that has everything the hook touches BEFORE the jq check — and no
   # jq. Used as the WHOLE PATH (not a prefix), so jq is genuinely absent
   # rather than shadowed. `date` is here because gate-failopen.sh stamps its
@@ -289,7 +323,7 @@ i = src.index('wl_slice() {')
 j = src.index('\nPY\n}\n', i) + len('\nPY\n}\n')
 sys.stdout.write(src[i:j])
 PY
-  bash -c "source '$SCRATCH/slice.fn'; wl_slice '$TX' 60" 2>/dev/null \
+  WL_REDACT_LIB="$HOOKS/lib" bash -c "source '$SCRATCH/slice.fn'; wl_slice '$TX' 60" 2>/dev/null \
     | jq -r '.changed|join(",")'
 }
 
@@ -885,7 +919,7 @@ PY
   # would silently keep these rows out of any rate a consumer computes.
   for w in transcript-unreadable judgment-unavailable store-unwritable \
            malformed-payload non-object-payload no-jq detach-failed \
-           gitleaks-failed lib-unreadable:redact; do
+           gitleaks-failed lib-unreadable:redact redact-failed; do
     : > "$GATE_FAILOPEN_LOG"
     env HOME="$FAKE_HOME" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
       bash -c ". '$HOOKS/lib/gate-failopen.sh'; gate_failopen 'worklog-record' '$w' 'sess1'"
@@ -1374,11 +1408,23 @@ fake_aws() { printf '%s' "AK""IA""Q3XZ7RT5NB2KD8WP"; }
 # context, and none of the hook's built-in rules match it.
 fake_npm() { fake_key "np""m_" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5" 36; }
 
-# assert_gitleaks_only <key> — premise guard: gitleaks names npm-access-token
-# for the key and the built-in rules leave it untouched, so a pass below can
-# only come from the gitleaks path.
+# real_gitleaks — path of the real binary, searched outside the stub dir.
+real_gitleaks() {
+  local d
+  local -a dirs
+  IFS=: read -ra dirs <<<"$PATH"
+  for d in "${dirs[@]}"; do
+    [ -n "$d" ] && [ "$d" != "$STUB" ] && [ -x "$d/gitleaks" ] && { printf '%s/gitleaks' "$d"; return 0; }
+  done
+  return 1
+}
+
+# assert_gitleaks_only <key> — premise guard (real binary): gitleaks names
+# npm-access-token for the key and the built-in rules leave it untouched, so
+# the stubbed tests model a real finding on a shape no built-in covers.
 assert_gitleaks_only() {
-  run bash -c "printf 'key = \"%s\"\n' '$1' | gitleaks stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null | jq -r '.[].RuleID'"
+  local gl; gl="$(real_gitleaks)"
+  run bash -c "printf 'key = \"%s\"\n' '$1' | '$gl' stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null | jq -r '.[].RuleID'"
   [ "$output" = "npm-access-token" ]
   run python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.exit(0 if redact.builtin(sys.argv[2]) == sys.argv[2] else 1)" "$HOOKS/lib" "$1"
   [ "$status" -eq 0 ]
@@ -1402,14 +1448,7 @@ assert_redacted_in_worklog() {
   ! grep -qF -- "$2" "$WORKLOG_JSONL"
 }
 
-@test "a pasted sk-lw key is stored as a redaction marker" {
-  KEY="$(fake_lw)"
-  fixture_secret_prompt "$KEY"
-  drive "$(redacted_reply sk-lw)"
-  grep -qF -- "<redacted:sk-lw>" "$WORKLOG_JSONL"
-}
-
-@test "a pasted sk-lw key never appears in the worklog file" {
+@test "a pasted sk-lw key never appears in the worklog file, only its marker" {
   KEY="$(fake_lw)"
   fixture_secret_prompt "$KEY"
   drive "$(redacted_reply sk-lw)"
@@ -1419,19 +1458,12 @@ assert_redacted_in_worklog() {
   ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
 }
 
-@test "the stdin the model receives holds no raw sk-lw key" {
-  KEY="$(fake_lw)"
-  fixture_secret_prompt "$KEY"
-  drive "$(redacted_reply sk-lw)"
-  grep -q 'CANDIDATES' "$CLAUDE_STDIN_LOG"
-  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
-}
-
-@test "the stdin the model receives carries the redaction marker in place of the key" {
+@test "the stdin the model receives carries the marker and no raw sk-lw key" {
   KEY="$(fake_lw)"
   fixture_secret_prompt "$KEY"
   drive "$(redacted_reply sk-lw)"
   grep -qF -- "<redacted:sk-lw>" "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
 }
 
 @test "a raw key in a model-written text is stored redacted" {
@@ -1443,13 +1475,14 @@ assert_redacted_in_worklog() {
 }
 
 @test "a raw key in a model-written quote is stored redacted" {
-  # The quote is verified against the (redacted) candidate, so a raw-key quote
-  # is dropped as invented. Either way the raw key must not reach the file.
+  # A built-in-shaped key in the quote is redacted, and the redacted quote then
+  # matches the (redacted) candidate body, so the entry survives.
   KEY="$(fake_ant)"
   fixture_secret_prompt "$KEY"
   drive "$(jq -nc --arg u "$U1" --arg q "my token is $KEY please keep it" \
     '{requests:[{text:"shared a token",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
   grep -qF -- "<redacted:sk-ant>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
 }
 
 @test "a pasted sk-ant key is redacted from the worklog" {
@@ -1480,89 +1513,135 @@ assert_redacted_in_worklog() {
   assert_redacted_in_worklog aws-access-key "$KEY"
 }
 
-@test "a secret only a gitleaks default rule catches is redacted from the worklog" {
-  command -v gitleaks >/dev/null 2>&1 || skip "gitleaks is not on PATH"
+@test "a gitleaks-only secret in the prompt is redacted in the stored row" {
   KEY="$(fake_npm)"
-  # Guard the premise: if gitleaks stops flagging this fake (or renames the
-  # rule), or a built-in starts matching it, fail here and not mysteriously
-  # below.
-  assert_gitleaks_only "$KEY"
   fixture_secret_prompt "$KEY"
-  # The quote is the body as the model is shown it, marker included.
-  drive "$(jq -nc --arg u "$U1" --arg q "my token is <redacted:npm-access-token> please keep it" \
-    '{requests:[{text:"shared a token",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
-  grep -qF -- "<redacted:npm-access-token>" "$WORKLOG_JSONL"
-  ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
+  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- \
+    "$(redacted_reply npm-access-token)"
+  assert_redacted_in_worklog npm-access-token "$KEY"
 }
 
-@test "a gitleaks-only secret is absent from the stdin the model receives" {
-  command -v gitleaks >/dev/null 2>&1 || skip "gitleaks is not on PATH"
+@test "a gitleaks-only secret in the prompt is redacted in the stdin the model receives" {
   KEY="$(fake_npm)"
-  assert_gitleaks_only "$KEY"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- "$CLEAN"
+  grep -qF -- "<redacted:npm-access-token>" "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+}
+
+@test "a gitleaks-only secret in a model-written text is stored redacted" {
+  # Proves the gitleaks pass in wl_entries: no built-in matches this shape and
+  # the candidate body never held it.
+  KEY="$(fake_npm)"
+  fixture_full
+  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- \
+    "$(jq -nc --arg u "$U1" --arg t "leaked $KEY" \
+      '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests[0].text')" = "leaked <redacted:npm-access-token>" ]
+}
+
+@test "a gitleaks failure still writes the row" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  [ -s "$WORKLOG_JSONL" ]
+}
+
+@test "a gitleaks failure is logged as gitleaks-failed" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  # One note per redaction pass (slice, entries), so dedupe.
+  [ "$(why | sort -u)" = "gitleaks-failed" ]
+}
+
+@test "a gitleaks failure still applies the built-in rules to the prompt" {
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=fail" -- "$(redacted_reply sk-ant)"
+  assert_redacted_in_worklog sk-ant "$KEY"
+}
+
+@test "a gitleaks failure still applies the built-in rules to the model stdin" {
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+}
+
+@test "gitleaks is invoked with the stdin report flags" {
+  KEY="$(fake_lw)"
   fixture_secret_prompt "$KEY"
   drive "$CLEAN"
-  grep -q 'CANDIDATES' "$CLAUDE_STDIN_LOG"
-  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+  grep -qxF -- "stdin --no-banner --exit-code 0 --report-format json --report-path - --log-level error" "$GITLEAKS_CALL_LOG"
+}
+
+@test "an unreadable redact lib writes no row" {
+  mkdir -p "$SCRATCH/empty-lib"
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/empty-lib" -- "$CLEAN"
+  no_row
+}
+
+@test "an unreadable redact lib is logged as lib-unreadable:redact" {
+  mkdir -p "$SCRATCH/empty-lib"
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/empty-lib" -- "$CLEAN"
+  [ "$(why)" = "lib-unreadable:redact" ]
+}
+
+@test "an unreadable redact lib never invokes the model" {
+  mkdir -p "$SCRATCH/empty-lib"
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/empty-lib" -- "$CLEAN"
+  [ ! -s "$CLAUDE_STDIN_LOG" ]
 }
 
 @test "a key straddling the 200-char truncation boundary leaks no partial prefix" {
   KEY="$(fake_lw)"
-  # 179 filler chars + a space put the key's first char at offset 180, so a
-  # truncate-then-redact order would keep "sk-lw-" plus ~14 chars of key, which
-  # no full-key pattern matches.
-  PAD="$(printf 'x%.0s' $(seq 1 179))"
+  # The fixture prefix "my token is " is 12 chars; 167 filler + a space put
+  # the key's first char at offset 180, so a truncate-then-redact order would
+  # keep "sk-lw-" plus ~14 chars of key, which no full-key pattern matches.
+  PAD="$(printf 'x%.0s' $(seq 1 167))"
   fixture_secret_prompt "$PAD $KEY"
   drive "$CLEAN"
-  grep -q 'CANDIDATES' "$CLAUDE_STDIN_LOG"
+  grep -qF -- "<redacted:sk-lw>" "$CLAUDE_STDIN_LOG"
   ! grep -Eq 'sk-lw-[A-Za-z0-9]' "$CLAUDE_STDIN_LOG"
 }
 
-# --- keyword rule, truncation order, and the downstream scanner ----------
-
-fake_nokeyword() { printf '%s' "a8F3kQ9zX2mP7vL4nB6tR1yC5wH0jD8s"; }
-
-# gitleaks_findings <file> — the findings JSON gitleaks reports for a file.
+# gitleaks_findings <file> — findings JSON the REAL gitleaks reports for a file.
 # --exit-code 0 so a finding is data here, not a failed command.
 gitleaks_findings() {
-  gitleaks stdin --no-banner --exit-code 0 --report-format json --report-path - < "$1" 2>/dev/null
+  "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path - < "$1" 2>/dev/null
 }
 
-@test "the worklog file from the sk-lw turn passes a gitleaks scan" {
-  command -v gitleaks >/dev/null 2>&1 || skip "gitleaks is not on PATH"
+@test "the worklog file from the sk-lw turn passes a real gitleaks scan" {
+  real_gitleaks >/dev/null || skip "gitleaks is not on PATH"
   KEY="$(fake_lw)"
   fixture_secret_prompt "$KEY"
-  drive "$(redacted_reply sk-lw)"
+  drive_with "GITLEAKS_STUB=passthrough" -- "$(redacted_reply sk-lw)"
   grep -qF -- "<redacted:sk-lw>" "$WORKLOG_JSONL"
   [ "$(gitleaks_findings "$WORKLOG_JSONL" | jq -c .)" = "[]" ]
 }
 
-@test "a model text that supplies the keyword for a bare secret passes a gitleaks scan" {
-  command -v gitleaks >/dev/null 2>&1 || skip "gitleaks is not on PATH"
-  KEY="$(fake_nokeyword)"
-  # Premise: the secret is flagged once the model's text supplies the keyword.
-  run bash -c "printf '{\"text\":\"api key: %s\"}\n' '$KEY' | gitleaks stdin --no-banner"
-  [ "$status" -ne 0 ]
-  fixture_full
-  drive "$(jq -nc --arg u "$U1" --arg t "api key: $KEY" \
-    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
-  [ "$(field '.requests|length')" -eq 1 ]
-  [ "$(gitleaks_findings "$WORKLOG_JSONL" | jq -c .)" = "[]" ]
+@test "the real gitleaks flags the npm token shape no built-in rule covers" {
+  real_gitleaks >/dev/null || skip "gitleaks is not on PATH"
+  assert_gitleaks_only "$(fake_npm)"
 }
 
-@test "a password= value with no known prefix is redacted as generic-secret without gitleaks" {
-  # A PATH with everything the hook needs and NO gitleaks, so only the built-in
-  # keyword rule can be responsible for the redaction.
-  NOGL="$SCRATCH/nogl"
-  mkdir -p "$NOGL"
-  for _b in bash sh env date cat rm mktemp sed grep tr timeout python3 jq head tail awk cut sort wc mkdir dirname basename ls find xargs flock mv cp; do
-    if _p="$(command -v "$_b" 2>/dev/null)"; then ln -sf "$_p" "$NOGL/$_b"; fi
-  done
+@test "a password= value with no known prefix is redacted as generic-secret by the built-ins" {
+  # The default stub reports no findings, so only the built-in keyword rule
+  # can be responsible.
   SECRET="$(fake_key "" "Hq7Lm2Zp9Wx4Rt6Yb3Nc8Vd" 24)"
   user_line "$U1" "set password=$SECRET in the env" > "$TX"
-  drive_with "PATH=$STUB:$NOGL" -- "$(jq -nc --arg u "$U1" \
+  drive "$(jq -nc --arg u "$U1" \
     '{requests:[{text:"shared a password",quote:"set <redacted:generic-secret> in the env",uuid:$u}],outcomes:[],mistakes:[]}')"
   grep -qF -- "<redacted:generic-secret>" "$WORKLOG_JSONL"
   ! grep -qF -- "$SECRET" "$WORKLOG_JSONL"
+}
+
+@test "a bare auth word before a file path is not redacted" {
+  user_line "$U1" "run auth /usr/local/some/long/path/name.py now" > "$TX"
+  drive "$CLEAN"
+  grep -qF -- "auth /usr/local/some/long/path/name.py" "$CLAUDE_STDIN_LOG"
 }
 
 @test "a key beginning inside the 100-char text cap leaves no partial prefix" {

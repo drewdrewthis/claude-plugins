@@ -1,7 +1,7 @@
 """redact.py — secret redaction for worklog-record.sh. Stdlib only.
 
 ONE implementation, imported by every python heredoc in the hook (wl_slice,
-wl_entries, wl_scrub_row), so the three sites cannot drift apart. A match
+wl_entries), so the two sites cannot drift apart. A match
 becomes <redacted:NAME>.
 
 Two layers:
@@ -39,12 +39,13 @@ _RULES = [
 
 # A keyword plus a separator plus a 16+ char value. The whole match is replaced,
 # keyword included: the tests pin that shape, and dropping the keyword also
-# removes the context gitleaks' generic rules key on. At least one separator is
-# required so "authentication..." or "tokenizer..." identifiers do not match.
+# removes the context gitleaks' generic rules key on. `auth` is deliberately not
+# a keyword: it redacted prose like "auth /usr/local/x/y.py". At least one
+# separator is required so "authentication..." or "tokenizer..." identifiers do not match.
 # The value class excludes ':' and '>' so an existing <redacted:...> marker is
 # never re-matched.
 _GENERIC = re.compile(
-    r"(?:api[ _-]?key|apikey|token|secret|passw(?:or)?d|bearer|auth)\W{1,4}"
+    r"(?:api[ _-]?key|apikey|token|secret|passw(?:or)?d|bearer)\W{1,4}"
     r"[\w+/=.~\-]{16,}", re.I)
 
 
@@ -76,6 +77,8 @@ def scan(text):
         found = json.loads(p.stdout.decode("utf-8", "replace") or "[]")
         out = [(f["Secret"], f.get("RuleID") or "gitleaks") for f in found
                if isinstance(f, dict) and isinstance(f.get("Secret"), str)
+               # Shorter secrets are noise: replacing a 3-5 char string
+               # would mangle unrelated text on every occurrence.
                and len(f["Secret"]) >= 6]
         return out, False
     except Exception:
@@ -94,41 +97,3 @@ def redact_texts(texts):
     texts = [builtin(t) for t in texts]
     findings, failed = scan("\n".join(texts))
     return [apply(t, findings) for t in texts], failed
-
-
-def _fields(row):
-    for key in ("requests", "outcomes", "mistakes"):
-        for e in row.get(key) or []:
-            if isinstance(e, dict):
-                yield e
-
-
-def _dump(row):
-    return json.dumps(row, ensure_ascii=False, separators=(",", ":"))
-
-
-def scrub_row(row_json):
-    """Final gate before the append. -> (row_json, gitleaks_failed).
-
-    The row is scanned SERIALIZED because the juxtaposition of text and quote is
-    what supplies gitleaks' keyword context. Findings are redacted inside the
-    parsed text/quote fields, never by surgery on the JSON string. If anything
-    is still flagged on the rescan, the entries are emptied: a hollow row beats
-    a leaking one.
-    """
-    row = json.loads(row_json)
-    for e in _fields(row):
-        for k in ("text", "quote"):
-            if isinstance(e.get(k), str):
-                e[k] = builtin(e[k])
-    findings, failed = scan(_dump(row))
-    if findings:
-        for e in _fields(row):
-            for k in ("text", "quote"):
-                if isinstance(e.get(k), str):
-                    e[k] = apply(e[k], findings)
-        again, failed2 = scan(_dump(row))
-        failed = failed or failed2
-        if again:
-            row["requests"], row["outcomes"], row["mistakes"] = [], [], []
-    return _dump(row), failed
