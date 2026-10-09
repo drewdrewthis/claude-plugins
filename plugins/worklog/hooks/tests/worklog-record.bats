@@ -884,7 +884,8 @@ PY
   # An unrecognized why is quarantined under an `unrecognized:` prefix, which
   # would silently keep these rows out of any rate a consumer computes.
   for w in transcript-unreadable judgment-unavailable store-unwritable \
-           malformed-payload non-object-payload no-jq detach-failed; do
+           malformed-payload non-object-payload no-jq detach-failed \
+           gitleaks-failed lib-unreadable:redact; do
     : > "$GATE_FAILOPEN_LOG"
     env HOME="$FAKE_HOME" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
       bash -c ". '$HOOKS/lib/gate-failopen.sh'; gate_failopen 'worklog-record' '$w' 'sess1'"
@@ -1337,4 +1338,241 @@ SH
   # stdin too, the split silently regressed back to one blob.
   run bash -c "grep -q 'writing a single worklog row' '$CLAUDE_STDIN_LOG'"
   [ "$status" -ne 0 ]
+}
+
+# ==========================================================================
+# 10. secrets are redacted before the model sees them and before they are stored
+# ==========================================================================
+#
+# Issue #172. The worklog is a durable file, and the candidates block is sent
+# to a model, so a key pasted into a prompt would otherwise land in both. The
+# contract: every candidate body is redacted inside wl_slice BEFORE truncation,
+# and every stored text/quote is redacted again in wl_entries. A match becomes
+# <redacted:NAME>.
+#
+# ⚠ FAKE KEYS ARE BUILT BY CONCATENATION. A literal key in this file would trip
+# gitleaks on commit — and the fakes need to look real enough to match.
+#
+# ⚠ THE STUB MUST QUOTE THE REDACTED FORM. A quote is verified against the
+# candidate body the model was shown, and that body is redacted. A stub quoting
+# the raw key would be dropped as invented, and the "stored redacted" assertions
+# would then pass-or-fail for the wrong reason.
+
+# fake_key <prefix> <body> <len> — prefix, then <body> repeated and cut to <len>.
+fake_key() {
+  local out="" body="$2"
+  while [ "${#out}" -lt "$3" ]; do out="$out$body"; done
+  printf '%s%s' "$1" "${out:0:$3}"
+}
+
+fake_lw()  { fake_key "sk-""lw-" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5kL7" 40; }
+fake_ant() { fake_key "sk-""ant-""api03-" "Zy9Xw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe" 40; }
+fake_ghp() { fake_key "gh""p_" "Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7k8" 36; }
+fake_slack() { printf '%s' "xo""xb-1234567890-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"; }
+fake_aws() { printf '%s' "AK""IA""Q3XZ7RT5NB2KD8WP"; }
+# An npm token: gitleaks 8.30.1 flags it (npm-access-token) with no keyword
+# context, and none of the hook's built-in rules match it.
+fake_npm() { fake_key "np""m_" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5" 36; }
+
+# assert_gitleaks_only <key> — premise guard: gitleaks names npm-access-token
+# for the key and the built-in rules leave it untouched, so a pass below can
+# only come from the gitleaks path.
+assert_gitleaks_only() {
+  run bash -c "printf 'key = \"%s\"\n' '$1' | gitleaks stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null | jq -r '.[].RuleID'"
+  [ "$output" = "npm-access-token" ]
+  run python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.exit(0 if redact.builtin(sys.argv[2]) == sys.argv[2] else 1)" "$HOOKS/lib" "$1"
+  [ "$status" -eq 0 ]
+}
+
+# fixture_secret_prompt <secret> — one turn whose prompt pastes the secret.
+fixture_secret_prompt() {
+  user_line "$U1" "my token is $1 please keep it" > "$TX"
+}
+
+# redacted_reply <name> — a stub reply quoting the line as the model is shown it.
+redacted_reply() {
+  jq -nc --arg u "$U1" --arg q "my token is <redacted:$1> please keep it" \
+    '{requests:[{text:"user shared a token",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}'
+}
+
+# assert_redacted_in_worklog <name> <raw> — the placeholder is stored, the raw
+# secret is nowhere in the file.
+assert_redacted_in_worklog() {
+  grep -qF -- "<redacted:$1>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$2" "$WORKLOG_JSONL"
+}
+
+@test "a pasted sk-lw key is stored as a redaction marker" {
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  grep -qF -- "<redacted:sk-lw>" "$WORKLOG_JSONL"
+}
+
+@test "a pasted sk-lw key never appears in the worklog file" {
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  # The marker check guards against a vacuous pass: a dropped row is also
+  # key-free.
+  grep -qF -- "<redacted:sk-lw>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
+}
+
+@test "the stdin the model receives holds no raw sk-lw key" {
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  grep -q 'CANDIDATES' "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+}
+
+@test "the stdin the model receives carries the redaction marker in place of the key" {
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  grep -qF -- "<redacted:sk-lw>" "$CLAUDE_STDIN_LOG"
+}
+
+@test "a raw key in a model-written text is stored redacted" {
+  KEY="$(fake_ant)"
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" --arg t "pasted $KEY" \
+    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests[0].text')" = "pasted <redacted:sk-ant>" ]
+}
+
+@test "a raw key in a model-written quote is stored redacted" {
+  # The quote is verified against the (redacted) candidate, so a raw-key quote
+  # is dropped as invented. Either way the raw key must not reach the file.
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive "$(jq -nc --arg u "$U1" --arg q "my token is $KEY please keep it" \
+    '{requests:[{text:"shared a token",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  grep -qF -- "<redacted:sk-ant>" "$WORKLOG_JSONL"
+}
+
+@test "a pasted sk-ant key is redacted from the worklog" {
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-ant)"
+  assert_redacted_in_worklog sk-ant "$KEY"
+}
+
+@test "a pasted GitHub ghp_ token is redacted from the worklog" {
+  KEY="$(fake_ghp)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply github-pat)"
+  assert_redacted_in_worklog github-pat "$KEY"
+}
+
+@test "a pasted Slack xoxb- token is redacted from the worklog" {
+  KEY="$(fake_slack)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply slack-token)"
+  assert_redacted_in_worklog slack-token "$KEY"
+}
+
+@test "a pasted AWS access key id is redacted from the worklog" {
+  KEY="$(fake_aws)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply aws-access-key)"
+  assert_redacted_in_worklog aws-access-key "$KEY"
+}
+
+@test "a secret only a gitleaks default rule catches is redacted from the worklog" {
+  command -v gitleaks >/dev/null 2>&1 || skip "gitleaks is not on PATH"
+  KEY="$(fake_npm)"
+  # Guard the premise: if gitleaks stops flagging this fake (or renames the
+  # rule), or a built-in starts matching it, fail here and not mysteriously
+  # below.
+  assert_gitleaks_only "$KEY"
+  fixture_secret_prompt "$KEY"
+  # The quote is the body as the model is shown it, marker included.
+  drive "$(jq -nc --arg u "$U1" --arg q "my token is <redacted:npm-access-token> please keep it" \
+    '{requests:[{text:"shared a token",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  grep -qF -- "<redacted:npm-access-token>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
+}
+
+@test "a gitleaks-only secret is absent from the stdin the model receives" {
+  command -v gitleaks >/dev/null 2>&1 || skip "gitleaks is not on PATH"
+  KEY="$(fake_npm)"
+  assert_gitleaks_only "$KEY"
+  fixture_secret_prompt "$KEY"
+  drive "$CLEAN"
+  grep -q 'CANDIDATES' "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+}
+
+@test "a key straddling the 200-char truncation boundary leaks no partial prefix" {
+  KEY="$(fake_lw)"
+  # 179 filler chars + a space put the key's first char at offset 180, so a
+  # truncate-then-redact order would keep "sk-lw-" plus ~14 chars of key, which
+  # no full-key pattern matches.
+  PAD="$(printf 'x%.0s' $(seq 1 179))"
+  fixture_secret_prompt "$PAD $KEY"
+  drive "$CLEAN"
+  grep -q 'CANDIDATES' "$CLAUDE_STDIN_LOG"
+  ! grep -Eq 'sk-lw-[A-Za-z0-9]' "$CLAUDE_STDIN_LOG"
+}
+
+# --- keyword rule, truncation order, and the downstream scanner ----------
+
+fake_nokeyword() { printf '%s' "a8F3kQ9zX2mP7vL4nB6tR1yC5wH0jD8s"; }
+
+# gitleaks_findings <file> — the findings JSON gitleaks reports for a file.
+# --exit-code 0 so a finding is data here, not a failed command.
+gitleaks_findings() {
+  gitleaks stdin --no-banner --exit-code 0 --report-format json --report-path - < "$1" 2>/dev/null
+}
+
+@test "the worklog file from the sk-lw turn passes a gitleaks scan" {
+  command -v gitleaks >/dev/null 2>&1 || skip "gitleaks is not on PATH"
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  grep -qF -- "<redacted:sk-lw>" "$WORKLOG_JSONL"
+  [ "$(gitleaks_findings "$WORKLOG_JSONL" | jq -c .)" = "[]" ]
+}
+
+@test "a model text that supplies the keyword for a bare secret passes a gitleaks scan" {
+  command -v gitleaks >/dev/null 2>&1 || skip "gitleaks is not on PATH"
+  KEY="$(fake_nokeyword)"
+  # Premise: the secret is flagged once the model's text supplies the keyword.
+  run bash -c "printf '{\"text\":\"api key: %s\"}\n' '$KEY' | gitleaks stdin --no-banner"
+  [ "$status" -ne 0 ]
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" --arg t "api key: $KEY" \
+    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [ "$(gitleaks_findings "$WORKLOG_JSONL" | jq -c .)" = "[]" ]
+}
+
+@test "a password= value with no known prefix is redacted as generic-secret without gitleaks" {
+  # A PATH with everything the hook needs and NO gitleaks, so only the built-in
+  # keyword rule can be responsible for the redaction.
+  NOGL="$SCRATCH/nogl"
+  mkdir -p "$NOGL"
+  for _b in bash sh env date cat rm mktemp sed grep tr timeout python3 jq head tail awk cut sort wc mkdir dirname basename ls find xargs flock mv cp; do
+    if _p="$(command -v "$_b" 2>/dev/null)"; then ln -sf "$_p" "$NOGL/$_b"; fi
+  done
+  SECRET="$(fake_key "" "Hq7Lm2Zp9Wx4Rt6Yb3Nc8Vd" 24)"
+  user_line "$U1" "set password=$SECRET in the env" > "$TX"
+  drive_with "PATH=$STUB:$NOGL" -- "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"shared a password",quote:"set <redacted:generic-secret> in the env",uuid:$u}],outcomes:[],mistakes:[]}')"
+  grep -qF -- "<redacted:generic-secret>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$SECRET" "$WORKLOG_JSONL"
+}
+
+@test "a key beginning inside the 100-char text cap leaves no partial prefix" {
+  KEY="$(fake_lw)"
+  # Key starts at char 90 of the text; truncating first would keep a partial
+  # "sk-lw-aB3dE5gH7j" that no full-key pattern matches.
+  PAD="$(printf 'x%.0s' $(seq 1 89))"
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" --arg t "$PAD $KEY" \
+    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  ! grep -Eq 'sk-lw-[A-Za-z0-9]' "$WORKLOG_JSONL"
 }
