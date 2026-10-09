@@ -2135,6 +2135,30 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   done
 }
 
+# Each row: a lead token glued straight to a live key (or, for the AIza row, to
+# a google key). The lead's own rule must not stop the later one from firing.
+@test "a live key glued to another token leaves no raw key body" {
+  live="$(fake_key "sk_""live_" "$ALNUM" 24)"
+  rk12="$(fake_key "rk_""live_" "$ALNUM" 12)"
+  rk24="$(fake_key "rk_""live_" "$ALNUM" 24)"
+  gk="$(fake_key "AI""za" "$ALNUM" 35)"
+  wh="https://ho""oks.slack.com/services/$(fake_key "" "A" 43)"
+  for row in "$(fake_key "sk_""test_" "$ALNUM" 24)$live|$live" \
+             "$rk12$rk24|$rk24" \
+             "xo""xe-1-abcdefghij-$live|$live" \
+             "xo""xe-1-abcdefghij$gk|google" \
+             "$wh$live|$live" \
+             "xa""pp-1-abcde-123-abcdefgh$live|$live"; do
+    out="$(builtin_out "${row%|*}")"
+    if [ "${row#*|}" = google ]; then
+      [[ "$out" == *'<redacted:google-api-key>'* ]] || { echo "kept: $out" >&2; return 1; }
+    else
+      key="${row#*|}"
+      [[ "$out" != *"${key#*_live_}"* ]] || { echo "raw body: $out" >&2; return 1; }
+    fi
+  done
+}
+
 # --- end to end with gitleaks absent ----------------------------------------
 
 @test "with gitleaks absent an npm token in the prompt is stored as its marker" {

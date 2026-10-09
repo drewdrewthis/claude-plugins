@@ -139,3 +139,9 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Given a Pulumi token that no built-in rule matches and a gitleaks finding for it
     When a turn is recorded
     Then the row holds pulumi-api-token and not the token
+
+  # proves: hooks/tests/worklog-record.bats "a live key glued to another token leaves no raw key body"
+  Scenario: A live key glued to another token leaves no raw key body
+    Given a live key directly after a test key, a slack token, a webhook URL, or a short live key
+    When the built-in rules run
+    Then the raw key body is gone

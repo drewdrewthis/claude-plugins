@@ -31,8 +31,11 @@ _PEM = re.compile(
 # start. Separate alternatives because lookbehinds are fixed-width.
 _B = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrtbf])|(?<=\\u[0-9A-Fa-f]{4}))"
 
-# Most specific first: sk-lw/sk-ant must be consumed before the generic OpenAI
-# `sk-` shape, which would otherwise swallow them under the wrong name.
+# The first block is main's original rules; it runs first, unchanged, so every
+# rule after it can only ADD redaction. Never widen or guard a rule in the first
+# block — add a later entry instead. Most specific first: sk-lw/sk-ant must be
+# consumed before the generic OpenAI `sk-` shape, which would otherwise swallow
+# them under the wrong name.
 _RULES = [
     ("private-key", _PEM),
     # Loose on purpose: the prefix is distinctive, so anything up to whitespace,
@@ -42,17 +45,15 @@ _RULES = [
     ("sk-ant", re.compile(r"sk-ant-[^\s\"'<>]{8,}")),
     ("openai-key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{32,}")),
     ("github-pat", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}")),
-    ("slack-token", re.compile(
-        r"xox[abposre]-[A-Za-z0-9-]{10,}|(?i:xapp-\d-[A-Za-z0-9]+-\d+-[A-Za-z0-9]+)")),
-    ("slack-webhook", re.compile(
-        r"(?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
+    ("slack-token", re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}")),
     ("aws-access-key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")),
     ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
-    # The live shape is unguarded (a guard would only remove matches);
-    # the wider test/prod and 10+ forms are start-guarded.
-    ("stripe-key", re.compile(
-        r"[sr]k_live_[0-9A-Za-z]{16,}|"
-        + _B + r"[sr]k_(?:live|test|prod)_[0-9A-Za-z]{10,}")),
+    ("stripe-key", re.compile(r"[sr]k_live_[0-9A-Za-z]{16,}")),
+    # --- additions: only ever add redaction ---
+    ("slack-token", re.compile(r"xoxe-[A-Za-z0-9-]{10,}|(?i:xapp-\d-[A-Za-z0-9]+-\d+-[A-Za-z0-9]+)")),
+    ("slack-webhook", re.compile(
+        r"(?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
+    ("stripe-key", re.compile(_B + r"[sr]k_(?:live|test|prod)_[0-9A-Za-z]{10,}")),
     # Widths are gitleaks 8.30.1's minimums, open-ended so a longer token
     # leaves no raw tail. Rules that start with _B are start-guarded so
     # ordinary identifiers are left alone.
