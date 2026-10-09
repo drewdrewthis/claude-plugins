@@ -14,6 +14,8 @@ command -v python3 >/dev/null 2>&1 || { echo "decision-ask-guard: python3 missin
 input="$(cat 2>/dev/null || true)"
 field() { jq -r "$1 // empty" <<<"$input" 2>/dev/null || true; }
 
+jq -e . >/dev/null 2>&1 <<<"$input" || { echo "decision-ask-guard: unparseable input, failing open" >&2; exit 0; }
+
 [[ "$(field .hook_event_name)" == PreToolUse ]] || exit 0
 [[ "$(field .tool_name)" == mcp__plugin_discord_discord__reply ]] || exit 0
 text="$(field .tool_input.text)"

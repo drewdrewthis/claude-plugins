@@ -225,6 +225,7 @@ assert_allowed() { # text
   rc=$?
   [ "$rc" -eq 0 ]
   [ -z "$out" ]
+  grep -q "unparseable input, failing open" "$BATS_TEST_TMPDIR/err"
 }
 
 @test "no jq on PATH -> fails open: exit 0, no stdout, stderr names the miss" {

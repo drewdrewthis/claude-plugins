@@ -1,6 +1,6 @@
 {
   "name": "decide",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "/decide:decide resolves a decision yourself instead of deferring it to the human — triage, decompose consequences, run the autonomy gate, act, and write an auditable decision record. Escalates only the irreversible, ruin-class, or values-laden minority. Records default to the host's ~/.knowledge decisions store. Ships a PreToolUse hook that denies Discord replies asking the owner to decide items not marked one-way-door or values-laden with a recommendation.",
   "author": { "name": "Drü" }
 }

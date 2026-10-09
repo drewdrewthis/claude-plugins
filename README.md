@@ -418,7 +418,7 @@ separately):
   not required for the happy path.
 - Agents from the host roster: `ac-reviewer`, `coder`, `proof-reviewer`.
 
-### decide (0.2.0)
+### decide (0.1.0)
 
 `/decide:decide` (bare `/decide` also resolves) — resolve a decision yourself
 instead of deferring it to the human. Triage (fast / lite / full), decompose
@@ -428,7 +428,7 @@ only the genuinely irreversible, ruin-class, or values-laden minority.
 
 | piece | what |
 |---|---|
-| `hooks/decision-ask-guard.sh` | PreToolUse (`mcp__plugin_discord_discord__reply`) hook: denies a Discord reply that asks the owner to decide when any item is not marked one-way-door or values-laden with a recommendation, and points at `/decide:decide`. Deny, not ask, so unattended sessions never stall; fails open (bad JSON, no `jq`, no `python3`) |
+| `hooks/decision-ask-guard.sh` | PreToolUse (`mcp__plugin_discord_discord__reply`, Discord reply tool only) hook: denies a Discord reply that asks the owner to decide when any item is not marked one-way-door or values-laden with a recommendation, and points at `/decide:decide`. Deny, not ask, so unattended sessions never stall; fails open (bad JSON, no `jq`, no `python3`) |
 
 The skill is vendored from `orchard-codex@develop-sweatshop` (`skills/decide`,
 including its `EVOLUTION.md`); the hook is covered by a bats suite:
