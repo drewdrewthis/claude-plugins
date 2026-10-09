@@ -1051,3 +1051,50 @@ _other_repo() {
     --root "$ROOT" --paths "records/failure-modes/rec.md" --what x --why w --source s --evidence e
   [ "$status" -eq 0 ]
 }
+
+# ---- id slug: normalize's rename never leaves the record's directory ----
+# _evil_fm <path> <id> — a valid record whose id would rename it elsewhere.
+_evil_fm() { _fm "$1" fm.placeholder; sed -i.bak "s|^id: .*|id: $2|" "$1"; rm -f "$1.bak"; }
+
+@test "id slug: a traversal id BLOCKS before any move; the file stays put, nothing lands outside" {
+  _evil_fm "$ROOT/records/failure-modes/evil.md" 'fm./../../../pwn2'
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/evil.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [id-slug]"* ]]
+  [ -f "$ROOT/records/failure-modes/evil.md" ]
+  [ ! -e "$FIX/pwn2.md" ] && [ ! -e "$ROOT/pwn2.md" ] && [ ! -e "$ROOT/records/pwn2.md" ]
+  [ -z "$(find "$FIX" -name 'pwn2*' -print)" ]
+  [ "$(_commit_count)" -eq "$before" ]
+  grep -q "check: id-slug" "$QUEUE"
+}
+
+@test "id slug: --normalize alone also refuses a traversal id and moves nothing" {
+  _evil_fm "$ROOT/records/failure-modes/evil.md" 'fm.x/../../escaped'
+  run bash "$GATE" --normalize --root "$ROOT" --paths "records/failure-modes/evil.md"
+  [ "$status" -ne 0 ]
+  [ -f "$ROOT/records/failure-modes/evil.md" ]
+  [ -z "$(find "$FIX" -name 'escaped*' -print)" ]
+}
+
+@test "id slug: a character outside [A-Za-z0-9._-] BLOCKS and the file stays put" {
+  _evil_fm "$ROOT/records/failure-modes/odd.md" 'fm.a;b$c'
+  _run_gate --root "$ROOT" --paths "records/failure-modes/odd.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [id-slug]"* ]]
+  [ -f "$ROOT/records/failure-modes/odd.md" ]
+  [ "$(find "$ROOT/records/failure-modes" -name '*.md' | wc -l | tr -d ' ')" -eq 2 ]
+}
+
+@test "id slug: a tracked record with a traversal id is not git-mv'd either" {
+  _evil_fm "$ROOT/records/failure-modes/evil.md" 'fm./../../../pwn3'
+  git -C "$ROOT" add -A; git -C "$ROOT" commit -qm evil
+  _run_gate --root "$ROOT" --paths "records/failure-modes/evil.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [ -f "$ROOT/records/failure-modes/evil.md" ]
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+  [ -z "$(find "$FIX" -name 'pwn3*' -print)" ]
+}

@@ -36,7 +36,10 @@
 # grooming queue (<state-dir>/grooming-queue.md via stores.sh procedures_state_dir):
 #   0. set `mistakes.jsonl merge=union` in this clone's info/attributes
 #   1. pull --rebase (only when an upstream is configured)
-#   2. normalize frontmatter of the record paths (idempotent, in place)
+#   2. normalize frontmatter of the record paths (idempotent, in place); the
+#      rename to the id's slug BLOCKS, with the file unmoved, unless the slug
+#      is one [A-Za-z0-9._-] component without `..` and the target stays in
+#      the record's own directory
 #   3. validate — baseline: fence-block, size cap, check-sanitization.sh,
 #      check-sections.sh, whole-root duplicate-id scan, case-twin scan,
 #      lint-frontmatter.sh
@@ -415,6 +418,31 @@ _slug_of_id() {
     esac
 }
 
+# _check_id_slug <slug> <rel> — BLOCK unless <slug> is one safe filename
+# component: only [A-Za-z0-9._-], and no `..`. Same rule as log-record.sh's
+# --slug check. The slug comes from the record's frontmatter id, which the
+# headless librarian writes from untrusted transcripts.
+_check_id_slug() {
+    case "$1" in
+        *..*) _abort id-slug "id slug '$1' contains '..'; file left in place: $2" ;;
+    esac
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
+        || _abort id-slug "id slug '$1' has characters outside [A-Za-z0-9._-]; file left in place: $2"
+}
+
+# _check_same_dir <abs> <newabs> <rel> — BLOCK unless the rename target's
+# physical parent dir is the source's physical parent dir, so a rename never
+# moves a record to another directory.
+_check_same_dir() {
+    local src dst
+    src="$(cd "$(dirname -- "$1")" 2>/dev/null && pwd -P)" \
+        || _abort id-slug "cannot resolve directory of: $3"
+    dst="$(cd "$(dirname -- "$2")" 2>/dev/null && pwd -P)" \
+        || _abort id-slug "rename target directory does not resolve; file left in place: $3"
+    [ "$src" = "$dst" ] \
+        || _abort id-slug "rename would leave the record's directory ($dst != $src); file left in place: $3"
+}
+
 # normalize_and_collect — normalize every record path; rename the file so its
 # kebab-slug matches id. Updates FINAL_PATHS (what gets committed) and REC_PATHS
 # (record .md paths for validation) with any post-rename path.
@@ -448,8 +476,14 @@ normalize_and_collect() {
                         base="$(basename "$rel")"; dir="$(dirname "$rel")"
                         want="${slug}.md"
                         if [ "$base" != "$want" ]; then
+                            # The new name comes from file content (the id), so
+                            # it must stay one filename component in the same
+                            # directory before anything moves. A bad id blocks
+                            # with the record left where it is.
+                            _check_id_slug "$slug" "$rel"
                             [ "$dir" = "." ] && newrel="$want" || newrel="$dir/$want"
                             newabs="$ROOT/$newrel"
+                            _check_same_dir "$abs" "$newabs" "$rel"
                             # Never overwrite an existing DIFFERENT file: two
                             # records that resolve to the same slug (e.g. a
                             # duplicate id) must both survive so the dup-id scan
