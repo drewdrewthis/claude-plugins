@@ -1,5 +1,8 @@
 """redact.py — secret redaction for worklog-record.sh. Stdlib only.
-Built-in pass order: base rules, keyword pass, added rules, keyword pass.
+
+One built-in pass is: base rules, keyword pass, added rules, keyword pass. The
+pass repeats until the text stops changing; text still changing on the 8th pass
+becomes <redacted:glued-secrets>.
 
 ONE implementation, imported by every python heredoc in the hook (wl_slice,
 wl_entries), so the two sites cannot drift apart. A match
@@ -13,6 +16,17 @@ Two layers:
     ran, but the operator should see it. Its ABSENCE is not a failure; the
     caller reports it once per session (the built-in list is narrower than
     gitleaks' rule set).
+
+Known limit of the built-in layer: two tokens glued with no separator can leave
+a token body raw. An open-ended first body can take the first characters of the
+second token, so the second rule cannot match (ghp_ directly followed by ghp_
+leaves the second body raw). An end guard can reject the first match (two AWS
+key ids glued together both stay raw). The repeat closes the cases where one
+token matches once its neighbour is a marker (Shopify then npm_; an AWS key id
+then a Google key). gitleaks is not a full cover: it scans the built-in
+output, where its generic rule catches some leftovers and misses others. The
+glued ghp_ leftover has lost its prefix and stays raw, and the gitleaks AWS
+rule does not match two glued key ids.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
@@ -32,12 +46,12 @@ _PEM = re.compile(
 # start. Separate alternatives because lookbehinds are fixed-width.
 _B = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrtbf])|(?<=\\u[0-9A-Fa-f]{4}))"
 
-# _RULES_MAIN holds the base rules; they and the keyword pass run first,
+# _RULES_BASE holds the base rules; they and the keyword pass run first,
 # unchanged, and _RULES_ADD runs on that output, so the additions can only ADD
-# redaction. Never widen or guard a rule in _RULES_MAIN — add to _RULES_ADD
+# redaction. Never widen or guard a rule in _RULES_BASE — add to _RULES_ADD
 # instead. Most specific first: sk-lw/sk-ant must be consumed before the generic
 # OpenAI `sk-` shape, which would otherwise swallow them under the wrong name.
-_RULES_MAIN = [
+_RULES_BASE = [
     ("private-key", _PEM),
     # Loose on purpose: the prefix is distinctive, so anything up to whitespace,
     # a quote or an angle bracket goes. A strict alphabet let a key with one
@@ -104,21 +118,39 @@ def _generic(s):
         for i, p in enumerate(parts))
 
 
-def builtin(s):
-    """Apply the base rules and the keyword rule, then the added rules, to one string.
+# A glued token can need its neighbour to be a marker before it matches, so a
+# long chain needs one pass per link and an uncapped loop is quadratic.
+# The 8th pass is the confirming one, so text that needs more than 7 changing
+# passes collapses.
+_MAX_PASSES = 8
+_GLUED = "<redacted:glued-secrets>"
 
-    The added rules run last, on the base output, so they never split a
-    keyword-glued run before the keyword rule has seen it. The keyword pass
-    runs again to catch keyword context that only appears after an added rule.
-    """
-    if not s:
-        return s
-    for name, rx in _RULES_MAIN:
+
+def _pass(s):
+    """One built-in pass: base, keyword, added, keyword rules."""
+    # The added rules run last, on the base output, so they never split a
+    # keyword-glued run before the keyword rule has seen it. The keyword pass
+    # runs again to catch keyword context that only appears after an added rule.
+    for name, rx in _RULES_BASE:
         s = rx.sub("<redacted:%s>" % name, s)
     s = _generic(s)
     for name, rx in _RULES_ADD:
         s = rx.sub("<redacted:%s>" % name, s)
     return _generic(s)
+
+
+def builtin(s):
+    """Repeat _pass until the text is stable; fail closed past _MAX_PASSES."""
+    if not s:
+        return s
+    for _ in range(_MAX_PASSES):
+        out = _pass(s)
+        if out == s:
+            return s
+        s = out
+    # Still changing after the cap, so some token may be raw: one marker for the
+    # whole string, never a partly redacted one.
+    return _GLUED
 
 
 def gitleaks_present():

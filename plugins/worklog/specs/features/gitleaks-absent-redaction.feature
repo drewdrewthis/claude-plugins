@@ -151,3 +151,45 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Given a keyword and a short value glued to a gitlab or slack token
     When the built-in rules run
     Then the short value is gone
+
+  # proves: hooks/tests/worklog-record.bats "a token glued after another token leaves no raw token body"
+  Scenario: A token glued after another token leaves no raw token body
+    Given a shopify, digitalocean, or AWS key directly followed by another token
+    When the built-in rules run
+    Then the output is the two markers back to back
+
+  # proves: hooks/tests/worklog-record.bats "running the built-ins twice on any two or three glued tokens gives the same text as once"
+  Scenario: Running the built-in rules twice on glued tokens gives the same text as once
+    Given every ordered pair and triple of token shapes and keyword fragments
+    When the built-in rules run twice
+    Then the second pass changes nothing
+
+  # proves: hooks/tests/worklog-record.bats "a chain of glued tokens that needs more than 8 passes fails closed to one marker"
+  Scenario: A chain of glued tokens that needs more than 8 passes fails closed to one marker
+    Given a grafana token glued to a shopify token, repeated 7 times
+    When the built-in rules run
+    Then the output is exactly the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "a chain of glued tokens that settles within the cap is redacted token by token"
+  Scenario: A chain of glued tokens that settles within the cap is redacted token by token
+    Given a grafana token glued to a shopify token, repeated 6 times
+    When the built-in rules run
+    Then the output is the grafana and shopify markers, repeated 6 times
+
+  # proves: hooks/tests/worklog-record.bats "a 200000 character chain of glued tokens uses under 10 seconds of CPU time"
+  Scenario: A 200000 character chain of glued tokens uses under 10 seconds of CPU time
+    Given a chain of glued tokens at least 200000 characters long
+    When the built-in rules run
+    Then the call uses under 10 seconds of CPU time
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a token directly after an open-ended body keeps its raw body"
+  Scenario: A token directly after an open-ended body keeps its raw body
+    Given a token with an open-ended body directly followed by another token, including the same type twice
+    When the built-in rules run
+    Then the output holds one marker followed by the start of the second token
+
+  # proves: hooks/tests/worklog-record.bats "known limit: two glued aws key ids both stay raw"
+  Scenario: Two glued AWS key ids both stay raw
+    Given two AWS key ids glued with no separator
+    When the built-in rules run
+    Then the output equals the input and holds no marker
