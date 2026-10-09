@@ -2246,8 +2246,9 @@ if dt >= 10:
 
 # When the first token's body is open-ended and its alphabet includes the next
 # token's prefix characters, the first rule takes the start of the second token
-# and the second body stays raw. This includes the same type twice. The gitleaks
-# layer is the cover. If a rule change closes it, update this test.
+# and the second body stays raw. This includes the same type twice. gitleaks
+# does not cover it: it scans the built-in output. If a rule change closes it,
+# update this test.
 @test "known limit: a token directly after an open-ended body keeps its raw body" {
   for row in "$(fake_npm)$(fake_key "sk_""test_" "$ALNUM" 24)|<redacted:npm-token>_test_" \
              "$(fake_hf)$(fake_npm)|<redacted:huggingface-token>_" \
@@ -2262,7 +2263,7 @@ if dt >= 10:
 }
 
 # The end guard rejects the first id and the start guard rejects the second, so
-# both stay raw. The gitleaks layer is the cover.
+# both stay raw. gitleaks does not cover it: it scans the built-in output.
 @test "known limit: two glued aws key ids both stay raw" {
   in="$(fake_aws)$(fake_aws)"
   out="$(builtin_out "$in")"
