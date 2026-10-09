@@ -37,6 +37,10 @@
 # uncapped rather than skip it. NOT a failure: the work still happened and the
 # row is complete; the note only says this turn's model call was not time-boxed,
 # so a rare hang here is not later mistaken for a code regression.
+# gitleaks-absent — a caller that redacts secrets with gitleaks on top of its
+# built-in rules found no usable gitleaks. NOT a failure: the built-ins ran and
+# the row is complete; the note (once per session) only says the redaction layer
+# was narrower than gitleaks' rule set.
 # gitleaks-failed — a caller that redacts secrets with gitleaks on top of its
 # built-in rules saw gitleaks error or time out. The row is still written, but
 # UNJUDGED (mechanical fields only), and the model is skipped if the candidate
@@ -116,9 +120,10 @@ gate_failopen() {
         store-unwritable|payload-shape-unrecognized|malformed-payload) ;;
         non-object-payload|skill-unresolvable) ;;
         transcript-unreadable|judgment-unavailable|detach-failed) ;;
-        no-timeout|gitleaks-failed|redact-failed) ;;
+        no-timeout|gitleaks-failed|gitleaks-absent|redact-failed) ;;
         *) why="unrecognized:${why}" ;;
     esac
+    # worklog-record.sh's wl_note_once greps this exact field order.
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" "$gate" "$why" "$sid" \
         >> "$GATE_FAILOPEN_LOG" 2>/dev/null || true

@@ -1,4 +1,5 @@
 """redact.py — secret redaction for worklog-record.sh. Stdlib only.
+Built-in pass order: base rules, keyword pass, added rules, keyword pass.
 
 ONE implementation, imported by every python heredoc in the hook (wl_slice,
 wl_entries), so the two sites cannot drift apart. A match
@@ -6,9 +7,12 @@ becomes <redacted:NAME>.
 
 Two layers:
   * BUILT-IN rules — named regexes that need no binary and always run.
-  * gitleaks — when on PATH, ONE invocation per batch (never per string), whose
-    findings' exact `Secret` is replaced. Its failure is reported to the caller,
-    never swallowed: the built-ins still ran, but the operator should see it.
+  * gitleaks — when usable (gitleaks_present), ONE invocation per batch
+    (never per string), whose findings' exact `Secret` is replaced. Its
+    failure is reported to the caller, never swallowed: the built-ins still
+    ran, but the operator should see it. Its ABSENCE is not a failure; the
+    caller reports it once per session (the built-in list is narrower than
+    gitleaks' rule set).
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
@@ -23,9 +27,17 @@ _PEM = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
     re.S)
 
-# Most specific first: sk-lw/sk-ant must be consumed before the generic OpenAI
-# `sk-` shape, which would otherwise swallow them under the wrong name.
-_RULES = [
+# Start guard for short prefixes: not mid-identifier. A JSON escape
+# (\n \r \t \b \f or \uXXXX) directly before the prefix still counts as a
+# start. Separate alternatives because lookbehinds are fixed-width.
+_B = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrtbf])|(?<=\\u[0-9A-Fa-f]{4}))"
+
+# _RULES_MAIN holds the base rules; they and the keyword pass run first,
+# unchanged, and _RULES_ADD runs on that output, so the additions can only ADD
+# redaction. Never widen or guard a rule in _RULES_MAIN — add to _RULES_ADD
+# instead. Most specific first: sk-lw/sk-ant must be consumed before the generic
+# OpenAI `sk-` shape, which would otherwise swallow them under the wrong name.
+_RULES_MAIN = [
     ("private-key", _PEM),
     # Loose on purpose: the prefix is distinctive, so anything up to whitespace,
     # a quote or an angle bracket goes. A strict alphabet let a key with one
@@ -38,6 +50,32 @@ _RULES = [
     ("aws-access-key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")),
     ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
     ("stripe-key", re.compile(r"[sr]k_live_[0-9A-Za-z]{16,}")),
+]
+
+_RULES_ADD = [
+    ("slack-token", re.compile(r"xoxe-[A-Za-z0-9-]{10,}|(?i:xapp-\d-[A-Za-z0-9]+-\d+-[A-Za-z0-9]+)")),
+    ("slack-webhook", re.compile(
+        r"(?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
+    ("stripe-key", re.compile(_B + r"[sr]k_(?:live|test|prod)_[0-9A-Za-z]{10,}")),
+    # Widths are gitleaks 8.30.1's minimums, open-ended so a longer token
+    # leaves no raw tail. Rules that start with _B are start-guarded so
+    # ordinary identifiers are left alone.
+    ("npm-token", re.compile(_B + r"npm_[A-Za-z0-9]{36,}")),
+    ("gitlab-pat", re.compile(_B + r"glpat-[\w.-]{20,}")),
+    ("huggingface-token", re.compile(_B + r"hf_[A-Za-z]{34,}")),
+    ("sendgrid-key", re.compile(_B + r"SG\.[\w-]{22}\.[\w-]{43,}")),
+    # Own prefix; the jwt rule needs two eyJ segments, so order is not load-bearing.
+    ("1password-token", re.compile(r"ops_eyJ[A-Za-z0-9+/=_-]{250,}")),
+    ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{17,}\.eyJ[A-Za-z0-9_-]{17,}\.[A-Za-z0-9_-]{10,}")),
+    ("digitalocean-token", re.compile(_B + r"do[opr]_v1_[a-f0-9]{64,}")),
+    ("pypi-token", re.compile(r"pypi-AgEIcHlwaS5vcmc[\w-]{50,}")),
+    ("shopify-token", re.compile(_B + r"shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32,}")),
+    ("linear-key", re.compile(_B + r"lin_api_[A-Za-z0-9]{40,}")),
+    ("vault-token", re.compile(_B + r"hvs\.[\w-]{90,}")),
+    ("doppler-token", re.compile(_B + r"dp\.pt\.[A-Za-z0-9]{43,}")),
+    ("atlassian-token", re.compile(r"ATATT3[A-Za-z0-9_\-=]{186,}")),
+    ("grafana-token", re.compile(
+        _B + r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8,}|" + _B + r"glc_[A-Za-z0-9+/]{32,}={0,2}")),
 ]
 
 # A keyword plus a separator plus a 16+ char value. The whole match is replaced,
@@ -57,12 +95,8 @@ _GENERIC = re.compile(
 _MARKER = re.compile(r"(<redacted:[^<>\s]*>)")
 
 
-def builtin(s):
-    """Apply the named rules, then the keyword rule, to one string."""
-    if not s:
-        return s
-    for name, rx in _RULES:
-        s = rx.sub("<redacted:%s>" % name, s)
+def _generic(s):
+    """Apply the keyword rule to the text between <redacted:...> markers."""
     # split() with one capture group: odd indexes are the markers themselves.
     parts = _MARKER.split(s)
     return "".join(
@@ -70,13 +104,38 @@ def builtin(s):
         for i, p in enumerate(parts))
 
 
+def builtin(s):
+    """Apply the base rules and the keyword rule, then the added rules, to one string.
+
+    The added rules run last, on the base output, so they never split a
+    keyword-glued run before the keyword rule has seen it. The keyword pass
+    runs again to catch keyword context that only appears after an added rule.
+    """
+    if not s:
+        return s
+    for name, rx in _RULES_MAIN:
+        s = rx.sub("<redacted:%s>" % name, s)
+    s = _generic(s)
+    for name, rx in _RULES_ADD:
+        s = rx.sub("<redacted:%s>" % name, s)
+    return _generic(s)
+
+
+def gitleaks_present():
+    """True when a usable (executable, on PATH) gitleaks exists.
+
+    Single definition of "usable", shared by scan() and the caller's absent note.
+    """
+    return bool(shutil.which("gitleaks"))
+
+
 def scan(text):
     """One gitleaks run over `text`. Returns (findings, failed).
 
     findings is [(secret, rule_id)]. Absent gitleaks is (not failed): nothing
-    was attempted, so there is nothing to report.
+    was attempted; the caller reports absence via gitleaks_present().
     """
-    if not shutil.which("gitleaks") or not text.strip():
+    if not gitleaks_present() or not text.strip():
         return [], False
     try:
         secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
