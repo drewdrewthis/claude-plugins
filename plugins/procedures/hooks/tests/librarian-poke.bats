@@ -19,7 +19,11 @@ setup() {
   export LIBRARIAN_SETTLE_SECS=0
   export LIBRARIAN_LOCK="$TURN_STATE_DIR/librarian.lock"
   unset PROCEDURES_ENABLE_LIBRARIAN CLAUDE_CODE_ENTRYPOINT LIBRARIAN_SYNC LIBRARIAN_NO_FLOCK
-  unset LIBRARIAN_MIN_INTERVAL_SECS LIBRARIAN_CLAIM_TTL_SECS LIBRARIAN_MAX_RUNTIME_SEC CODEX_STORE_ROOTS
+  unset LIBRARIAN_MIN_INTERVAL_SECS LIBRARIAN_CLAIM_TTL_SECS LIBRARIAN_MAX_RUNTIME_SEC CODEX_STORE_ROOTS CODEX_ROOT
+  # A drain with no store root is skipped (no write rules), so every test gets
+  # one by default; a test that needs none unsets it.
+  mkdir -p "$HOME/default-store/records"
+  export CODEX_STORE_ROOTS="$HOME/default-store"
   # Pin a calm load so a busy box cannot defer the worker; an exported
   # LP_LOADAVG_FILE (e.g. /proc/loadavg) still wins for a real-load run.
   if [ -z "${LP_LOADAVG_FILE:-}" ]; then
@@ -162,14 +166,59 @@ unread_line() { user_prompt; }
   grep -qxF -- "$PR" "$argv"
   grep -qxF -- "Edit(/$ROOT/records/**)" "$argv"
   ! grep -qxF -- "Edit(/$ROOT/**)" "$argv"
-  # Both quotings the agent doc uses for the commit gate match a literal rule.
-  grep -qxF -- "Bash(CODEX_ROOT='$ROOT' bash \"$PR/scripts/commit-records.sh\" *)" "$argv"
+  # The quoting the agent doc uses for the commit gate matches a literal rule,
+  # with --root pinned to the same root; no commit-gate rule leaves --root open.
+  grep -qxF -- "Bash(CODEX_ROOT='$ROOT' bash \"$PR/scripts/commit-records.sh\" --root '$ROOT' *)" "$argv"
+  ! grep -xF -- "Bash(CODEX_ROOT='$ROOT' bash \"$PR/scripts/commit-records.sh\" *)" "$argv"
+  [ -z "$(grep -F 'commit-records.sh' "$argv" | grep -vF -- "commit-records.sh\" --root " | grep -vF -- "commit-records.sh --root ")" ]
   grep -qxF -- "Bash(CODEX_ROOT=$ROOT MISTAKES_JSONL=$ROOT/mistakes.jsonl bash $PR/scripts/log-record.sh *)" "$argv"
+  # No mkdir rule (Write creates the tmp dir) and no rm rule (the poke cleans up).
+  ! grep -q -- 'Bash(mkdir' "$argv"
+  ! grep -q -- 'Bash(rm' "$argv"
   # No rule leaves the root to a wildcard, and the agent cannot move cursors.
   ! grep -q -- 'CODEX_ROOT=\*' "$argv"
   ! grep -q -- 'librarian-advance' "$argv"
   # The prompt names the roots.
   grep -q -- "Store roots (CODEX_STORE_ROOTS): $ROOT\." "$argv"
+}
+
+@test "worker: no store roots resolved => drain skipped and logged, nothing issued, cursors kept" {
+  unset CODEX_STORE_ROOTS CODEX_ROOT
+  [ ! -e "$HOME/.knowledge" ]
+  unread_line
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  local st="$HOME/.local/state/procedures/librarian"
+  grep -q 'librarian-poke: no store roots resolved, drain skipped' "$st/librarian-poke.log"
+  [ ! -s "$st/batch.manifest" ]
+  [ ! -e "$st/cursors/$SID.line" ]
+  # With a root back, the same line is issued and the drain runs.
+  export CODEX_STORE_ROOTS="$HOME/default-store"
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ "$(cat "$st/cursors/$SID.line")" = "1" ]
+}
+
+@test "worker: the poke removes <state-dir>/tmp/commit-* after the drain, and nothing else" {
+  unread_line
+  local st="$HOME/.local/state/procedures/librarian"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+mkdir -p "$st/tmp/commit-a" "$st/tmp/keep"
+echo w > "$st/tmp/commit-a/why.txt"; echo k > "$st/tmp/keep/x"
+echo o > "$HOME/outside"; ln -s "$HOME/outside" "$st/tmp/commit-link"
+exit 1
+EOF
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ ! -e "$st/tmp/commit-a" ]
+  [ ! -L "$st/tmp/commit-link" ]
+  [ -f "$HOME/outside" ]
+  [ -f "$st/tmp/keep/x" ]
 }
 
 @test "worker: a pre-seeded claim (concurrent holder) is never stolen — claude never invoked" {

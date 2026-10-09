@@ -12,6 +12,9 @@
 #     --why-file <dir>/why.txt --source-file <dir>/source.txt \
 #     --evidence-file <dir>/evidence.txt
 #
+# --root must resolve to the same directory as $CODEX_ROOT (and may be given
+# once); anything else is refused before any check runs.
+#
 # The metadata fields also accept inline forms (--why/--source/--evidence);
 # prefer the -file forms for transcript-derived text — nothing is ever
 # assembled into shell source, so there is no quoting or escaping to get wrong.
@@ -94,6 +97,7 @@ Usage: commit-records.sh --root PATH --paths "p1.md p2.md [mistakes.jsonl]" \
        commit-records.sh --normalize --root PATH --paths "p1.md p2.md"
        commit-records.sh --release-quarantine PATH
 
+CODEX_ROOT must be set to the same directory as --root (given once).
 Prefer the -file forms for transcript-derived text; nothing is ever
 assembled into shell source. A -file path must live under the procedures
 state dir, typically <state-dir>/tmp/commit-<root-slug>/. The
@@ -217,7 +221,9 @@ while [ "$#" -gt 0 ]; do
             | --why-file | --source-file | --evidence-file)
             [ "$#" -ge 2 ] || usage_err "option '$1' requires a value"
             case "$1" in
-                --root) ROOT="$2" ;;
+                --root)
+                    [ -z "$ROOT" ] || usage_err "--root given more than once"
+                    ROOT="$2" ;;
                 --paths) PATHS_RAW="$2" ;;
                 --what) WHAT="$2" ;;
                 --why) WHY="$2"; WHY_INLINE=1 ;;
@@ -248,6 +254,17 @@ unset _META_VALUE
 [ -n "$ROOT" ] || usage_err "--root is required"
 [ -d "$ROOT" ] || usage_err "--root '$ROOT' is not a directory"
 [ -n "$PATHS_RAW" ] || usage_err "--paths is required"
+# --root must be the root the caller pinned in CODEX_ROOT. The headless
+# librarian's allow rule fixes the CODEX_ROOT= prefix per store root but not
+# every later argument, and this gate runs <root>/scripts/validate.sh, the
+# root's git hooks, and a push — so a free --root would run another repo's code.
+[ -n "${CODEX_ROOT:-}" ] || usage_err "CODEX_ROOT must be set to the same directory as --root"
+_cr_want="$(cd "$CODEX_ROOT" 2>/dev/null && pwd -P)" \
+    || usage_err "CODEX_ROOT '$CODEX_ROOT' is not a directory"
+_cr_got="$(cd "$ROOT" && pwd -P)" || usage_err "cannot resolve --root '$ROOT'"
+[ "$_cr_got" = "$_cr_want" ] \
+    || usage_err "--root '$ROOT' is not CODEX_ROOT '$CODEX_ROOT'; refusing"
+unset _cr_want _cr_got
 
 # Absolute root (paths are root-relative; git -C uses $ROOT).
 ROOT="$(cd "$ROOT" && pwd)"
