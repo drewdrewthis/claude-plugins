@@ -176,11 +176,11 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run
     Then the output is the grafana and shopify markers, repeated 6 times
 
-  # proves: hooks/tests/worklog-record.bats "a 200000 character chain of glued tokens returns within 10 seconds"
-  Scenario: A 200000 character chain of glued tokens returns within 10 seconds
+  # proves: hooks/tests/worklog-record.bats "a 200000 character chain of glued tokens uses under 10 seconds of CPU time"
+  Scenario: A 200000 character chain of glued tokens uses under 10 seconds of CPU time
     Given a chain of glued tokens at least 200000 characters long
     When the built-in rules run
-    Then the call returns within 10 seconds
+    Then the call uses under 10 seconds of CPU time
 
   # proves: hooks/tests/worklog-record.bats "known limit: a token directly after an open-ended body keeps its raw body"
   Scenario: A token directly after an open-ended body keeps its raw body

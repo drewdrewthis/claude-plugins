@@ -2227,7 +2227,7 @@ if bad:
   [ "$out" = "$want" ] || { echo "got: ${out:0:200}" >&2; return 1; }
 }
 
-@test "a 200000 character chain of glued tokens returns within 10 seconds" {
+@test "a 200000 character chain of glued tokens uses under 10 seconds of CPU time" {
   run python3 -c '
 import sys, time
 sys.path.insert(0, sys.argv[1])
@@ -2239,7 +2239,7 @@ t = time.process_time()
 redact.builtin(s)
 dt = time.process_time() - t
 if dt >= 10:
-    sys.stderr.write("took %.1f seconds\n" % dt)
+    sys.stderr.write("used %.1f seconds of CPU time\n" % dt)
     sys.exit(1)
 ' "$HOOKS/lib" "$(fake_grafana)" "$(fake_shopify)"
   [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
