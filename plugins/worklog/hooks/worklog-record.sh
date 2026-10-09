@@ -49,11 +49,15 @@
 #     gitleaks batch) before THEIR cut. A quote gets built-ins only, then must
 #     match the redacted body: a gitleaks-only secret in a quote cannot match a
 #     gitleaks-redacted body, so it is dropped as invented — the safe direction.
-#   * There is NO final scan of the serialized row: gitleaks' generic-api-key
-#     draws its keyword from the same string, not from a neighbouring JSON
-#     field (measured on gitleaks 8.30.1), so it would add no context.
+#   * Redact each string before it enters the row; gitleaks does not draw
+#     keyword context across JSON fields, so scanning the serialized row adds nothing.
 # Built-in named rules always run; gitleaks adds its default rules when on PATH,
-# one batch per call. A gitleaks error is noted (gitleaks-failed), not silent. An
+# one batch per call. If gitleaks IS on PATH and fails (either pass), the row is
+# written UNJUDGED (mechanical fields only, which carry no secrets) and
+# gitleaks-failed is noted once: built-ins alone must not stand in for a layer
+# that was meant to run. If gitleaks is ABSENT: built-ins only, no note — a
+# machine without gitleaks has no gitleaks pre-commit to block either, and a
+# note every turn would swamp the fail-open rate. An
 # unreadable lib fails open (lib-unreadable:redact), and a redaction that dies
 # at runtime fails open (redact-failed) — never a row without completed redaction.
 #
@@ -514,8 +518,13 @@ wl_unclaim() {
 wl_entries() {
     python3 - "$1" "$2" "$3" <<'PY' 2>/dev/null || true
 import json, os, re, sys
-sys.path.insert(0, os.environ["WL_REDACT_LIB"])
-import redact
+# Same strict import as wl_slice: an unreadable lib is reported, never tolerated.
+try:
+    sys.path.insert(0, os.environ["WL_REDACT_LIB"])
+    import redact
+except Exception:
+    print(json.dumps({"lib_unreadable": True}))
+    sys.exit(0)
 
 cands, uuids_json, raw = sys.argv[1], sys.argv[2], sys.argv[3]
 MAXTEXT, MAXQUOTE = 100, 120
@@ -527,6 +536,9 @@ try:
 except Exception:
     sys.exit(1)
 if not isinstance(obj, dict):
+    sys.exit(1)
+# A key holding a non-list is a malformed reply: unusable, not an empty one.
+if any(k in obj and not isinstance(obj[k], list) for k in CAPS):
     sys.exit(1)
 
 # Bodies keyed by uuid, normalised the same way norm() does it: collapse all
@@ -555,19 +567,21 @@ def verified_quote(quote, uuid):
     i = body.find(q)
     if i < 0:
         return None
-    return body[i:i + len(q)][:MAXQUOTE]
+    return redact.truncate(body[i:i + len(q)], MAXQUOTE)
 
 # Every model text goes through the SAME pass as wl_slice's bodies (built-ins +
 # ONE gitleaks batch), before the MAXTEXT cut.
 def model_texts():
     for key in CAPS:
-        for e in (obj.get(key) or [])[:CAPS[key]]:
+        items = obj.get(key)
+        for e in (items if isinstance(items, list) else [])[:CAPS[key]]:
             if isinstance(e, dict) and isinstance(e.get("text"), str):
                 yield e["text"].strip()
 
 def entries(key, uuid_field):
     out = []
-    for e in (obj.get(key) or [])[:CAPS[key]]:
+    items = obj.get(key)
+    for e in (items if isinstance(items, list) else [])[:CAPS[key]]:
         if not isinstance(e, dict):
             continue
         text = e.get("text")
@@ -601,25 +615,26 @@ def entries(key, uuid_field):
         q = verified_quote(e.get("quote"), anchor)
         if q is None:
             continue
-        ent = {"text": rtext[text.strip()][:MAXTEXT], "quote": q}
+        ent = {"text": redact.truncate(rtext[text.strip()], MAXTEXT), "quote": q}
         ent["uuids" if uuid_field == "uuids" else "uuid"] = us if uuid_field == "uuids" else us[0]
         out.append(ent)
     return out
 
-# A runtime failure is reported, not swallowed: wl_run must write no row.
+# Only the redaction call is guarded: a redaction that dies is reported (wl_run
+# writes no row), while a malformed model reply just yields no entries.
+uniq = sorted(set(model_texts()))
 try:
-    uniq = sorted(set(model_texts()))
     red, gl_failed = redact.redact_texts(uniq)
-    rtext = dict(zip(uniq, red))
-    result = {
-        "requests": entries("requests", "uuid"),
-        "outcomes": entries("outcomes", "uuid"),
-        "mistakes": entries("mistakes", "uuids"),
-        "gitleaks_failed": gl_failed,
-    }
 except Exception:
-    result = {"redact_failed": True}
-print(json.dumps(result, ensure_ascii=False))
+    print(json.dumps({"redact_failed": True}))
+    sys.exit(0)
+rtext = dict(zip(uniq, red))
+print(json.dumps({
+    "requests": entries("requests", "uuid"),
+    "outcomes": entries("outcomes", "uuid"),
+    "mistakes": entries("mistakes", "uuids"),
+    "gitleaks_failed": gl_failed,
+}, ensure_ascii=False))
 PY
 }
 
@@ -692,7 +707,7 @@ def text_of(r):
 
 def flat(s, n=MAXTEXT):
     s = re.sub(r"\s+", " ", (s or "")).strip()
-    return s[:n]
+    return redact.truncate(s, n)
 
 def is_genuine_user(r):
     if r.get("type") != "user":
@@ -1019,6 +1034,7 @@ wl_run() {
     # the file could not be opened at all) — blind. A slice carrying "decline"
     # means it read fine and there was nothing to bracket a turn with — a
     # legitimate decline, and recording it would poison the fail-open rate.
+    #
     # No redactor, no model call, no write: an unreadable lib must not degrade
     # into storing (or sending the model) unredacted content.
     [ "$(printf '%s' "$slice" | jq -r '.lib_unreadable // false' 2>/dev/null)" = "true" ] \
@@ -1037,9 +1053,11 @@ wl_run() {
     # timestamps and uuids, and `outcomes` inherits the burden of naming the
     # artifact that changed.
     local ask end uuids cands
-    # Noted, not fatal: the built-in rules ran, only the gitleaks layer is out.
+    # gitleaks on PATH but failed: the row goes out unjudged, and the reason is
+    # recorded once at the end (never per pass, never before the claim).
+    local gl_failed=0
     [ "$(printf '%s' "$slice" | jq -r '.gitleaks_failed // false')" = "true" ] \
-        && wl_note gitleaks-failed
+        && gl_failed=1
     ask="$(printf '%s' "$slice" | jq -r '.ask_uuid // empty')"
     end="$(printf '%s' "$slice" | jq -r '.end_uuid // empty')"
     uuids="$(printf '%s' "$slice" | jq -c '.uuids // []')"
@@ -1085,7 +1103,9 @@ wl_run() {
 
     # --- judgment -------------------------------------------------------
     local raw="" entries="" judged=1
-    if command -v claude >/dev/null 2>&1; then
+    # A failed slice pass means the candidates may hold a gitleaks-only secret:
+    # skip the model entirely.
+    if [ "$gl_failed" -eq 0 ] && command -v claude >/dev/null 2>&1; then
         raw="$(wl_candidates "$cands" \
             | WORKLOG_DISABLE=1 wl_timeout "$WORKLOG_MODEL_TIMEOUT" \
               claude -p --model "$WORKLOG_MODEL" --output-format text \
@@ -1110,8 +1130,11 @@ wl_run() {
         # Redaction died at runtime: no row at all, not an unjudged one.
         [ "$(printf '%s' "$entries" | jq -r '.redact_failed // false' 2>/dev/null)" = "true" ] \
             && { wl_unclaim; gate_failopen worklog-record redact-failed "$sid"; }
+        [ "$(printf '%s' "$entries" | jq -r '.lib_unreadable // false' 2>/dev/null)" = "true" ] \
+            && { wl_unclaim; gate_failopen worklog-record lib-unreadable:redact "$sid"; }
+        # Model text may carry a gitleaks-only secret: drop it, keep the row.
         [ "$(printf '%s' "$entries" | jq -r '.gitleaks_failed // false' 2>/dev/null)" = "true" ] \
-            && wl_note gitleaks-failed
+            && { gl_failed=1; entries=""; }
         if [ -n "$entries" ] && printf '%s' "$entries" | jq -e 'type == "object"' >/dev/null 2>&1; then
             judged=0
         else
@@ -1131,6 +1154,8 @@ wl_run() {
     # tolerates it, so the collision hid on a newer toolchain while silently
     # fail-opening every write to `store-unwritable` on 1.6-era machines.
     local row
+    # $entries is picked field-by-field on purpose: it carries flags (e.g.
+    # gitleaks_failed) that must never reach the row.
     row="$(jq -nc \
         --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
         --arg session "$sid" \
@@ -1158,6 +1183,7 @@ wl_run() {
     # Recorded LAST, and only after the mechanical row is safely on disk: the
     # machine-settled half of the turn is the durable part, and losing it to a
     # model outage would lose the turn entirely. gate_failopen exits.
+    [ "$gl_failed" -eq 0 ] || gate_failopen worklog-record gitleaks-failed "$sid"
     [ "$judged" -eq 0 ] || gate_failopen worklog-record judgment-unavailable "$sid"
     exit 0
 }

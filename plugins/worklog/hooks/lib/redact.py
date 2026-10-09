@@ -38,9 +38,9 @@ _RULES = [
 ]
 
 # A keyword plus a separator plus a 16+ char value. The whole match is replaced,
-# keyword included: the tests pin that shape, and dropping the keyword also
-# removes the context gitleaks' generic rules key on. `auth` is deliberately not
-# a keyword: it redacted prose like "auth /usr/local/x/y.py". At least one
+# keyword included: dropping the keyword also removes the context gitleaks'
+# generic rules key on. `auth` is not a keyword: it would match prose like
+# `auth /usr/local/x/y.py`. At least one
 # separator is required so "authentication..." or "tokenizer..." identifiers do not match.
 # The value class excludes ':' and '>' so an existing <redacted:...> marker is
 # never re-matched.
@@ -67,7 +67,7 @@ def scan(text):
     if not shutil.which("gitleaks") or not text.strip():
         return [], False
     try:
-        secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "30"))
+        secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
         p = subprocess.run(
             ["gitleaks", "stdin", "--no-banner", "--exit-code", "0",
              "--report-format", "json", "--report-path", "-", "--log-level", "error"],
@@ -83,6 +83,23 @@ def scan(text):
         return out, False
     except Exception:
         return [], True
+
+
+_MARK = "<redacted:"
+
+
+def truncate(s, n):
+    """s[:n], but never leave a partial <redacted:...> marker at the cut."""
+    c = s[:n]
+    if len(s) <= n:
+        return c
+    i = c.rfind(_MARK)
+    if i >= 0 and ">" not in c[i:]:
+        return c[:i]
+    for k in range(len(_MARK) - 1, 0, -1):
+        if c.endswith(_MARK[:k]):
+            return c[:-k]
+    return c
 
 
 def apply(s, findings):

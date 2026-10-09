@@ -94,13 +94,25 @@ SH
   #   fail              exit 2
   #   find:<Rule>:<s>   one finding when stdin contains <s>, else none
   #   passthrough       exec the real gitleaks found outside this dir
+#   fail-after:N      succeed (no findings) for N calls, then exit 2; the call
+#                     count lives in GITLEAKS_COUNT_FILE
+#   hang              block for 30s (exec'd, so a killed child frees the pipe)
   # GITLEAKS_CALL_LOG, when set, gets one line per invocation.
   export GITLEAKS_CALL_LOG="$SCRATCH/gitleaks-calls.txt"
+  export GITLEAKS_COUNT_FILE="$SCRATCH/gitleaks-count.txt"
   cat > "$STUB/gitleaks" <<'SH'
 #!/usr/bin/env bash
 [ -n "${GITLEAKS_CALL_LOG:-}" ] && echo "$*" >>"$GITLEAKS_CALL_LOG"
 case "${GITLEAKS_STUB:-}" in
   fail) cat >/dev/null; exit 2 ;;
+  fail-after:*)
+    n="${GITLEAKS_STUB#fail-after:}"
+    c="$(cat "$GITLEAKS_COUNT_FILE" 2>/dev/null || echo 0)"; c=$((c+1))
+    echo "$c" >"$GITLEAKS_COUNT_FILE"
+    cat >/dev/null
+    [ "$c" -gt "$n" ] && exit 2
+    echo '[]' ;;
+  hang) exec sleep 30 ;;
   passthrough)
     here="$(cd "$(dirname "$0")" && pwd)"
     IFS=: read -ra dirs <<<"$PATH"
@@ -1540,31 +1552,117 @@ assert_redacted_in_worklog() {
   [ "$(field '.requests[0].text')" = "leaked <redacted:npm-access-token>" ]
 }
 
-@test "a gitleaks failure still writes the row" {
-  fixture_full
-  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
-  [ -s "$WORKLOG_JSONL" ]
+# unjudged_row — the stored row is the mechanical envelope with no model output.
+assert_unjudged_row() {
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 1 ]
+  [ "$(field '.requests|length')" -eq 0 ]
+  [ "$(field '.outcomes|length')" -eq 0 ]
+  [ "$(field '.mistakes|length')" -eq 0 ]
 }
 
-@test "a gitleaks failure is logged as gitleaks-failed" {
-  fixture_full
-  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
-  # One note per redaction pass (slice, entries), so dedupe.
-  [ "$(why | sort -u)" = "gitleaks-failed" ]
+# note_count <why> — how many times the fail-open log carries <why>.
+note_count() { { grep -c -- "\"why\":\"$1\"" "$GATE_FAILOPEN_LOG" 2>/dev/null || true; } | head -1; }
+
+# require_real_gitleaks — skip locally when the binary is missing, FAIL on CI so
+# a runner without it cannot silently turn the real-binary tests into skips.
+require_real_gitleaks() {
+  if real_gitleaks >/dev/null; then return 0; fi
+  if [ -n "${CI:-}" ]; then
+    echo "gitleaks is required on CI but is not on PATH" >&2
+    return 1
+  fi
+  skip "gitleaks is not on PATH"
 }
 
-@test "a gitleaks failure still applies the built-in rules to the prompt" {
+@test "a malformed model reply still writes the row" {
+  fixture_full
+  drive '{"requests":5}'
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 1 ]
+}
+
+@test "a malformed model reply is stored unjudged" {
+  fixture_full
+  drive '{"requests":5}'
+  assert_unjudged_row
+}
+
+@test "a malformed model reply is logged as judgment-unavailable" {
+  fixture_full
+  drive '{"requests":5}'
+  [ "$(why)" = "judgment-unavailable" ]
+}
+
+@test "a gitleaks failure still writes exactly one row" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 1 ]
+}
+
+@test "a gitleaks failure is logged as gitleaks-failed exactly once" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "a gitleaks failure stores the row unjudged" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  assert_unjudged_row
+}
+
+@test "a gitleaks failure leaves no raw key in the stored row" {
   KEY="$(fake_ant)"
   fixture_secret_prompt "$KEY"
   drive_with "GITLEAKS_STUB=fail" -- "$(redacted_reply sk-ant)"
-  assert_redacted_in_worklog sk-ant "$KEY"
+  assert_unjudged_row
+  ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
 }
 
-@test "a gitleaks failure still applies the built-in rules to the model stdin" {
+@test "a gitleaks failure in the slice pass never invokes the model" {
   KEY="$(fake_ant)"
   fixture_secret_prompt "$KEY"
   drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
-  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+  [ ! -e "$CLAUDE_ARGV_LOG" ]
+}
+
+@test "a gitleaks failure in the entries pass only stores the row unjudged" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail-after:1" -- "$CLEAN"
+  assert_unjudged_row
+}
+
+@test "a gitleaks failure in the entries pass only is logged as gitleaks-failed once" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail-after:1" -- "$CLEAN"
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "the entries-pass gitleaks stub is reached after the slice pass succeeds" {
+  # Guards the fail-after premise: two calls means the model WAS invoked.
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail-after:1" -- "$CLEAN"
+  [ "$(cat "$GITLEAKS_COUNT_FILE")" -eq 2 ]
+}
+
+@test "a hanging gitleaks times out and stores the row unjudged" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=hang" "WORKLOG_GITLEAKS_TIMEOUT=1" -- "$CLEAN"
+  assert_unjudged_row
+}
+
+@test "a hanging gitleaks is logged as gitleaks-failed exactly once" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=hang" "WORKLOG_GITLEAKS_TIMEOUT=1" -- "$CLEAN"
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "a hanging gitleaks finishes well under the stub's 30s sleep" {
+  fixture_full
+  local t0 t1
+  t0="$(date +%s)"
+  drive_with "GITLEAKS_STUB=hang" "WORKLOG_GITLEAKS_TIMEOUT=1" -- "$CLEAN"
+  t1="$(date +%s)"
+  [ $((t1 - t0)) -lt 15 ]
 }
 
 @test "gitleaks is invoked with the stdin report flags" {
@@ -1614,7 +1712,7 @@ gitleaks_findings() {
 }
 
 @test "the worklog file from the sk-lw turn passes a real gitleaks scan" {
-  real_gitleaks >/dev/null || skip "gitleaks is not on PATH"
+  require_real_gitleaks
   KEY="$(fake_lw)"
   fixture_secret_prompt "$KEY"
   drive_with "GITLEAKS_STUB=passthrough" -- "$(redacted_reply sk-lw)"
@@ -1623,7 +1721,7 @@ gitleaks_findings() {
 }
 
 @test "the real gitleaks flags the npm token shape no built-in rule covers" {
-  real_gitleaks >/dev/null || skip "gitleaks is not on PATH"
+  require_real_gitleaks
   assert_gitleaks_only "$(fake_npm)"
 }
 
@@ -1654,4 +1752,137 @@ gitleaks_findings() {
     '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
   [ "$(field '.requests|length')" -eq 1 ]
   ! grep -Eq 'sk-lw-[A-Za-z0-9]' "$WORKLOG_JSONL"
+}
+
+# --- redact-failed: redaction dies at runtime -----------------------------
+
+# redact_lib_raising_on <n> — a scratch lib dir holding the real redact.py with
+# redact_texts overridden to raise on its <n>th call (counted in a file, since
+# each call is a separate python process).
+redact_lib_raising_on() {
+  mkdir -p "$SCRATCH/raising-lib"
+  cp "$HOOKS/lib/redact.py" "$SCRATCH/raising-lib/redact.py"
+  cat >> "$SCRATCH/raising-lib/redact.py" <<PY
+
+_real_redact_texts = redact_texts
+def redact_texts(texts):
+    p = "$SCRATCH/redact-count.txt"
+    try:
+        c = int(open(p).read())
+    except Exception:
+        c = 0
+    c += 1
+    open(p, "w").write(str(c))
+    if c == $1:
+        raise RuntimeError("boom")
+    return _real_redact_texts(texts)
+PY
+}
+
+@test "a redaction that dies in the slice pass writes no row" {
+  redact_lib_raising_on 1
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  no_row
+}
+
+@test "a redaction that dies in the slice pass is logged as redact-failed" {
+  redact_lib_raising_on 1
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  [ "$(why)" = "redact-failed" ]
+}
+
+@test "a redaction that dies in the slice pass never invokes the model" {
+  redact_lib_raising_on 1
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  [ ! -e "$CLAUDE_ARGV_LOG" ]
+}
+
+@test "a redaction that dies in the entries pass writes no row" {
+  redact_lib_raising_on 2
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  no_row
+}
+
+@test "a redaction that dies in the entries pass is logged as redact-failed" {
+  redact_lib_raising_on 2
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  [ "$(why)" = "redact-failed" ]
+}
+
+@test "a redaction that dies in the entries pass releases the claim" {
+  # The raise is on call 2 only, so the retry (calls 3 and 4) succeeds; it can
+  # write a row only if the first fire did not leave its marker behind.
+  redact_lib_raising_on 2
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  rm -f "$GATE_FAILOPEN_LOG"
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  [ "$(field '.requests|length')" -eq 1 ]
+}
+
+# --- real binary, end to end ----------------------------------------------
+
+@test "the real gitleaks redacts an npm token from prompt to stored row" {
+  require_real_gitleaks
+  KEY="$(fake_npm)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=passthrough" -- "$(redacted_reply npm-access-token)"
+  assert_redacted_in_worklog npm-access-token "$KEY"
+}
+
+# --- truncation never leaves half a marker ---------------------------------
+
+@test "a redaction marker straddling the 100-char text cut leaves no unclosed marker" {
+  # 90 filler chars then a 16-char marker: the cut at 100 lands inside it.
+  PAD="$(printf 'x%.0s' $(seq 1 90))"
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" --arg t "$PAD<redacted:sk-lw> tail" \
+    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [ "$(field '.requests[0].text | test("<redacted:[^>]*$")')" = "false" ]
+}
+
+# --- gitleaks absent -------------------------------------------------------
+
+# path_without_gitleaks — a PATH dir with the tools the hook needs, the claude
+# stub, and no gitleaks at all.
+path_without_gitleaks() {
+  local d="$SCRATCH/nogl" b p
+  mkdir -p "$d"
+  for b in bash sh env date cat rm mktemp sed grep tr timeout python3 jq setsid \
+           head tail wc sort mkdir ls find stat sleep cut awk perl dirname \
+           basename tee mv cp printf uniq xargs readlink cmp diff; do
+    if p="$(command -v "$b" 2>/dev/null)" && [ -x "$p" ]; then ln -sf "$p" "$d/$b"; fi
+  done
+  ln -sf "$STUB/claude" "$d/claude"
+  printf '%s' "$d"
+}
+
+@test "with gitleaks absent the built-in rules still redact the stored row" {
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$(redacted_reply sk-ant)"
+  assert_redacted_in_worklog sk-ant "$KEY"
+}
+
+@test "with gitleaks absent the row is judged" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  [ "$(field '.requests|length')" -eq 1 ]
+}
+
+@test "with gitleaks absent no fail-open row is logged" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  no_log
+}
+
+@test "the gitleaks-absent PATH really has no gitleaks" {
+  run env PATH="$(path_without_gitleaks)" bash -c 'command -v gitleaks'
+  [ "$status" -ne 0 ]
 }
