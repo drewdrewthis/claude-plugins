@@ -1,8 +1,9 @@
 """redact.py — secret redaction for worklog-record.sh. Stdlib only.
 
 One built-in pass is: base rules, keyword pass, added rules, keyword pass. A
-changing pass, or a tail sweep, is one step. Steps repeat until the text stops
-changing; text still changing on the 8th step becomes <redacted:glued-secrets>.
+changing pass, a key id run replacement or a tail sweep is one step. Steps
+repeat until the text stops changing; text still changing on the 8th step
+becomes <redacted:glued-secrets>.
 
 ONE implementation, imported by every python heredoc in the hook (wl_slice,
 wl_entries), so the two sites cannot drift apart. A match
@@ -91,11 +92,13 @@ _RULES_ADD = [
     ("atlassian-token", re.compile(r"ATATT3[A-Za-z0-9_\-=]{186,}")),
     ("grafana-token", re.compile(
         _B + r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8,}|" + _B + r"glc_[A-Za-z0-9+/]{32,}={0,2}")),
-    # Open-ended twin of the base rule: no end guard, so a longer run (two glued
-    # ids, an id plus extra characters) is redacted whole; last in the list so
-    # an open-ended token rule takes a longer token first.
-    ("aws-access-key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16,}")),
 ]
+
+# Open-ended twin of the base aws rule: no end guard, so a longer run (two glued
+# ids, an id plus extra characters) is redacted whole. It is not in _RULES_ADD:
+# it runs only on settled text (see _step), so a token rule that is still
+# blocked cannot lose part of its body to it.
+_AWS_RUN = re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16,}")
 
 # Characters a secret value can hold; shared by the keyword rule and tail sweep.
 _VALUE = r"[\w+/=.~\-]"
@@ -128,8 +131,8 @@ def _generic(s):
 
 # A glued token can need its neighbour to be a marker before it matches, so a
 # long chain needs one step per link and an uncapped loop is quadratic. Each
-# changing pass or tail sweep is one step; text still changing on the 8th step
-# becomes <redacted:glued-secrets>.
+# changing pass, key id run replacement or tail sweep is one step; text still
+# changing on the 8th step becomes <redacted:glued-secrets>.
 _MAX_PASSES = 8
 _GLUED = "<redacted:glued-secrets>"
 
@@ -150,6 +153,7 @@ def _pass(s):
 # A token glued after a marker can lose its prefix to the first body, so no rule
 # matches it. Once the rules settle, 8+ token characters straight after a marker
 # are such a leftover. `<` is not in the class, so marker-marker is left alone.
+# Needs the capture group in _MARKER: the sweep keeps the marker as \1.
 _TAIL = re.compile(_MARKER.pattern + _VALUE + r"{8,}")
 
 
@@ -158,10 +162,22 @@ def _sweep(s):
     return _TAIL.sub(r"\1" + _GLUED, s)
 
 
+def _aws_runs(s):
+    """Replace long AKIA/ASIA runs in the text between markers."""
+    parts = _MARKER.split(s)
+    return "".join(
+        p if i % 2 else _AWS_RUN.sub("<redacted:aws-access-key>", p)
+        for i, p in enumerate(parts))
+
+
 def _step(s):
-    """One step: the rules; once they settle, the tail sweep."""
+    """One step: the rules; once they settle, long key id runs, then tails."""
     out = _pass(s)
-    # Sweep only settled text, so chains keep their named markers.
+    if out != s:
+        return out
+    # Only on settled text, so every token rule takes its token first and
+    # chains keep their named markers.
+    out = _aws_runs(s)
     return out if out != s else _sweep(s)
 
 

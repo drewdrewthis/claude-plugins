@@ -302,3 +302,21 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Given an npm or gitlab token with an AWS-shaped run inside it, and an uppercase word that starts with ASIA
     When the built-in rules run
     Then the token gets its own single marker, and the word gets the aws-access-key marker
+
+  # proves: hooks/tests/worklog-record.bats "an aws-shaped run inside a blocked token does not split the token"
+  Scenario: An AWS-shaped run inside a still-blocked token keeps the token whole
+    Given a Shopify token directly followed by a gitlab or npm token that holds an AWS-shaped run
+    When the built-in rules run
+    Then each token gets its own single marker and the run is not cut out of it
+
+  # proves: hooks/tests/worklog-record.bats "a stubbed gitleaks marker directly before a URL path is swept in the quote and the body alike"
+  Scenario: A stubbed gitleaks marker before a URL path is swept in the quote and the body
+    Given a Pulumi token that a stubbed gitleaks flags, once alone and once directly before a URL path
+    When a turn is recorded
+    Then the entry is stored and its quote holds the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "swept and collapsed outputs are stable under a second run"
+  Scenario: Swept and collapsed outputs are stable under a second run
+    Given a glued ghp pair, a glued AWS key id pair, and a long chain of token pairs
+    When the built-in rules run twice
+    Then the second run changes nothing

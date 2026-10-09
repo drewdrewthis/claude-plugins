@@ -2393,6 +2393,25 @@ for s in (ghp * (200000 // len(ghp) + 1),
   [ "$(builtin_out "$(fake_key "glpat-" "$lower" 10)${aws}ccc")" = "<redacted:gitlab-pat>" ]
 }
 
+@test "an aws-shaped run inside a blocked token does not split the token" {
+  local aws shp
+  aws="$(fake_key "AK""IA" "QZXRT5NBKDWP2367AB" 22)"
+  shp="$(fake_key "shp""at_" "0123456789abcdef" 38)"
+  [ "$(builtin_out "$shp$(fake_key "glpat-" "$aws" 26)tail")" = "<redacted:shopify-token><redacted:gitlab-pat>" ]
+  [ "$(builtin_out "$shp$(fake_key "np""m_" "${aws}abcdefghijklmnopqrstuvwx" 46)tail")" = "<redacted:shopify-token><redacted:npm-token>" ]
+}
+
+@test "swept and collapsed outputs are stable under a second run" {
+  local pair chain i
+  pair="$(fake_ghp)$(fake_ghp2)"
+  chain="$(fake_key "gls""a_" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG" 37)_ab12cd34$(fake_key "shp""at_" "0123456789abcdef" 38)"
+  for i in 1 2 3 4 5; do chain="$chain$chain"; done
+  chain="$chain$pair"
+  for IN in "$pair" "$(fake_aws2)$(fake_asia)" "$chain"; do
+    [ "$(builtin_twice "$IN")" = "$(builtin_out "$IN")" ]
+  done
+}
+
 @test "a long uppercase word that starts like an aws key id is redacted" {
   [ "$(builtin_out "ASIAPACIFICHEADQUARTERSOFFICE")" = "<redacted:aws-access-key>" ]
 }
@@ -2461,6 +2480,19 @@ assert_glued_stored() {
   [ "$(builtin_out "$sentence")" = "$sentence" ]
   user_line "$U1" "$sentence" > "$TX"
   drive_with "GITLEAKS_STUB=passthrough" -- \
+    "$(jq -nc --arg u "$U1" --arg q 'https://app.example.com/<redacted:pulumi-api-token><redacted:glued-secrets> to check' \
+      '{requests:[{text:"user opened a stack",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [[ "$(field '.requests[0].quote')" == *'<redacted:glued-secrets>'* ]]
+}
+
+# Stub twin of the real-gitleaks test above: the stub flags the same secret, so
+# the path is covered with no gitleaks binary.
+@test "a stubbed gitleaks marker directly before a URL path is swept in the quote and the body alike" {
+  KEY="$(fake_pulumi)"
+  sentence="set the access token var to $KEY then open https://app.example.com/$KEY/stacks/production to check"
+  user_line "$U1" "$sentence" > "$TX"
+  drive_with "GITLEAKS_STUB=find:pulumi-api-token:$KEY" -- \
     "$(jq -nc --arg u "$U1" --arg q 'https://app.example.com/<redacted:pulumi-api-token><redacted:glued-secrets> to check' \
       '{requests:[{text:"user opened a stack",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
   [ "$(field '.requests|length')" -eq 1 ]
