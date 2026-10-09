@@ -2,7 +2,8 @@
 # An agent must make reversible calls itself and bring the owner only one-way-door
 # or values-laden decisions, each with a recommendation. Deny a Discord reply that
 # asks the owner to decide and has an item lacking either.
-# A "?" inside a URL or code is not a question; fenced blocks are not scored.
+# A "?" inside a URL is not a question; fenced blocks are not scored; inline code counts only
+# when it holds a marker or a recommendation.
 # Never echoes the text; always exits 0 so it can never wedge the agent.
 # Fails open (bad JSON, no jq, no python3, scorer failure); each is a blind release, so it
 # is logged to stderr. No PATH pin: jq/python3 live in /opt/homebrew/bin on macOS.
@@ -26,8 +27,16 @@ jq -e . >/dev/null 2>&1 <<<"$input" || { echo "decision-ask-guard: unparseable i
 # Prints the number of items that miss a marker or a recommendation, or "noask".
 verdict="$(python3 -I -c '
 import re, sys
-# A URL becomes a word (ok to \w+ needs one) and keeps trailing punctuation; fenced blocks vanish; inline code keeps its text minus "?" so a marker or rec in it still counts.
-t = re.sub(r"```.*?```|(`[^`\n]*`)|(https?://[^\s]*[^\s?.,;:!)\]>])", lambda m: "URL" if m.group(2) else m.group(1).replace("?", "") if m.group(1) else "", sys.stdin.read(), flags=re.S)
+marker = re.compile(r"(?<!not )(?<!not a )(?<!n\x27t )(one[- ]way[- ]door|values[- ]laden)", re.I)
+rec = re.compile(r"recommend|rec:|my rec", re.I)
+def strip(m):
+    if m.group(2):
+        return "URL"  # a word (ok to \w+ needs one); trailing punctuation stays
+    code = m.group(1)
+    if code and (marker.search(code) or rec.search(code)):
+        return code.replace("?", "")  # a marker or rec in code still counts; its "?" is not a question
+    return ""  # fenced blocks and other inline code (quoted prompts, labels) are not the agent\x27s ask
+t = re.sub(r"```.*?```|(`[^`\n]*`)|(https?://[^\s]*[^\s?.,;:!)\]>])", strip, sys.stdin.read(), flags=re.S)
 # Phrases that are an ask on their own, and phrases that are an ask only as a question.
 always = r"decisions? for you|for you to decide|\bneeds? your (?:approval|decision|call|input|ok|go|nod|sign-off)\b" \
   r"|needs? from you\b|pending (?:on|from) you\b|waiting on you\b|let me know (?:if|whether) (?:i|we) should" \
@@ -35,7 +44,7 @@ always = r"decisions? for you|for you to decide|\bneeds? your (?:approval|decisi
 quest = r"(?:do you )?want me to|should (?:i|we)\b|shall (?:i|we)\b|which (?:option|one) do you" \
   r"|your (?:call|decision|approval|pick)|can you approve|what do you think|(?:do )?you prefer|which do you" \
   r"|would you like me to|ok to \w+|can (?:i|we) (?!help\b)\w+"
-ask = re.compile(always + r"|\b(?:" + quest + r")(?:[^.!?\n]|\.(?=\S)){0,300}\?", re.I)  # bounded tail: an unbounded one rescans the line per candidate start
+ask = re.compile(always + r"|\b(?:" + quest + r")(?:[^.!?\n]|\.(?=\w)){0,300}\?", re.I)  # bounded tail: an unbounded one rescans the line per candidate start
 m = ask.search(t)
 if not m:
     print("noask"); sys.exit()
@@ -43,8 +52,6 @@ t = t[t.rfind("\n", 0, m.start()) + 1:]  # a status list before the ask is not s
 # prose after a blank line is a footer, not part of the ask; a blank line before a list continues it
 blocks = re.split(r"\n[ \t]*\n(?![ \t]*(?:[-*•]|\d+[.)]))", t)
 split = re.compile(r"(?:^[ \t]*(?:[-*•]|\d+[.)])[ \t]+)|(?:(?<=\s)\d+\)[ \t]+)", re.M)
-marker = re.compile(r"(?<!not )(?<!not a )(?<!n\x27t )(one[- ]way[- ]door|values[- ]laden)", re.I)
-rec = re.compile(r"recommend|rec:|my rec", re.I)
 def misses(b):
     parts = split.split(b)
     items = parts[1:] if len(parts) > 1 else [b]

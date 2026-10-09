@@ -10,13 +10,15 @@
 #   score   multi-block asks (second/third ask after a blank line), a marker without a
 #           recommendation, a question in the list header counted as an item
 #   strip   "?" in a URL, fenced code or inline code is not an ask (allow), and each strip
-#           arm is pinned alone; inline code keeps its marker/rec text; an unmarked ask
+#           arm is pinned alone; inline code is kept (minus "?") only when it holds a
+#           marker or rec, else deleted (quoted prompts/labels are not asks); an unmarked ask
 #           ending in a URL, angle-bracket URL, markdown link, parentheses, or "ok to <URL>",
 #           or beside code, is (deny); a status sentence ending in a URL with a query is (allow)
 #   later   the URL footer, fenced code footer and ternary tests pin the later-block rule
 #           together with the strip; a prose-question footer is not an ask, a real later
 #           ask (also one ending in a URL) is
-#   dots    an ask tail may cross a dot inside a token (config.yml, 0.3.0), not a sentence end
+#   dots    an ask tail may cross a dot inside a token (config.yml, 0.3.0); a dot continues
+#           the ask only before a word character, so a quote/bracket after it ends the sentence
 #   other   non-reply tool or non-PreToolUse event carrying ask text, empty text ->
 #           empty output, exit 0; word-boundary allows (took to, American, google creds)
 #   open    invalid JSON, no jq, or no python3 on PATH -> fails open (empty stdout,
@@ -299,6 +301,10 @@ assert_allowed() { # text
   assert_denied "Should I merge <https://github.com/o/r/pull/5>?"
 }
 
+@test "unmarked ask with the ? inside the angle brackets -> deny" {
+  assert_denied "Should I merge <https://x.io/5?>"
+}
+
 @test "unmarked ask ending in a markdown link -> deny" {
   assert_denied "Should I merge [PR 5](https://github.com/o/r/pull/5)?"
 }
@@ -356,6 +362,18 @@ assert_allowed() { # text
   assert_denied $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nAnd merge https://x.io/a?b=1 too? Should I?'
 }
 
+@test "quoted prompt in inline code -> empty" {
+  assert_allowed 'The installer stopped at `Proceed? (y/n)`; I piped `yes` into it and it finished.'
+}
+
+@test "always-phrase quoted in inline code -> empty" {
+  assert_allowed 'I renamed the label `needs your approval` to `pending-review` in all 4 workflows.'
+}
+
+@test "ask about a file name in inline code -> deny" {
+  assert_denied 'Should I delete `config.yml`?'
+}
+
 @test "unmarked ask next to inline code -> deny" {
   assert_denied 'Should I run `rm -rf build`?'
 }
@@ -368,17 +386,28 @@ assert_allowed() { # text
   assert_denied "Should I bump the plugin to 0.3.0?"
 }
 
-@test "sentence end then a bare Why? -> empty" {
-  assert_allowed "I asked whether we should merge. It is done. Why?"
+@test "sentence end before a closing quote, then a question -> empty" {
+  assert_allowed 'The log line was "ok to merge." Did it merge? Yes, at 14:02.'
 }
 
-@test "long pathological text is denied within the 5s hook timeout" {
+@test "sentence end before a closing bracket, then a question -> empty" {
+  assert_allowed "Merged per your approval (see notes.) Anything broken? No, CI is green."
+}
+
+@test "ask phrase, sentence end, then a bare Why? -> empty" {
+  assert_allowed "Should I merge. It is done. Why?"
+}
+
+@test "long pathological text is denied within 5s of CPU" {
   payload="$(python3 -c 'import json; print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"mcp__plugin_discord_discord__reply","tool_input":{"chat_id":"1","text":"ok to a "*12000+"\n- Should I merge PR 5?"}}))')"
   # python3 enforces the limit: GNU timeout is absent on stock macOS.
-  out="$(printf '%s' "$payload" | python3 -c 'import os,signal,subprocess,sys
-p = subprocess.Popen(["/bin/bash", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True)
+  # CPU time, not wall time: wall clock inflates under machine load (flaky),
+  # while a quadratic regex burns CPU regardless. The rlimit is inherited by
+  # the scorer; the 60s wall timeout is only a backstop against a hang.
+  out="$(printf '%s' "$payload" | python3 -c 'import os,resource,signal,subprocess,sys
+p = subprocess.Popen(["/bin/bash", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True, preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CPU, (5, 5)))
 try:
-    sys.stdout.write(p.communicate(sys.stdin.read(), timeout=5)[0])
+    sys.stdout.write(p.communicate(sys.stdin.read(), timeout=60)[0])
 except subprocess.TimeoutExpired:
     os.killpg(p.pid, signal.SIGKILL)' "$HOOK")"
   [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$out")" = deny ]
