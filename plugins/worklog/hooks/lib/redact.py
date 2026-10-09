@@ -27,8 +27,11 @@ _PEM = re.compile(
 # `sk-` shape, which would otherwise swallow them under the wrong name.
 _RULES = [
     ("private-key", _PEM),
-    ("sk-lw", re.compile(r"sk-lw-[A-Za-z0-9_-]{20,}")),
-    ("sk-ant", re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}")),
+    # Loose on purpose: the prefix is distinctive, so anything up to whitespace,
+    # a quote or an angle bracket goes. A strict alphabet let a key with one
+    # odd character through whole.
+    ("sk-lw", re.compile(r"sk-lw-[^\s\"'<>]{8,}")),
+    ("sk-ant", re.compile(r"sk-ant-[^\s\"'<>]{8,}")),
     ("openai-key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{32,}")),
     ("github-pat", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}")),
     ("slack-token", re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}")),
@@ -42,10 +45,11 @@ _RULES = [
 # generic rules key on. `auth` is not a keyword: it would match prose like
 # `auth /usr/local/x/y.py`. At least one
 # separator is required so "authentication..." or "tokenizer..." identifiers do not match.
-# The value class excludes ':' and '>' so an existing <redacted:...> marker is
-# never re-matched.
+# The separator excludes '>' and the value class excludes ':' and '>', so an
+# existing <redacted:...> marker is never re-matched (`token> word` after
+# <redacted:slack-token> must not count as keyword + separator + value).
 _GENERIC = re.compile(
-    r"(?:api[ _-]?key|apikey|token|secret|passw(?:or)?d|bearer)\W{1,4}"
+    r"(?:api[ _-]?key|apikey|token|secret|passw(?:or)?d|bearer)[^\w>]{1,4}"
     r"[\w+/=.~\-]{16,}", re.I)
 
 

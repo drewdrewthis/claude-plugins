@@ -573,15 +573,13 @@ def verified_quote(quote, uuid):
 # ONE gitleaks batch), before the MAXTEXT cut.
 def model_texts():
     for key in CAPS:
-        items = obj.get(key)
-        for e in (items if isinstance(items, list) else [])[:CAPS[key]]:
+        for e in (obj.get(key) or [])[:CAPS[key]]:
             if isinstance(e, dict) and isinstance(e.get("text"), str):
                 yield e["text"].strip()
 
 def entries(key, uuid_field):
     out = []
-    items = obj.get(key)
-    for e in (items if isinstance(items, list) else [])[:CAPS[key]]:
+    for e in (obj.get(key) or [])[:CAPS[key]]:
         if not isinstance(e, dict):
             continue
         text = e.get("text")

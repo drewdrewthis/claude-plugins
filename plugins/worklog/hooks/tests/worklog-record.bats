@@ -1886,3 +1886,46 @@ path_without_gitleaks() {
   run env PATH="$(path_without_gitleaks)" bash -c 'command -v gitleaks'
   [ "$status" -ne 0 ]
 }
+
+# --- built-in rule shapes: provider keys with unusual bodies ---------------
+
+# builtin_out <text> — redact.builtin(<text>) as the hook's lib computes it.
+builtin_out() {
+  python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.stdout.write(redact.builtin(sys.argv[2]))" "$HOOKS/lib" "$1"
+}
+
+@test "an sk-lw key with a dot in the middle never lands in the worklog file" {
+  KEY="$(fake_key "sk-""lw-" "aB3dE5gH7j" 10).$(fake_key "" "kL7mN9pQ1sT3vX5zA7cD9fG1hJ3" 30)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  assert_redacted_in_worklog sk-lw "$KEY"
+}
+
+@test "an sk-lw key with a dot in the middle redacts to the bare marker" {
+  KEY="$(fake_key "sk-""lw-" "aB3dE5gH7j" 10).$(fake_key "" "kL7mN9pQ1sT3vX5zA7cD9fG1hJ3" 30)"
+  [ "$(builtin_out "k $KEY k")" = "k <redacted:sk-lw> k" ]
+}
+
+@test "a short sk-lw key of 19 characters redacts to the bare marker" {
+  KEY="$(fake_key "sk-""lw-" "aB3dE5gH7jK9mN1pQ3s" 19)"
+  [ "$(builtin_out "k $KEY k")" = "k <redacted:sk-lw> k" ]
+}
+
+@test "an sk-lw key with a plus in the middle redacts to the bare marker" {
+  KEY="$(fake_key "sk-""lw-" "aB3dE5gH7jK9" 12)+$(fake_key "" "mN1pQ3sT5vX7zA9cD1fG" 20)"
+  [ "$(builtin_out "k $KEY k")" = "k <redacted:sk-lw> k" ]
+}
+
+@test "an sk-ant key with a dot in the middle redacts to the bare marker" {
+  KEY="$(fake_key "sk-""ant-" "aB3dE5gH7j" 10).$(fake_key "" "kL7mN9pQ1sT3vX5zA7cD9fG1hJ3" 30)"
+  [ "$(builtin_out "k $KEY k")" = "k <redacted:sk-ant> k" ]
+}
+
+@test "a marker followed by a long lowercase word stays intact" {
+  [ "$(builtin_out "$(fake_slack) abcdefghijklmnopqrstuvwx")" = "<redacted:slack-token> abcdefghijklmnopqrstuvwx" ]
+}
+
+@test "a marker followed by a long lowercase word is not re-matched by the keyword rule" {
+  run builtin_out "$(fake_slack) abcdefghijklmnopqrstuvwx"
+  [[ "$output" != *"slack-<redacted"* ]]
+}

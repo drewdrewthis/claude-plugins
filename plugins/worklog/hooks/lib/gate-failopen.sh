@@ -38,11 +38,12 @@
 # row is complete; the note only says this turn's model call was not time-boxed,
 # so a rare hang here is not later mistaken for a code regression.
 # gitleaks-failed — a caller that redacts secrets with gitleaks on top of its
-# built-in rules saw gitleaks error or time out. NOT a failure of the write: the
-# built-ins ran and the row is complete; the note says the second layer was out.
+# built-in rules saw gitleaks error or time out. The row is still written, but
+# UNJUDGED (mechanical fields only), and the model is skipped if the candidate
+# pass failed: built-ins alone must not stand in for a layer meant to run.
 # redact-failed — a caller that redacts secrets before writing hit a RUNTIME
 # error inside redaction (the lib imported fine; that is lib-unreadable:*).
-# Unlike gitleaks-failed this is a closed gate: no row is written, because a
+# Unlike gitleaks-failed this writes no row at all, not an unjudged one: a
 # row whose redaction did not complete may hold a secret.
 # non-object-payload — stdin parsed, but the top-level value is not an envelope
 # (a bare string, an array, a number). Kept distinct from malformed-payload:
