@@ -2264,8 +2264,8 @@ if dt >= 10:
 }
 
 # The end guard rejects the first id and the start guard rejects the second, so
-# both stay raw. gitleaks does not cover it: its AWS rule does not match two
-# glued key ids.
+# both stay raw. The gitleaks AWS rule does not match two glued key ids, so
+# they stay raw here.
 @test "known limit: two glued aws key ids both stay raw" {
   in="$(fake_aws)$(fake_aws)"
   out="$(builtin_out "$in")"
