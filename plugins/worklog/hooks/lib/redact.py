@@ -23,10 +23,10 @@ second token, so the second rule cannot match (ghp_ directly followed by ghp_
 leaves the second body raw). An end guard can reject the first match (two AWS
 key ids glued together both stay raw). The repeat closes the cases where one
 token matches once its neighbour is a marker (Shopify then npm_; an AWS key id
-then a Google key). gitleaks does not cover the raw cases: it scans the
-built-in output, where the glued ghp_ leftover has lost its prefix, and its
-AWS rule does not match two glued key ids. Both stay raw with gitleaks
-present.
+then a Google key). gitleaks is not a full cover: it scans the built-in
+output, where its generic rule catches some leftovers and misses others. The
+glued ghp_ leftover has lost its prefix and stays raw, and the gitleaks AWS
+rule does not match two glued key ids.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
