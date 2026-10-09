@@ -7,9 +7,15 @@
 #           (should we, can you approve, ok to, your pick, thoughts?, ...)
 #   allow   status reports, past-tense "your call/decision/approval", fully marked
 #           lists, status lists before/after a marked ask, "let me know if you have..."
-#   other   non-reply tool, empty text -> empty output, exit 0
+#   score   multi-block asks (second/third ask after a blank line), a marker without a
+#           recommendation, a question in the list header counted as an item
+#   strip   "?" in a URL, fenced code or inline code, or in a prose-question footer, is not
+#           an ask (allow); a real later ask holding a URL, or an ask beside code, is (deny)
+#   other   non-reply tool or non-PreToolUse event carrying ask text, empty text ->
+#           empty output, exit 0; word-boundary allows (took to, American, google creds)
 #   open    invalid JSON, no jq, or no python3 on PATH -> fails open (empty stdout,
-#           exit 0; the tool miss is logged to stderr)
+#           exit 0; the tool miss is logged to stderr); a scorer crash and a long
+#           pathological text (denied within the 5s hook timeout) are covered too
 #   bash3   every hook run goes through /bin/bash (3.2 on the macOS CI leg)
 #   wiring  hooks.json is valid JSON and its command resolves to the script
 #
@@ -205,10 +211,24 @@ assert_allowed() { # text
   assert_allowed ""
 }
 
-@test "Bash tool -> empty, exit 0" {
-  run_hook '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}'
+@test "Bash tool carrying ask text -> empty, exit 0" {
+  run_hook '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"text":"Should we merge 8501?"}}'
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+@test "non-PreToolUse event carrying ask text -> empty, exit 0" {
+  run_hook '{"hook_event_name":"PostToolUse","tool_name":"mcp__plugin_discord_discord__reply","tool_input":{"text":"Should we merge 8501?"}}'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "markers without recommendations -> deny" {
+  assert_denied "Decisions for you: 1) merge 8501? one-way-door. 2) stop slot? values-laden."
+}
+
+@test "header question with fully marked bullets -> deny" {
+  assert_denied $'Should we do these?\n- a one-way-door, recommend yes\n- b values-laden, recommend yes'
 }
 
 @test "deny reason points at the decide skill" {
@@ -255,6 +275,34 @@ assert_allowed() { # text
 
 @test "third ask after blank lines -> deny" {
   assert_denied $'Should I merge 8501? one-way-door, I recommend merge.\n\nShould I stop the devtool slot?\n\nShould I delete the worktree?'
+}
+
+@test "marked ask + footer URL with a query ? -> empty" {
+  assert_allowed $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nPR: https://github.com/o/r/pull/5?diff=split'
+}
+
+@test "marked ask + fenced code with a ? in a URL -> empty" {
+  assert_allowed $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\n```\ncurl \'https://api.x/y?a=1&b=2\'\n```'
+}
+
+@test "marked ask + inline code with a ternary ? -> empty" {
+  assert_allowed $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nFix was `x = a ? b : c`.'
+}
+
+@test "ask phrase only inside inline code, no ask -> empty" {
+  assert_allowed 'Ran `grep -r should we revert?` and found nothing.'
+}
+
+@test "marked ask + prose-question footer -> empty" {
+  assert_allowed $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nWhy did CI fail? A flaky test; I reran it and it is green.'
+}
+
+@test "marked ask + later real ask containing a URL -> deny" {
+  assert_denied $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nAnd merge https://x.io/a?b=1 too? Should I?'
+}
+
+@test "unmarked ask next to inline code -> deny" {
+  assert_denied 'Should I run `rm -rf build`?'
 }
 
 @test "long pathological text is denied within the 5s hook timeout" {

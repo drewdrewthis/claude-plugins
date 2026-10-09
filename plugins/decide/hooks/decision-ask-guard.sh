@@ -3,7 +3,7 @@
 # or values-laden decisions, each with a recommendation. Deny a Discord reply that
 # asks the owner to decide and has an item lacking either.
 # Never echoes the text; always exits 0 so it can never wedge the agent.
-# Fails open (bad JSON, no jq, no python3); a missing tool is a blind release, so it
+# Fails open (bad JSON, no jq, no python3, scorer failure); each is a blind release, so it
 # is logged to stderr. No PATH pin: jq/python3 live in /opt/homebrew/bin on macOS.
 # Bash 3.2 safe (macOS /bin/bash).
 set -uo pipefail
@@ -19,13 +19,14 @@ jq -e . >/dev/null 2>&1 <<<"$input" || { echo "decision-ask-guard: unparseable i
 
 [[ "$(field .hook_event_name)" == PreToolUse ]] || exit 0
 [[ "$(field .tool_name)" == mcp__plugin_discord_discord__reply ]] || exit 0
-text="$(field .tool_input.text)"
+{ text="$(field .tool_input.text)"; } 2>/dev/null
 [[ -n "$text" ]] || exit 0
 
 # Prints the number of items that miss a marker or a recommendation, or "noask".
 verdict="$(python3 -I -c '
 import re, sys
-t = sys.stdin.read()
+# a "?" inside a URL or code is not a question
+t = re.sub(r"```.*?```|`[^`\n]*`|https?://\S+", "", sys.stdin.read(), flags=re.S)
 # Phrases that are an ask on their own, and phrases that are an ask only as a question.
 always = r"decisions? for you|for you to decide|\bneeds? your (?:approval|decision|call|input|ok|go|nod|sign-off)\b" \
   r"|needs? from you\b|pending (?:on|from) you\b|waiting on you\b|let me know (?:if|whether) (?:i|we) should" \
@@ -49,8 +50,8 @@ def misses(b):
     if len(parts) > 1 and "?" in parts[0]:
         items.append(parts[0])  # a question in the header is an item too
     return sum(1 for i in items if not (marker.search(i) and rec.search(i)))
-# later blocks are scored only if they ask: a status footer has no "?" and no ask phrase
-print(misses(blocks[0]) + sum(misses(b) for b in blocks[1:] if ask.search(b) or "?" in b))
+# a later block is scored if it holds an ask phrase, or is a list with a "?" (more items to decide); prose footers with a stray "?" are not
+print(misses(blocks[0]) + sum(misses(b) for b in blocks[1:] if ask.search(b) or (split.search(b) and "?" in b)))
 ' <<<"$text" 2>/dev/null)"
 scorer_rc=$?
 
