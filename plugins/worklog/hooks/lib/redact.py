@@ -45,12 +45,16 @@ _RULES = [
 # generic rules key on. `auth` is not a keyword: it would match prose like
 # `auth /usr/local/x/y.py`. At least one
 # separator is required so "authentication..." or "tokenizer..." identifiers do not match.
-# The separator excludes '>' and the value class excludes ':' and '>', so an
-# existing <redacted:...> marker is never re-matched (`token> word` after
-# <redacted:slack-token> must not count as keyword + separator + value).
+# The value class excludes ':' and '>' so a value never swallows a marker.
 _GENERIC = re.compile(
-    r"(?:api[ _-]?key|apikey|token|secret|passw(?:or)?d|bearer)[^\w>]{1,4}"
+    r"(?:api[ _-]?key|apikey|token|secret|passw(?:or)?d|bearer)\W{1,4}"
     r"[\w+/=.~\-]{16,}", re.I)
+
+# The keyword rule runs only on the text BETWEEN markers: a marker name can end
+# in a keyword (<redacted:slack-token>), and `token> word` must not count as
+# keyword + separator + value. Narrowing the separator instead would let
+# `<token>VALUE</token>` through.
+_MARKER = re.compile(r"(<redacted:[^<>\s]*>)")
 
 
 def builtin(s):
@@ -59,7 +63,11 @@ def builtin(s):
         return s
     for name, rx in _RULES:
         s = rx.sub("<redacted:%s>" % name, s)
-    return _GENERIC.sub("<redacted:generic-secret>", s)
+    # split() with one capture group: odd indexes are the markers themselves.
+    parts = _MARKER.split(s)
+    return "".join(
+        p if i % 2 else _GENERIC.sub("<redacted:generic-secret>", p)
+        for i, p in enumerate(parts))
 
 
 def scan(text):

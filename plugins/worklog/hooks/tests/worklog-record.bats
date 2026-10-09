@@ -1929,3 +1929,34 @@ builtin_out() {
   run builtin_out "$(fake_slack) abcdefghijklmnopqrstuvwx"
   [[ "$output" != *"slack-<redacted"* ]]
 }
+
+# --- keyword rule: separators and marker boundaries -------------------------
+
+# builtin_twice <text> — redact.builtin applied to its own output.
+builtin_twice() {
+  python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.stdout.write(redact.builtin(redact.builtin(sys.argv[2])))" "$HOOKS/lib" "$1"
+}
+
+@test "a keyword wrapped in xml tags redacts the value to the generic marker" {
+  run builtin_out "<token>abcdefghijklmnopqrstuvwx</token>"
+  [[ "$output" == *"<redacted:generic-secret>"* ]]
+}
+
+@test "a keyword wrapped in xml tags never keeps the value" {
+  run builtin_out "<token>abcdefghijklmnopqrstuvwx</token>"
+  [[ "$output" != *"abcdefghijklmnopqrstuvwx"* ]]
+}
+
+@test "a keyword with an arrow separator never keeps the value" {
+  run builtin_out "secret=> abcdefghijklmnopqrstuvwx"
+  [[ "$output" != *"abcdefghijklmnopqrstuvwx"* ]]
+}
+
+@test "a keyword value right after a marker is still redacted" {
+  [ "$(builtin_out "$(fake_slack) password=abcdefghijklmnopqrstuvwx")" = "<redacted:slack-token> <redacted:generic-secret>" ]
+}
+
+@test "running the built-in rules twice gives the same text as running them once" {
+  IN="$(fake_slack) abcdefghijklmnopqrstuvwx password=abcdefghijklmnopqrstuvwx"
+  [ "$(builtin_twice "$IN")" = "$(builtin_out "$IN")" ]
+}
