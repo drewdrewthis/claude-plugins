@@ -123,6 +123,7 @@ gate_failopen() {
         no-timeout|gitleaks-failed|gitleaks-absent|redact-failed) ;;
         *) why="unrecognized:${why}" ;;
     esac
+    # worklog-record.sh's wl_note_once greps this exact field order.
     printf '{"ts":"%s","gate":"%s","why":"%s","session_id":"%s"}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" "$gate" "$why" "$sid" \
         >> "$GATE_FAILOPEN_LOG" 2>/dev/null || true

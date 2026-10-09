@@ -2079,8 +2079,15 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   [ -z "$bad" ] || { echo "wrong or missing marker for:$bad" >&2; return 1; }
 }
 
-@test "a 1Password service-account token maps to 1password-token, not jwt" {
-  [ "$(builtin_out "k $(fake_op) k")" = "k <redacted:1password-token> k" ]
+# fake_hf is skipped: its alphabet is letters only, so hex digits would end it.
+@test "a longer token of every listed shape leaves no raw tail" {
+  bad=""
+  for row in $BUILTIN_TABLE; do
+    [ "${row%%:*}" = fake_hf ] && continue
+    t="$("${row%%:*}")0a1b2c3d4e5f"
+    [ "$(builtin_out "before $t after")" = "before <redacted:${row#*:}> after" ] || bad="$bad ${row%%:*}"
+  done
+  [ -z "$bad" ] || { echo "tail left for:$bad" >&2; return 1; }
 }
 
 @test "running the built-ins twice on every listed token gives the same text as once" {
@@ -2104,7 +2111,8 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   bad=""
   for s in npm_config_registry 'hf_hub_download(repo_id)' SG.fields \
            "ey""Jabcdefghijklmn.ey""Jabcdefghijklmn.abcdefghij" \
-           lin_api_version dp.pt.x glpat-short hvs.short; do
+           lin_api_version dp.pt.x glpat-short hvs.short \
+           risk_test_handlesemptystringinput task_live_ConfigurationSettings; do
     [ "$(builtin_out "$s")" = "$s" ] || bad="$bad [$s]"
   done
   [ -z "$bad" ] || { echo "changed:$bad" >&2; return 1; }

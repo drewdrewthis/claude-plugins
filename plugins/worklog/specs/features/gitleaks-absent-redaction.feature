@@ -80,11 +80,11 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run on text holding it
     Then the text is the same with the token replaced by its marker
 
-  # proves: hooks/tests/worklog-record.bats "a 1Password service-account token maps to 1password-token, not jwt"
-  Scenario: A 1Password token is not read as a JWT
-    Given a 1Password service-account token
-    When the built-in rules run
-    Then the marker is 1password-token
+  # proves: hooks/tests/worklog-record.bats "a longer token of every listed shape leaves no raw tail"
+  Scenario: A longer token leaves no raw tail
+    Given a token of each shape in the marker table with extra characters appended
+    When the built-in rules run on text holding it
+    Then the text is the same with the whole token replaced by its marker
 
   # proves: hooks/tests/worklog-record.bats "running the built-ins twice on every listed token gives the same text as once"
   Scenario: Redaction is idempotent

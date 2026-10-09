@@ -643,7 +643,6 @@ print(json.dumps({
     "outcomes": entries("outcomes", "uuid"),
     "mistakes": entries("mistakes", "uuids"),
     "gitleaks_failed": gl_failed,
-    "gitleaks_absent": not redact.gitleaks_present(),
 }, ensure_ascii=False))
 PY
 }
