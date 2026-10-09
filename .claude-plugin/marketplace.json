@@ -53,7 +53,7 @@
     {
       "name": "decide",
       "source": "./plugins/decide",
-      "description": "/decide:decide resolves a decision yourself instead of asking the human: triage, decompose consequences, run the autonomy gate, act, and write an auditable decision record — escalating only the irreversible, ruin-class, or values-laden minority."
+      "description": "/decide:decide resolves a decision yourself instead of asking the human: triage, decompose consequences, run the autonomy gate, act, and write an auditable decision record — escalating only the irreversible, ruin-class, or values-laden minority. Hook denies Discord replies that ask the owner to decide reversible calls."
     }
   ]
 }
