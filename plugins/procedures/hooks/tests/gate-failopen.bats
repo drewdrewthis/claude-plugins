@@ -4,8 +4,9 @@
 # gates.bats proves gate POLICY; gate-libs.bats proves the shared libs. This
 # file proves the RECORDING contract: gate_failopen() extracted out of
 # am-i-done-gate.sh into hooks/lib/gate-failopen.sh, sibling
-# to hooks/lib/turn-state.sh, and wired into all three gates so every BLIND
-# fail-open — never a legitimate release — is recorded with its own gate's
+# to hooks/lib/turn-state.sh, and wired into the gates (this suite drives two,
+# am-i-done-gate and how-do-i-gate; query-shape-guard also sources it but is not
+# driven here) so every BLIND fail-open — never a legitimate release — is recorded with its own gate's
 # name. The blind-vs-legitimate line is drawn by the FAIL-OPEN comment block at
 # the head of hooks/am-i-done-gate.sh and by ADR-016's "Every gate fails open"
 # section; this file must not blur it.
@@ -16,7 +17,9 @@
 # so both release silently (hooks/lib/gate-failopen.sh header; case 4/G5 below).
 # LEGITIMATE (must record NOTHING): out-of-audience (ga_binds_main
 # false), the compliance-path allowlist, a clean no-tool turn, sdk-cli, a
-# non-Stop event.
+# non-Stop event, an unarmed default-off gate (#144's resting state; the
+# "unarmed" negative controls below). Every OTHER test assumes ARMED gates,
+# which setup() sets.
 #
 # ⚠ GATE_FAILOPEN_LOG DANGER — READ BEFORE EDITING THIS FILE. gate_failopen()
 # defaults to the REAL $HOME/.claude/gate-failopen.jsonl (the GATE_FAILOPEN_LOG
@@ -42,9 +45,8 @@ setup() {
   # an unarmed gate releases silently on every degenerate path — no fail-open
   # row, no denial — so this suite would be asserting against a gate that is
   # not there. What this file tests is the ARMED gate's recording; the
-  # default-off release is pinned in gate-escape.bats ("a degraded gate with
-  # its switch off is an escape, not a blind fail-open"). Exported, so drive()'s
-  # `env` passes them through. Issue #208.
+  # unarmed release is pinned by the "unarmed ..." negative controls below.
+  # Exported, so drive()'s `env` passes them through. Issue #208.
   export PROCEDURES_ENABLE_HOW_DO_I_GATE=true
   export PROCEDURES_ENABLE_AM_I_DONE_GATE=true
 
@@ -244,6 +246,39 @@ unreadable_lib() {
   # otherwise be a genuine reset-hook-never-ran. Proves allowlist precedence.
   local P="{\"session_id\":\"$SID\",\"tool_name\":\"Skill\",\"tool_input\":{\"skill\":\"how-do-i\"}}"
   run drive "how-do-i-gate.sh" technician "$P"
+  [ -z "$output" ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ]
+}
+
+# Unarmed default-off gate on a degraded path (no start_turn => the reset hook
+# never ran): #144's resting state. Releases silently — no row, no denial.
+# These bypass drive() because setup() exports the arming switches and drive()
+# cannot unset them; HOME and GATE_FAILOPEN_LOG are still pinned. Each premise
+# guard re-runs the same call ARMED and demands a row, so the control cannot
+# pass vacuously because the degraded path was never reached.
+unarmed() { # <gate-script> <payload>
+  env -u PROCEDURES_ENABLE_HOW_DO_I_GATE -u PROCEDURES_ENABLE_AM_I_DONE_GATE \
+    -u CLAUDE_PLUGIN_OPTION_ENABLE_HOW_DO_I_GATE -u CLAUDE_PLUGIN_OPTION_ENABLE_AM_I_DONE_GATE \
+    HOME="$FAKE_HOME" CLAUDE_CODE_AGENT=technician GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
+    bash -c "echo '$2' | bash '$HOOKS/$1'"
+}
+
+@test "negative control: an unarmed how-do-i-gate on a degraded path records nothing and does not deny" {
+  run drive "how-do-i-gate.sh" technician "$PAYLOAD_EDIT"
+  [ -s "$GATE_FAILOPEN_LOG" ]   # premise: armed, this path IS a fail-open
+  : > "$GATE_FAILOPEN_LOG"
+  run unarmed "how-do-i-gate.sh" "$PAYLOAD_EDIT"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ]
+}
+
+@test "negative control: an unarmed am-i-done-gate on a degraded path records nothing and does not block" {
+  run drive "am-i-done-gate.sh" technician "$STOP"
+  [ -s "$GATE_FAILOPEN_LOG" ]   # premise: armed, this path IS a fail-open
+  : > "$GATE_FAILOPEN_LOG"
+  run unarmed "am-i-done-gate.sh" "$STOP"
+  [ "$status" -eq 0 ]
   [ -z "$output" ]
   [ ! -s "$GATE_FAILOPEN_LOG" ]
 }
