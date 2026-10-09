@@ -15,6 +15,8 @@
 #
 # Run: bats hooks/tests/query-shape-guard.bats
 
+load helpers/common
+
 setup() {
   HOOKS="$BATS_TEST_DIRNAME/.."
   GUARD="$HOOKS/query-shape-guard.sh"
@@ -25,12 +27,8 @@ setup() {
   FIX="$(mktemp -d "${BATS_TMPDIR:-/tmp}/qsg.XXXXXX")"
   PF="$FIX/payload.json"
   export QUERY_GUARD_STATE_DIR="$FIX/state"
-  # Clear every ambient gate switch by prefix (compgen -v exists in bash 3.2) so
-  # a developer's shell cannot arm or release the guard behind the suite's back.
-  local v
-  for v in $(compgen -v PROCEDURES_ENABLE_) $(compgen -v CLAUDE_PLUGIN_OPTION_ENABLE_); do
-    unset "$v"
-  done
+  # A developer's shell cannot arm or release the guard behind the suite's back.
+  clear_gate_switches
   # PLUGIN ADAPTATION (#144): the guard is default-off here, so the suite arms it
   export PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=true
   # Same telemetry isolation as gates.bats: a fail-open or an armed_by

@@ -23,6 +23,8 @@
 #
 # Run: bats hooks/tests/gate-escape.bats
 
+load helpers/common
+
 setup() {
   HOOKS="$BATS_TEST_DIRNAME/.."
   export TURN_STATE_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/esc.XXXXXX")"
@@ -36,12 +38,11 @@ setup() {
   export GATE_ESCAPE_LOG="$TURN_STATE_DIR/gate-escape.jsonl"
   export QUERY_GUARD_STATE_DIR="$TURN_STATE_DIR/qsg"
   # A developer shell (or a CI job) that exports a switch would flip results
-  # silently. Cleared by PREFIX, not from a list: a list goes stale the day a
-  # key is added, and that is the day a leaked arm would hide.
-  local v
-  for v in $(compgen -v | grep -E '^(PROCEDURES_ENABLE_|CLAUDE_PLUGIN_OPTION_ENABLE_)' || true); do
-    unset "$v"
-  done
+  # silently; cleared by prefix (see helpers/common.bash).
+  clear_gate_switches
+  # The gate scripts exit early under sdk-cli; a caller's ambient value would
+  # make every armed assertion pass vacuously.
+  unset CLAUDE_CODE_ENTRYPOINT
   SID="bats-e-$$-$BATS_TEST_NUMBER"
   PAYLOAD_EDIT="{\"session_id\":\"$SID\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}"
   PROJ="$HOME/.claude/projects/-bats-e-$$-$BATS_TEST_NUMBER"
@@ -91,12 +92,6 @@ bad_record() {
 fm_gate() { # fm_gate [VAR=value]...
   env KNOWLEDGE_ROOT="$FM_ROOT" "$@" \
     bash -c "echo '$BAD_PAYLOAD' | bash '$HOOKS/enforce-frontmatter.sh'"
-}
-
-# chmod 000 does not restrict root, so the unreadable-lib tests would fail for
-# the wrong reason there.
-skip_if_root() {
-  if [ "$(id -u)" -eq 0 ]; then skip "chmod 000 does not restrict root; unreadable-lib tests need a non-root user"; fi
 }
 
 # ---------- ge_enabled semantics ----------
@@ -255,6 +250,7 @@ skip_if_root() {
   run hdi_gate PROCEDURES_ENABLE_HOW_DO_I_GATE=false
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
 }
 
 @test "how-do-i-gate: another gate's switch neither releases nor arms it" {
@@ -361,14 +357,19 @@ skip_if_root() {
   [ ! -s "$GATE_ESCAPE_LOG" ]
 }
 
-@test "a configured release is NOT recorded as a fail-open" {
+@test "an explicit false on a gate is NOT recorded as a fail-open, even on a degraded path" {
   # gate-failopen.jsonl means "a gate released without deciding". An owner
   # exercising a switch decided — logging it makes the telemetry unreadable.
-  # The degraded path (no start_turn => reset-hook-never-ran) is where a
-  # switched-off gate used to be misfiled as blind, so that is where it is
-  # driven; the premise proves the SAME call armed does reach the fail-open.
+  # For the default-off gates =false is the resting state, for a default-on
+  # gate it is a release; neither is blind. The degraded path (no start_turn
+  # => reset-hook-never-ran) is where a switched-off gate used to be misfiled
+  # as blind, so that is where it is driven. Each gate has its own armed
+  # premise: the SAME call armed does reach the fail-open.
   run aid_gate PROCEDURES_ENABLE_AM_I_DONE_GATE=true
   grep -q 'reset-hook-never-ran' "$GATE_FAILOPEN_LOG"
+  run hdi_gate PROCEDURES_ENABLE_HOW_DO_I_GATE=true
+  run jq -e 'select(.gate == "how-do-i" and .why == "reset-hook-never-ran")' "$GATE_FAILOPEN_LOG"
+  [ "$status" -eq 0 ]
   : > "$GATE_FAILOPEN_LOG"
   run aid_gate PROCEDURES_ENABLE_AM_I_DONE_GATE=false
   [ "$status" -eq 0 ]
@@ -397,22 +398,26 @@ skip_if_root() {
   run jq -r '[.userConfig[] | select(.sensitive == true)] | length' "$MANIFEST"
   [ "$output" = "0" ]
   # The manifest default is what the harness exports on every hook call, so it
-  # must agree with the lib's own default: false iff the lib says default-off.
+  # must agree with the lib's own default. Polarity is read from the PUBLIC
+  # behaviour, not a private helper: with no switch set, ge_enabled says off
+  # (1) iff the lib treats the key as default-off, and then the manifest
+  # default must be false.
   for k in $(jq -r '.userConfig | keys[] | select(startswith("enable_"))' "$MANIFEST"); do
     KEY="$(printf '%s' "${k#enable_}" | tr '[:lower:]' '[:upper:]')"
+    run ge "$KEY"
+    lib_default="$output"
     if [ "$KEY" = "EVOLVE_SWEEP" ]; then
-      # KNOWN MISMATCH, exempt by name: the manifest default is false but
-      # ge__default_off does not list EVOLVE_SWEEP, so the lib treats it as
-      # default-on (installed plugin: off; bare checkout: on). Pinned as a
-      # mismatch so that fixing either side fails here and removes the exemption.
+      # KNOWN MISMATCH, exempt by name: the manifest default is false but the
+      # lib treats EVOLVE_SWEEP as default-on (installed plugin: off; bare
+      # checkout: on). Pinned as a mismatch so that fixing either side fails
+      # here and removes the exemption.
       # https://github.com/drewdrewthis/claude-plugins/issues/220
       run jq -e '.userConfig.enable_evolve_sweep.default == false' "$MANIFEST"
       [ "$status" -eq 0 ]
-      run bash -c ". '$HOOKS/lib/gate-escape.sh'; ge__default_off EVOLVE_SWEEP"
-      [ "$status" -ne 0 ]
+      [ "$lib_default" = "0" ]
       continue
     fi
-    if bash -c ". '$HOOKS/lib/gate-escape.sh'; ge__default_off '$KEY'"; then want=false; else want=true; fi
+    if [ "$lib_default" = "1" ]; then want=false; else want=true; fi
     run jq -e --arg k "$k" --argjson want "$want" '.userConfig[$k].default == $want' "$MANIFEST"
     [ "$status" -eq 0 ]
   done
@@ -490,19 +495,14 @@ skip_if_root() {
   [ "$status" -eq 0 ]
 }
 
-@test "an unreadable escape lib leaves every gate ARMED" {
+# unreadable_escape_copy — a per-test COPY of the plugin whose escape lib is
+# chmod 000, in COPY. Mutation runs on a copy — reverting the real tree is how
+# a reviewer wrecked this worktree mid-review. Lives under TURN_STATE_DIR so
+# teardown() removes it even when an assertion aborts the test — a RETURN trap
+# is not usable here, bats runs with functrace so it fires on the first
+# helper's return.
+unreadable_escape_copy() {
   skip_if_root
-  # CONTRACT QUESTION, not settled: for the three default-off gates "ARMED on
-  # an unreadable lib" is the opposite of their resting state. Behaviour is
-  # pinned as is; the decision is tracked in
-  # https://github.com/drewdrewthis/claude-plugins/issues/220
-  #
-  # The feature's central fail-safe, asserted in three hook comments and
-  # previously pinned by nothing. Mutation runs on a COPY — reverting the real
-  # tree is how a reviewer wrecked this worktree mid-review.
-  # Lives under TURN_STATE_DIR so teardown() removes it even when an assertion
-  # below aborts the test — a RETURN trap is not usable here, bats runs with
-  # functrace so it fires on the first helper's return.
   COPY="$TURN_STATE_DIR/esc-copy"
   mkdir -p "$COPY"
   cp -r "$HOOKS" "$COPY/hooks"
@@ -514,6 +514,14 @@ skip_if_root() {
   # this test pass or fail for the wrong reason.
   cp -r "$BATS_TEST_DIRNAME/../../skills" "$COPY/skills"
   chmod 000 "$COPY/hooks/lib/gate-escape.sh"
+}
+
+@test "an unreadable escape lib makes every gate deny, even with its switch set to false" {
+  # The feature's central fail-safe, asserted in three hook comments and
+  # previously pinned by nothing. For the two default-off gates =false is the
+  # resting state, so this is a deny the owner did not ask for: see the
+  # contract question pinned in the next test.
+  unreadable_escape_copy
 
   start_turn
   run env CLAUDE_CODE_AGENT=technician PROCEDURES_ENABLE_HOW_DO_I_GATE=false \
@@ -533,6 +541,28 @@ skip_if_root() {
   run env KNOWLEDGE_ROOT="$FM_ROOT" PROCEDURES_ENABLE_FRONTMATTER_CHECK=false \
     bash -c "echo '$BAD_PAYLOAD' | bash '$COPY/hooks/enforce-frontmatter.sh'"
   [ "$status" -eq 2 ]
+
+  chmod 644 "$COPY/hooks/lib/gate-escape.sh"
+}
+
+@test "an unreadable escape lib makes the default-off gates deny with NO switch set (open contract question)" {
+  # CONTRACT QUESTION, not settled: the default-off gates are OFF at rest, yet
+  # with the escape lib unreadable and nothing set they deny. Pinned as today's
+  # behaviour so that deciding it either way changes this test on purpose.
+  # https://github.com/drewdrewthis/claude-plugins/issues/220
+  unreadable_escape_copy
+
+  start_turn
+  run env CLAUDE_CODE_AGENT=technician \
+    bash -c "echo '$PAYLOAD_EDIT' | bash '$COPY/hooks/how-do-i-gate.sh'"
+  [[ "$output" == *"HOW-DO-I-GATE"* ]]
+
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run env CLAUDE_CODE_AGENT=technician \
+    bash -c "echo '$STOP' | bash '$COPY/hooks/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
 
   chmod 644 "$COPY/hooks/lib/gate-escape.sh"
 }
@@ -571,13 +601,14 @@ skip_if_root() {
   [ ! -s "$GATE_ESCAPE_LOG" ]
 }
 
-@test "a degraded gate is silent unarmed and a blind fail-open only when armed" {
-  skip_if_root
-  # gate_failopen never returns, so every degenerate path used to pre-empt the
-  # switch — filing a deliberate release as blind, one row per tool call for a
-  # whole session, inflating the very rate that log exists to measure.
-  # No start_turn: no .turn marker => the reset-hook-never-ran path.
-  # (gate-failopen.bats carries the per-gate negative controls for this half.)
+# gate_failopen never returns, so every degenerate path used to pre-empt the
+# switch — filing a deliberate release as blind, one row per tool call for a
+# whole session, inflating the very rate that log exists to measure.
+# No start_turn in the three tests below: no .turn marker => the
+# reset-hook-never-ran path. (gate-failopen.bats carries the per-gate negative
+# controls for the unarmed half.)
+
+@test "a degraded gate is silent when unarmed or switched off" {
   for sw in "" "PROCEDURES_ENABLE_HOW_DO_I_GATE=false"; do
     run hdi_gate $sw
     [ "$status" -eq 0 ]
@@ -585,12 +616,15 @@ skip_if_root() {
     [ ! -s "$GATE_FAILOPEN_LOG" ]
     [ ! -s "$GATE_ESCAPE_LOG" ]
   done
+}
 
-  # And with the escape lib itself unreadable, the degraded path must STILL
+@test "a degraded gate with an unreadable escape lib still releases, recording the blind fail-open" {
+  # With the escape lib itself unreadable, the degraded path must STILL
   # release. Without the ge_release_or_failopen fallback the undefined function
   # returns 127 and execution falls through into the deny — a gate denying on a
   # degraded path is the one outcome fail-open exists to prevent. The
-  # unreadable-lib test above cannot catch this: it asserts the deny.
+  # unreadable-lib tests above cannot catch this: they assert the deny.
+  skip_if_root
   BROKE="$TURN_STATE_DIR/broke"
   mkdir -p "$BROKE"
   cp -r "$HOOKS" "$BROKE/hooks"
@@ -601,10 +635,9 @@ skip_if_root() {
   [ -z "$output" ]
   grep -q 'reset-hook-never-ran' "$GATE_FAILOPEN_LOG"
   chmod 644 "$BROKE/hooks/lib/gate-escape.sh"
+}
 
-  # Armed, same degraded state: a blind fail-open, AND the arm itself recorded.
-  : > "$GATE_FAILOPEN_LOG"
-  : > "$GATE_ESCAPE_LOG"
+@test "a degraded gate is a blind fail-open when armed, and the arm itself is recorded" {
   run hdi_gate PROCEDURES_ENABLE_HOW_DO_I_GATE=true
   grep -q 'reset-hook-never-ran' "$GATE_FAILOPEN_LOG"
   run jq -e '.gate == "HOW_DO_I_GATE" and .armed_by == "PROCEDURES_ENABLE_HOW_DO_I_GATE"' "$GATE_ESCAPE_LOG"

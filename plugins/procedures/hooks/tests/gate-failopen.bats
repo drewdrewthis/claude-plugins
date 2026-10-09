@@ -25,7 +25,7 @@
 # defaults to the REAL $HOME/.claude/gate-failopen.jsonl (the GATE_FAILOPEN_LOG
 # assignment in hooks/lib/gate-failopen.sh) when the var is unset. That default is exactly what leaked 11+ rows of
 # hooks/tests/gates.bats's own runs into production telemetry — root-caused
-# 2026-08-03, see plans/REENTRY-issue210-gate-failopen.md and the regression
+# 2026-08-03, see the regression
 # test in gates.bats ("root cause orchard-codex#210: this suite does not leak..."). EVERY
 # test below drives gates through the `drive()` helper, which pins BOTH
 # GATE_FAILOPEN_LOG and HOME to scratch paths on every single call — never
@@ -33,13 +33,25 @@
 #
 # Run: bats hooks/tests/gate-failopen.bats
 
+load helpers/common
+
 setup() {
   HOOKS="$BATS_TEST_DIRNAME/.."
   REPO="$BATS_TEST_DIRNAME/../.."
 
+  # A developer shell must not arm or release a gate behind the suite's back;
+  # the arming exports below are the only switches this suite sets.
+  clear_gate_switches
+  # The gate scripts exit early under sdk-cli; a caller's ambient value would
+  # make every armed assertion pass vacuously.
+  unset CLAUDE_CODE_ENTRYPOINT
+
   export TURN_STATE_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gf-ts.XXXXXX")"
   LOG_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gf-log.XXXXXX")"
   export GATE_FAILOPEN_LOG="$LOG_DIR/gate-failopen.jsonl"
+  # Pinned too: arming writes an armed_by row to this log, whose default is
+  # $HOME-relative (the same leak class as the fail-open log).
+  export GATE_ESCAPE_LOG="$LOG_DIR/gate-escape.jsonl"
 
   # Arm both gates. #144 made HOW_DO_I_GATE and AM_I_DONE_GATE default-off, and
   # an unarmed gate releases silently on every degenerate path — no fail-open
@@ -107,6 +119,7 @@ drive() {
 # start_turn/ran_skill: turn state lives in TURN_STATE_DIR, not under hooks/.
 # teardown() removes the copy.
 unreadable_lib() {
+  skip_if_root
   local lib
   UNREADABLE_COPY="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gf-copy.XXXXXX")"
   cp -R "$HOOKS" "$UNREADABLE_COPY/hooks"
@@ -259,9 +272,7 @@ unreadable_lib() {
 # Each premise guard re-runs the same call ARMED and demands a row, so the
 # control cannot pass vacuously because the degraded path was never reached.
 unarmed() { # <gate-script> <payload>
-  ( unset PROCEDURES_ENABLE_HOW_DO_I_GATE PROCEDURES_ENABLE_AM_I_DONE_GATE \
-          CLAUDE_PLUGIN_OPTION_ENABLE_HOW_DO_I_GATE CLAUDE_PLUGIN_OPTION_ENABLE_AM_I_DONE_GATE
-    drive "$1" technician "$2" )
+  ( clear_gate_switches; drive "$1" technician "$2" )
 }
 
 @test "negative control: an unarmed how-do-i-gate on a degraded path records nothing and does not deny" {
@@ -292,7 +303,12 @@ unarmed() { # <gate-script> <payload>
 # this preserves.
 
 @test "G5 bootstrap hole: am-i-done-gate fails safely when hooks/lib/gate-failopen.sh is itself unreadable" {
-  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
+  # A live turn with a tool call and no skill: the loaded gate WOULD block, so
+  # silence + exit 0 can only come from the fail-safe exit. With no turn the
+  # gate is silent anyway and this test would pass whatever the lib did.
+  start_turn
+  user_prompt
+  assistant_tool Edit
   unreadable_lib "gate-failopen.sh" || { echo "AC-4 not yet implemented: hooks/lib/gate-failopen.sh does not exist"; false; }
   run drive "am-i-done-gate.sh" technician "$STOP"
   [ "$status" -eq 0 ]
@@ -300,7 +316,9 @@ unarmed() { # <gate-script> <payload>
 }
 
 @test "G5 bootstrap hole: how-do-i-gate fails safely when hooks/lib/gate-failopen.sh is itself unreadable" {
-  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
+  # A live turn with no skill run: the loaded gate WOULD deny this Edit, so
+  # silence + exit 0 can only come from the fail-safe exit.
+  start_turn
   unreadable_lib "gate-failopen.sh" || { echo "AC-4 not yet implemented: hooks/lib/gate-failopen.sh does not exist"; false; }
   run drive "how-do-i-gate.sh" technician "$PAYLOAD_EDIT"
   [ "$status" -eq 0 ]
@@ -323,7 +341,6 @@ unarmed() { # <gate-script> <payload>
 # lib/turn-state.sh itself, so they must run BEFORE the chmod.
 
 @test "case 4b: how-do-i-gate records lib-unreadable:turn-state instead of releasing silently" {
-  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
   start_turn
   ran_skill how-do-i
   unreadable_lib turn-state.sh
@@ -337,7 +354,6 @@ unarmed() { # <gate-script> <payload>
 }
 
 @test "case 4b: how-do-i-gate records lib-unreadable:gate-audience instead of releasing silently" {
-  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
   start_turn
   ran_skill how-do-i
   unreadable_lib gate-audience.sh
@@ -351,7 +367,6 @@ unarmed() { # <gate-script> <payload>
 }
 
 @test "case 4b: how-do-i-gate records lib-unreadable:gate-allowlist instead of releasing silently" {
-  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
   start_turn
   ran_skill how-do-i
   unreadable_lib gate-allowlist.sh

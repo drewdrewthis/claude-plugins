@@ -9,6 +9,8 @@
 #
 # Run: bats hooks/tests/librarian-poke.bats
 
+load helpers/common
+
 setup() {
   HOOKS="$BATS_TEST_DIRNAME/.."
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/lib-home.XXXXXX")"
@@ -78,11 +80,6 @@ marker_present() { [ -f "$TURN_STATE_DIR/$SID.librarian_poked" ]; }
 claude_never_ran() { [ ! -f "$CLAUDE_LOG" ]; }
 # An unread line, so the worker's batch issues something and claude runs.
 unread_line() { user_prompt; }
-
-# Epoch seconds -> touch -t stamp. GNU date takes -d @N, BSD date takes -r N;
-# `touch -d` itself is GNU-only, `touch -t` is POSIX.
-_stamp() { date -d "@$1" +%Y%m%d%H%M.%S 2>/dev/null || date -r "$1" +%Y%m%d%H%M.%S; }
-_touch_ago() { touch -t "$(_stamp $(( $(date +%s) - $2 )))" "$1"; }
 
 @test "hooks.json registers librarian-poke on Stop with async, no asyncRewake" {
   jq -e '.hooks.Stop[] | .hooks[] | select(.command == "bash ${CLAUDE_PLUGIN_ROOT}/hooks/librarian-poke.sh")

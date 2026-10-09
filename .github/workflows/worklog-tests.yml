@@ -18,6 +18,7 @@ on:
       - 'plugins/worklog/hooks/**'
       - 'plugins/procedures/hooks/lib/gate-failopen.sh'
       - 'plugins/procedures/hooks/tests/gate-failopen.bats'
+      - 'plugins/procedures/hooks/tests/helpers/**'
       - '.github/workflows/worklog-tests.yml'
   push:
     branches: [main]
@@ -81,5 +82,7 @@ jobs:
       - name: worklog-record suite
         run: bats plugins/worklog/hooks/tests/worklog-record.bats
 
+      # This suite also runs in procedures-tests.yml; it stays here because this
+      # leg has no Homebrew bash, so macOS runs it on stock bash 3.2.
       - name: gate-failopen suite
         run: bats plugins/procedures/hooks/tests/gate-failopen.bats

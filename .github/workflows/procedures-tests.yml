@@ -42,11 +42,12 @@ jobs:
       - name: Install bats and jq (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bats jq
-      # compile-records.sh, lint-frontmatter.sh and commit-records.sh need bash
-      # 4+ through scripts/lib/require-bash4.sh, and stock macOS ships 3.2. The
-      # cost: hooks run as `bash <hook>` now resolve to Homebrew bash on PATH,
-      # not the stock 3.2. The 3.2 hook path stays covered by gate-failopen.bats
-      # in worklog-tests.yml, which installs no bash.
+      # The hooks need bash 4+ (scripts/lib/require-bash4.sh) and stock macOS
+      # ships 3.2, so this leg installs Homebrew bash. With it first on PATH the
+      # suites and every `bash <hook>` call run on bash 5 here, not on stock 3.2.
+      # Stock 3.2 is exercised only by gate-failopen.bats in worklog-tests.yml,
+      # and that workflow runs on a PR only when gate-failopen.sh, its suite, or
+      # the shared test helper changes.
       - name: Install bats, jq and bash (macOS)
         if: runner.os == 'macOS'
         run: brew install bats-core jq bash
@@ -57,14 +58,15 @@ jobs:
           bats --version
           jq --version
           git --version
+      # Runs before the suites so the counts land in the log even when a suite
+      # fails, and a dropped glob is visible.
+      - name: Declared suites and tests
+        working-directory: plugins/procedures
+        run: |
+          ls hooks/tests/*.bats scripts/lib/tests/*.bats | wc -l
+          bats --count hooks/tests/*.bats scripts/lib/tests/*.bats
       - name: Run the procedures suites
         working-directory: plugins/procedures
         # By glob, no file list: a new suite is picked up without editing this
         # file, and a forgotten one cannot be silently skipped.
         run: bats hooks/tests/*.bats scripts/lib/tests/*.bats
-      # The counts land in the log so a dropped glob is visible.
-      - name: Show how many suites and tests ran
-        working-directory: plugins/procedures
-        run: |
-          ls hooks/tests/*.bats scripts/lib/tests/*.bats | wc -l
-          bats --count hooks/tests/*.bats scripts/lib/tests/*.bats

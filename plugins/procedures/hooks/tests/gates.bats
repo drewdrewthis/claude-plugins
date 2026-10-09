@@ -7,19 +7,14 @@
 #
 # Run: bats hooks/tests/gates.bats
 
-# Clear every ambient gate switch by prefix so a developer's shell cannot arm
-# or release a gate behind the suite's back. compgen -v lists shell variables
-# (exported or not) and exists in bash 3.2.
-clear_gate_switches() {
-  local v
-  for v in $(compgen -v PROCEDURES_ENABLE_) $(compgen -v CLAUDE_PLUGIN_OPTION_ENABLE_); do
-    unset "$v"
-  done
-}
+load helpers/common
 
 setup() {
   HOOKS="$BATS_TEST_DIRNAME/.."
   clear_gate_switches
+  # The gate scripts exit early under sdk-cli; a caller's ambient value would
+  # make every armed assertion pass vacuously.
+  unset CLAUDE_CODE_ENTRYPOINT
   # PLUGIN ADAPTATION (#144): gates are default-off here, so the suite arms them
   export PROCEDURES_ENABLE_HOW_DO_I_GATE=true PROCEDURES_ENABLE_AM_I_DONE_GATE=true
   export TURN_STATE_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gates.XXXXXX")"

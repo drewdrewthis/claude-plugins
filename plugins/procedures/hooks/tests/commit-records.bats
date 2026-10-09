@@ -61,6 +61,10 @@ EOF
 _run_gate() {  # COMMIT_RECORDS_NO_PUSH by default
   COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" "$@"
 }
+# GNU stat -c vs BSD stat -f.
+_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+_inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
+
 # _commit_count — number of commits on HEAD in $ROOT.
 _commit_count() { git -C "$ROOT" rev-list --count HEAD; }
 
@@ -94,10 +98,6 @@ EOF
 }
 
 # ---- AC1: malformed frontmatter blocks, no commit, actionable queue ----
-# GNU stat -c vs BSD stat -f.
-_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
-_inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
-
 @test "AC1: missing required key blocks, no commit, queue names record+root+check" {
   _fm "$ROOT/records/failure-modes/bad.md" fm.bad
   sed -i.bak '/^status:/d' "$ROOT/records/failure-modes/bad.md"; rm -f "$ROOT"/records/failure-modes/*.bak
@@ -542,6 +542,30 @@ _clone() {
   git -C "$ROOT" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
   ! git -C "$ROOT" log -1 --name-only --format= | grep -q "^.index/" || false
   [ -f "$ROOT/.index/map.tsv" ]                                                # still built locally
+}
+
+@test "AC26: an ignored .index with nothing tracked never reaches git add -u (newer git exits 128 on it)" {
+  # git 2.55 exits 128 on `git add -u -- .index` when nothing under .index is
+  # tracked; 2.39 exits 0, so the real git cannot pin the guard on every box.
+  # A shim first on PATH reproduces the newer behaviour on any git version.
+  local real shimdir; real="$(command -v git)"; shimdir="$FIX/shim"; mkdir -p "$shimdir"
+  cat > "$shimdir/git" <<SHIM
+#!/usr/bin/env bash
+args=("\$@")
+dir=.
+if [ "\${args[0]:-}" = "-C" ]; then dir="\${args[1]}"; args=("\${args[@]:2}"); fi
+if [ "\${args[*]:-}" = "add -u -- .index" ] && [ -z "\$("$real" -C "\$dir" ls-files -- .index)" ]; then
+  echo "error: pathspec '.index' did not match any file(s) known to git" >&2
+  exit 128
+fi
+exec "$real" "\$@"
+SHIM
+  chmod +x "$shimdir/git"
+  printf '.index/\n' > "$ROOT/.gitignore"
+  git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index
+  _fm "$ROOT/records/failure-modes/local.md" fm.local LOCAL
+  PATH="$shimdir:$PATH" _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
 }
 
 @test "AC29: index files tracked before .index/ was gitignored still get the rebuilt index staged" {

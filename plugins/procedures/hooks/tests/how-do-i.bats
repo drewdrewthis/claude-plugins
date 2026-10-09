@@ -66,7 +66,10 @@ seed_roots_stamp() {
   local index_dir="$1"
   local roots_spec
   roots_spec="$(bash -c 'source "$1"; _stores_resolve_roots_spec' _ \
-    "$BATS_TEST_DIRNAME/../../scripts/lib/stores.sh" 2>/dev/null || true)"
+    "$BATS_TEST_DIRNAME/../../scripts/lib/stores.sh")"
+  # A broken resolver must fail here, at the first fixture, not as a dozen
+  # unrelated how-do-i failures downstream.
+  [ -n "$roots_spec" ]
   printf '%s\n%s\n' "$roots_spec" "$(date +%s)" > "$index_dir/roots.stamp"
 }
 

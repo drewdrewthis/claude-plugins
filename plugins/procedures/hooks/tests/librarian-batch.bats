@@ -7,6 +7,8 @@
 #
 # Run: bats hooks/tests/librarian-batch.bats
 
+load helpers/common
+
 setup() {
   SCRIPTS="$BATS_TEST_DIRNAME/../../scripts"
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/lb-home.XXXXXX")"
@@ -17,11 +19,6 @@ setup() {
 }
 
 teardown() { rm -rf "$HOME"; }
-
-# Epoch seconds -> touch -t stamp. GNU date takes -d @N, BSD date takes -r N;
-# `touch -d` itself is GNU-only, `touch -t` is POSIX.
-_stamp() { date -d "@$1" +%Y%m%d%H%M.%S 2>/dev/null || date -r "$1" +%Y%m%d%H%M.%S; }
-_touch_ago() { touch -t "$(_stamp $(( $(date +%s) - $2 )))" "$1"; }
 
 # _transcript <slug> <lines> <days-old> — <lines> user messages of ~100 bytes.
 _transcript() {

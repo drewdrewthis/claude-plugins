@@ -683,9 +683,8 @@ if [ "${#FINAL_PATHS[@]}" -gt 0 ]; then
         _abort commit "git add failed for: ${FINAL_PATHS[*]}"
 fi
 # Ignored .index that still has tracked files: restage just those. Guarded on
-# ls-files: `git add -u` on a pathspec that matches nothing tracked exits 128
-# on newer git (seen on 2.55; 2.39 exits 0), which aborted every commit in a
-# store whose .index was never tracked.
+# ls-files: git add -u on a pathspec that matches nothing tracked exits 128 on
+# newer git, which aborted every commit in a store whose .index was never tracked.
 if [ -n "$INDEX_IGNORED" ] && [ -n "$(git -C "$ROOT" ls-files -- .index 2>/dev/null)" ]; then
     git -C "$ROOT" add -u -- .index 2>/dev/null || _abort commit "git add -u failed for: .index"
 fi
