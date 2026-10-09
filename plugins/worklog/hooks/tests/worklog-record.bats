@@ -87,6 +87,52 @@ printf '%s' "${CLAUDE_STUB:-}"
 SH
   chmod +x "$STUB/claude"
 
+  # The stub gitleaks. First on PATH so the real binary is never used by
+  # default (non-deterministic across versions and absent on some CI images).
+  # GITLEAKS_STUB selects the behaviour:
+  #   unset             read stdin, report no findings
+  #   fail              exit 2
+  #   find:<Rule>:<s>   one finding when stdin contains <s>, else none
+  #   passthrough       exec the real gitleaks found outside this dir
+#   fail-after:N      succeed (no findings) for N calls, then exit 2; the call
+#                     count lives in GITLEAKS_COUNT_FILE
+#   hang              block for 30s (exec'd, so a killed child frees the pipe)
+  # GITLEAKS_CALL_LOG, when set, gets one line per invocation.
+  export GITLEAKS_CALL_LOG="$SCRATCH/gitleaks-calls.txt"
+  export GITLEAKS_COUNT_FILE="$SCRATCH/gitleaks-count.txt"
+  cat > "$STUB/gitleaks" <<'SH'
+#!/usr/bin/env bash
+[ -n "${GITLEAKS_CALL_LOG:-}" ] && echo "$*" >>"$GITLEAKS_CALL_LOG"
+case "${GITLEAKS_STUB:-}" in
+  fail) cat >/dev/null; exit 2 ;;
+  fail-after:*)
+    n="${GITLEAKS_STUB#fail-after:}"
+    c="$(cat "$GITLEAKS_COUNT_FILE" 2>/dev/null || echo 0)"; c=$((c+1))
+    echo "$c" >"$GITLEAKS_COUNT_FILE"
+    cat >/dev/null
+    [ "$c" -gt "$n" ] && exit 2
+    echo '[]' ;;
+  hang) exec sleep 30 ;;
+  passthrough)
+    here="$(cd "$(dirname "$0")" && pwd)"
+    IFS=: read -ra dirs <<<"$PATH"
+    for d in "${dirs[@]}"; do
+      [ -n "$d" ] && [ "$(cd "$d" 2>/dev/null && pwd)" != "$here" ] && [ -x "$d/gitleaks" ] && exec "$d/gitleaks" "$@"
+    done
+    cat >/dev/null; exit 2 ;;
+  find:*)
+    spec="${GITLEAKS_STUB#find:}"; rule="${spec%%:*}"; secret="${spec#*:}"
+    in="$(cat)"
+    case "$in" in
+      *"$secret"*) jq -nc --arg r "$rule" --arg s "$secret" '[{RuleID:$r,Secret:$s,Match:$s}]' ;;
+      *) echo '[]' ;;
+    esac ;;
+  *) cat >/dev/null; echo '[]' ;;
+esac
+exit 0
+SH
+  chmod +x "$STUB/gitleaks"
+
   # A PATH that has everything the hook touches BEFORE the jq check — and no
   # jq. Used as the WHOLE PATH (not a prefix), so jq is genuinely absent
   # rather than shadowed. `date` is here because gate-failopen.sh stamps its
@@ -289,7 +335,7 @@ i = src.index('wl_slice() {')
 j = src.index('\nPY\n}\n', i) + len('\nPY\n}\n')
 sys.stdout.write(src[i:j])
 PY
-  bash -c "source '$SCRATCH/slice.fn'; wl_slice '$TX' 60" 2>/dev/null \
+  WL_REDACT_LIB="$HOOKS/lib" bash -c "source '$SCRATCH/slice.fn'; wl_slice '$TX' 60" 2>/dev/null \
     | jq -r '.changed|join(",")'
 }
 
@@ -884,7 +930,8 @@ PY
   # An unrecognized why is quarantined under an `unrecognized:` prefix, which
   # would silently keep these rows out of any rate a consumer computes.
   for w in transcript-unreadable judgment-unavailable store-unwritable \
-           malformed-payload non-object-payload no-jq detach-failed; do
+           malformed-payload non-object-payload no-jq detach-failed \
+           gitleaks-failed lib-unreadable:redact redact-failed; do
     : > "$GATE_FAILOPEN_LOG"
     env HOME="$FAKE_HOME" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
       bash -c ". '$HOOKS/lib/gate-failopen.sh'; gate_failopen 'worklog-record' '$w' 'sess1'"
@@ -1337,4 +1384,579 @@ SH
   # stdin too, the split silently regressed back to one blob.
   run bash -c "grep -q 'writing a single worklog row' '$CLAUDE_STDIN_LOG'"
   [ "$status" -ne 0 ]
+}
+
+# ==========================================================================
+# 10. secrets are redacted before the model sees them and before they are stored
+# ==========================================================================
+#
+# Issue #172. The worklog is a durable file, and the candidates block is sent
+# to a model, so a key pasted into a prompt would otherwise land in both. The
+# contract: every candidate body is redacted inside wl_slice BEFORE truncation,
+# and every stored text/quote is redacted again in wl_entries. A match becomes
+# <redacted:NAME>.
+#
+# ⚠ FAKE KEYS ARE BUILT BY CONCATENATION. A literal key in this file would trip
+# gitleaks on commit — and the fakes need to look real enough to match.
+#
+# ⚠ THE STUB MUST QUOTE THE REDACTED FORM. A quote is verified against the
+# candidate body the model was shown, and that body is redacted. A stub quoting
+# the raw key would be dropped as invented, and the "stored redacted" assertions
+# would then pass-or-fail for the wrong reason.
+
+# fake_key <prefix> <body> <len> — prefix, then <body> repeated and cut to <len>.
+fake_key() {
+  local out="" body="$2"
+  while [ "${#out}" -lt "$3" ]; do out="$out$body"; done
+  printf '%s%s' "$1" "${out:0:$3}"
+}
+
+fake_lw()  { fake_key "sk-""lw-" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5kL7" 40; }
+fake_ant() { fake_key "sk-""ant-""api03-" "Zy9Xw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe" 40; }
+fake_ghp() { fake_key "gh""p_" "Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7k8" 36; }
+fake_slack() { printf '%s' "xo""xb-1234567890-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"; }
+fake_aws() { printf '%s' "AK""IA""Q3XZ7RT5NB2KD8WP"; }
+# An npm token: gitleaks 8.30.1 flags it (npm-access-token) with no keyword
+# context, and none of the hook's built-in rules match it.
+fake_npm() { fake_key "np""m_" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5" 36; }
+
+# real_gitleaks — path of the real binary, searched outside the stub dir.
+real_gitleaks() {
+  local d
+  local -a dirs
+  IFS=: read -ra dirs <<<"$PATH"
+  for d in "${dirs[@]}"; do
+    [ -n "$d" ] && [ "$d" != "$STUB" ] && [ -x "$d/gitleaks" ] && { printf '%s/gitleaks' "$d"; return 0; }
+  done
+  return 1
+}
+
+# assert_gitleaks_only <key> — premise guard (real binary): gitleaks names
+# npm-access-token for the key and the built-in rules leave it untouched, so
+# the stubbed tests model a real finding on a shape no built-in covers.
+assert_gitleaks_only() {
+  local gl; gl="$(real_gitleaks)"
+  run bash -c "printf 'key = \"%s\"\n' '$1' | '$gl' stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null | jq -r '.[].RuleID'"
+  [ "$output" = "npm-access-token" ]
+  run python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.exit(0 if redact.builtin(sys.argv[2]) == sys.argv[2] else 1)" "$HOOKS/lib" "$1"
+  [ "$status" -eq 0 ]
+}
+
+# fixture_secret_prompt <secret> — one turn whose prompt pastes the secret.
+fixture_secret_prompt() {
+  user_line "$U1" "my token is $1 please keep it" > "$TX"
+}
+
+# redacted_reply <name> — a stub reply quoting the line as the model is shown it.
+redacted_reply() {
+  jq -nc --arg u "$U1" --arg q "my token is <redacted:$1> please keep it" \
+    '{requests:[{text:"user shared a token",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}'
+}
+
+# assert_redacted_in_worklog <name> <raw> — the placeholder is stored, the raw
+# secret is nowhere in the file.
+assert_redacted_in_worklog() {
+  grep -qF -- "<redacted:$1>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$2" "$WORKLOG_JSONL"
+}
+
+@test "a pasted sk-lw key never appears in the worklog file, only its marker" {
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  # The marker check guards against a vacuous pass: a dropped row is also
+  # key-free.
+  grep -qF -- "<redacted:sk-lw>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
+}
+
+@test "the stdin the model receives carries the marker and no raw sk-lw key" {
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  grep -qF -- "<redacted:sk-lw>" "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+}
+
+@test "a raw key in a model-written text is stored redacted" {
+  KEY="$(fake_ant)"
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" --arg t "pasted $KEY" \
+    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests[0].text')" = "pasted <redacted:sk-ant>" ]
+}
+
+@test "a raw key in a model-written quote is stored redacted" {
+  # A built-in-shaped key in the quote is redacted, and the redacted quote then
+  # matches the (redacted) candidate body, so the entry survives.
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive "$(jq -nc --arg u "$U1" --arg q "my token is $KEY please keep it" \
+    '{requests:[{text:"shared a token",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  grep -qF -- "<redacted:sk-ant>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
+}
+
+@test "a pasted sk-ant key is redacted from the worklog" {
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-ant)"
+  assert_redacted_in_worklog sk-ant "$KEY"
+}
+
+@test "a pasted GitHub ghp_ token is redacted from the worklog" {
+  KEY="$(fake_ghp)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply github-pat)"
+  assert_redacted_in_worklog github-pat "$KEY"
+}
+
+@test "a pasted Slack xoxb- token is redacted from the worklog" {
+  KEY="$(fake_slack)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply slack-token)"
+  assert_redacted_in_worklog slack-token "$KEY"
+}
+
+@test "a pasted AWS access key id is redacted from the worklog" {
+  KEY="$(fake_aws)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply aws-access-key)"
+  assert_redacted_in_worklog aws-access-key "$KEY"
+}
+
+@test "a gitleaks-only secret in the prompt is redacted in the stored row" {
+  KEY="$(fake_npm)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- \
+    "$(redacted_reply npm-access-token)"
+  assert_redacted_in_worklog npm-access-token "$KEY"
+}
+
+@test "a gitleaks-only secret in the prompt is redacted in the stdin the model receives" {
+  KEY="$(fake_npm)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- "$CLEAN"
+  grep -qF -- "<redacted:npm-access-token>" "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+}
+
+@test "a gitleaks-only secret in a model-written text is stored redacted" {
+  # Proves the gitleaks pass in wl_entries: no built-in matches this shape and
+  # the candidate body never held it.
+  KEY="$(fake_npm)"
+  fixture_full
+  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- \
+    "$(jq -nc --arg u "$U1" --arg t "leaked $KEY" \
+      '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests[0].text')" = "leaked <redacted:npm-access-token>" ]
+}
+
+# unjudged_row — the stored row is the mechanical envelope with no model output.
+assert_unjudged_row() {
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 1 ]
+  [ "$(field '.requests|length')" -eq 0 ]
+  [ "$(field '.outcomes|length')" -eq 0 ]
+  [ "$(field '.mistakes|length')" -eq 0 ]
+}
+
+# note_count <why> — how many times the fail-open log carries <why>.
+note_count() { { grep -c -- "\"why\":\"$1\"" "$GATE_FAILOPEN_LOG" 2>/dev/null || true; } | head -1; }
+
+# require_real_gitleaks — skip locally when the binary is missing, FAIL on CI so
+# a runner without it cannot silently turn the real-binary tests into skips.
+require_real_gitleaks() {
+  if real_gitleaks >/dev/null; then return 0; fi
+  if [ -n "${CI:-}" ]; then
+    echo "gitleaks is required on CI but is not on PATH" >&2
+    return 1
+  fi
+  skip "gitleaks is not on PATH"
+}
+
+@test "a malformed model reply still writes the row" {
+  fixture_full
+  drive '{"requests":5}'
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 1 ]
+}
+
+@test "a malformed model reply is stored unjudged" {
+  fixture_full
+  drive '{"requests":5}'
+  assert_unjudged_row
+}
+
+@test "a malformed model reply is logged as judgment-unavailable" {
+  fixture_full
+  drive '{"requests":5}'
+  [ "$(why)" = "judgment-unavailable" ]
+}
+
+@test "a gitleaks failure still writes exactly one row" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 1 ]
+}
+
+@test "a gitleaks failure is logged as gitleaks-failed exactly once" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "a gitleaks failure stores the row unjudged" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  assert_unjudged_row
+}
+
+@test "a gitleaks failure leaves no raw key in the stored row" {
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=fail" -- "$(redacted_reply sk-ant)"
+  assert_unjudged_row
+  ! grep -qF -- "$KEY" "$WORKLOG_JSONL"
+}
+
+@test "a gitleaks failure in the slice pass never invokes the model" {
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=fail" -- "$CLEAN"
+  [ ! -e "$CLAUDE_ARGV_LOG" ]
+}
+
+@test "a gitleaks failure in the entries pass only stores the row unjudged" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail-after:1" -- "$CLEAN"
+  assert_unjudged_row
+}
+
+@test "a gitleaks failure in the entries pass only is logged as gitleaks-failed once" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail-after:1" -- "$CLEAN"
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "the entries-pass gitleaks stub is reached after the slice pass succeeds" {
+  # Guards the fail-after premise: two calls means the model WAS invoked.
+  fixture_full
+  drive_with "GITLEAKS_STUB=fail-after:1" -- "$CLEAN"
+  [ "$(cat "$GITLEAKS_COUNT_FILE")" -eq 2 ]
+}
+
+@test "a hanging gitleaks times out and stores the row unjudged" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=hang" "WORKLOG_GITLEAKS_TIMEOUT=1" -- "$CLEAN"
+  assert_unjudged_row
+}
+
+@test "a hanging gitleaks is logged as gitleaks-failed exactly once" {
+  fixture_full
+  drive_with "GITLEAKS_STUB=hang" "WORKLOG_GITLEAKS_TIMEOUT=1" -- "$CLEAN"
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "a hanging gitleaks finishes well under the stub's 30s sleep" {
+  fixture_full
+  local t0 t1
+  t0="$(date +%s)"
+  drive_with "GITLEAKS_STUB=hang" "WORKLOG_GITLEAKS_TIMEOUT=1" -- "$CLEAN"
+  t1="$(date +%s)"
+  [ $((t1 - t0)) -lt 15 ]
+}
+
+@test "gitleaks is invoked with the stdin report flags" {
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$CLEAN"
+  grep -qxF -- "stdin --no-banner --exit-code 0 --report-format json --report-path - --log-level error" "$GITLEAKS_CALL_LOG"
+}
+
+@test "an unreadable redact lib writes no row" {
+  mkdir -p "$SCRATCH/empty-lib"
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/empty-lib" -- "$CLEAN"
+  no_row
+}
+
+@test "an unreadable redact lib is logged as lib-unreadable:redact" {
+  mkdir -p "$SCRATCH/empty-lib"
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/empty-lib" -- "$CLEAN"
+  [ "$(why)" = "lib-unreadable:redact" ]
+}
+
+@test "an unreadable redact lib never invokes the model" {
+  mkdir -p "$SCRATCH/empty-lib"
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/empty-lib" -- "$CLEAN"
+  [ ! -s "$CLAUDE_STDIN_LOG" ]
+}
+
+@test "a key straddling the 200-char truncation boundary leaks no partial prefix" {
+  KEY="$(fake_lw)"
+  # The fixture prefix "my token is " is 12 chars; 167 filler + a space put
+  # the key's first char at offset 180, so a truncate-then-redact order would
+  # keep "sk-lw-" plus ~14 chars of key, which no full-key pattern matches.
+  PAD="$(printf 'x%.0s' $(seq 1 167))"
+  fixture_secret_prompt "$PAD $KEY"
+  drive "$CLEAN"
+  grep -qF -- "<redacted:sk-lw>" "$CLAUDE_STDIN_LOG"
+  ! grep -Eq 'sk-lw-[A-Za-z0-9]' "$CLAUDE_STDIN_LOG"
+}
+
+# gitleaks_findings <file> — findings JSON the REAL gitleaks reports for a file.
+# --exit-code 0 so a finding is data here, not a failed command.
+gitleaks_findings() {
+  "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path - < "$1" 2>/dev/null
+}
+
+@test "the worklog file from the sk-lw turn passes a real gitleaks scan" {
+  require_real_gitleaks
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=passthrough" -- "$(redacted_reply sk-lw)"
+  grep -qF -- "<redacted:sk-lw>" "$WORKLOG_JSONL"
+  [ "$(gitleaks_findings "$WORKLOG_JSONL" | jq -c .)" = "[]" ]
+}
+
+@test "the real gitleaks flags the npm token shape no built-in rule covers" {
+  require_real_gitleaks
+  assert_gitleaks_only "$(fake_npm)"
+}
+
+@test "a password= value with no known prefix is redacted as generic-secret by the built-ins" {
+  # The default stub reports no findings, so only the built-in keyword rule
+  # can be responsible.
+  SECRET="$(fake_key "" "Hq7Lm2Zp9Wx4Rt6Yb3Nc8Vd" 24)"
+  user_line "$U1" "set password=$SECRET in the env" > "$TX"
+  drive "$(jq -nc --arg u "$U1" \
+    '{requests:[{text:"shared a password",quote:"set <redacted:generic-secret> in the env",uuid:$u}],outcomes:[],mistakes:[]}')"
+  grep -qF -- "<redacted:generic-secret>" "$WORKLOG_JSONL"
+  ! grep -qF -- "$SECRET" "$WORKLOG_JSONL"
+}
+
+@test "a bare auth word before a file path is not redacted" {
+  user_line "$U1" "run auth /usr/local/some/long/path/name.py now" > "$TX"
+  drive "$CLEAN"
+  grep -qF -- "auth /usr/local/some/long/path/name.py" "$CLAUDE_STDIN_LOG"
+}
+
+@test "a key beginning inside the 100-char text cap leaves no partial prefix" {
+  KEY="$(fake_lw)"
+  # Key starts at char 90 of the text; truncating first would keep a partial
+  # "sk-lw-aB3dE5gH7j" that no full-key pattern matches.
+  PAD="$(printf 'x%.0s' $(seq 1 89))"
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" --arg t "$PAD $KEY" \
+    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  ! grep -Eq 'sk-lw-[A-Za-z0-9]' "$WORKLOG_JSONL"
+}
+
+# --- redact-failed: redaction dies at runtime -----------------------------
+
+# redact_lib_raising_on <n> — a scratch lib dir holding the real redact.py with
+# redact_texts overridden to raise on its <n>th call (counted in a file, since
+# each call is a separate python process).
+redact_lib_raising_on() {
+  mkdir -p "$SCRATCH/raising-lib"
+  cp "$HOOKS/lib/redact.py" "$SCRATCH/raising-lib/redact.py"
+  cat >> "$SCRATCH/raising-lib/redact.py" <<PY
+
+_real_redact_texts = redact_texts
+def redact_texts(texts):
+    p = "$SCRATCH/redact-count.txt"
+    try:
+        c = int(open(p).read())
+    except Exception:
+        c = 0
+    c += 1
+    open(p, "w").write(str(c))
+    if c == $1:
+        raise RuntimeError("boom")
+    return _real_redact_texts(texts)
+PY
+}
+
+@test "a redaction that dies in the slice pass writes no row" {
+  redact_lib_raising_on 1
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  no_row
+}
+
+@test "a redaction that dies in the slice pass is logged as redact-failed" {
+  redact_lib_raising_on 1
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  [ "$(why)" = "redact-failed" ]
+}
+
+@test "a redaction that dies in the slice pass never invokes the model" {
+  redact_lib_raising_on 1
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  [ ! -e "$CLAUDE_ARGV_LOG" ]
+}
+
+@test "a redaction that dies in the entries pass writes no row" {
+  redact_lib_raising_on 2
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  no_row
+}
+
+@test "a redaction that dies in the entries pass is logged as redact-failed" {
+  redact_lib_raising_on 2
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  [ "$(why)" = "redact-failed" ]
+}
+
+@test "a redaction that dies in the entries pass releases the claim" {
+  # The raise is on call 2 only, so the retry (calls 3 and 4) succeeds; it can
+  # write a row only if the first fire did not leave its marker behind.
+  redact_lib_raising_on 2
+  fixture_full
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  rm -f "$GATE_FAILOPEN_LOG"
+  drive_with "WL_REDACT_LIB=$SCRATCH/raising-lib" -- "$CLEAN"
+  [ "$(field '.requests|length')" -eq 1 ]
+}
+
+# --- real binary, end to end ----------------------------------------------
+
+@test "the real gitleaks redacts an npm token from prompt to stored row" {
+  require_real_gitleaks
+  KEY="$(fake_npm)"
+  fixture_secret_prompt "$KEY"
+  drive_with "GITLEAKS_STUB=passthrough" -- "$(redacted_reply npm-access-token)"
+  assert_redacted_in_worklog npm-access-token "$KEY"
+}
+
+# --- truncation never leaves half a marker ---------------------------------
+
+@test "a redaction marker straddling the 100-char text cut leaves no unclosed marker" {
+  # 90 filler chars then a 16-char marker: the cut at 100 lands inside it.
+  PAD="$(printf 'x%.0s' $(seq 1 90))"
+  fixture_full
+  drive "$(jq -nc --arg u "$U1" --arg t "$PAD<redacted:sk-lw> tail" \
+    '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [ "$(field '.requests[0].text | test("<redacted:[^>]*$")')" = "false" ]
+}
+
+# --- gitleaks absent -------------------------------------------------------
+
+# path_without_gitleaks — a PATH dir with the tools the hook needs, the claude
+# stub, and no gitleaks at all.
+path_without_gitleaks() {
+  local d="$SCRATCH/nogl" b p
+  mkdir -p "$d"
+  for b in bash sh env date cat rm mktemp sed grep tr timeout python3 jq setsid \
+           head tail wc sort mkdir ls find stat sleep cut awk perl dirname \
+           basename tee mv cp printf uniq xargs readlink cmp diff; do
+    if p="$(command -v "$b" 2>/dev/null)" && [ -x "$p" ]; then ln -sf "$p" "$d/$b"; fi
+  done
+  ln -sf "$STUB/claude" "$d/claude"
+  printf '%s' "$d"
+}
+
+@test "with gitleaks absent the built-in rules still redact the stored row" {
+  KEY="$(fake_ant)"
+  fixture_secret_prompt "$KEY"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$(redacted_reply sk-ant)"
+  assert_redacted_in_worklog sk-ant "$KEY"
+}
+
+@test "with gitleaks absent the row is judged" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  [ "$(field '.requests|length')" -eq 1 ]
+}
+
+@test "with gitleaks absent no fail-open row is logged" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  no_log
+}
+
+@test "the gitleaks-absent PATH really has no gitleaks" {
+  run env PATH="$(path_without_gitleaks)" bash -c 'command -v gitleaks'
+  [ "$status" -ne 0 ]
+}
+
+# --- built-in rule shapes: provider keys with unusual bodies ---------------
+
+# builtin_out <text> — redact.builtin(<text>) as the hook's lib computes it.
+builtin_out() {
+  python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.stdout.write(redact.builtin(sys.argv[2]))" "$HOOKS/lib" "$1"
+}
+
+@test "an sk-lw key with a dot in the middle never lands in the worklog file" {
+  KEY="$(fake_key "sk-""lw-" "aB3dE5gH7j" 10).$(fake_key "" "kL7mN9pQ1sT3vX5zA7cD9fG1hJ3" 30)"
+  fixture_secret_prompt "$KEY"
+  drive "$(redacted_reply sk-lw)"
+  assert_redacted_in_worklog sk-lw "$KEY"
+}
+
+@test "an sk-lw key with a dot in the middle redacts to the bare marker" {
+  KEY="$(fake_key "sk-""lw-" "aB3dE5gH7j" 10).$(fake_key "" "kL7mN9pQ1sT3vX5zA7cD9fG1hJ3" 30)"
+  [ "$(builtin_out "k $KEY k")" = "k <redacted:sk-lw> k" ]
+}
+
+@test "a short sk-lw key of 19 characters redacts to the bare marker" {
+  KEY="$(fake_key "sk-""lw-" "aB3dE5gH7jK9mN1pQ3s" 19)"
+  [ "$(builtin_out "k $KEY k")" = "k <redacted:sk-lw> k" ]
+}
+
+@test "an sk-lw key with a plus in the middle redacts to the bare marker" {
+  KEY="$(fake_key "sk-""lw-" "aB3dE5gH7jK9" 12)+$(fake_key "" "mN1pQ3sT5vX7zA9cD1fG" 20)"
+  [ "$(builtin_out "k $KEY k")" = "k <redacted:sk-lw> k" ]
+}
+
+@test "an sk-ant key with a dot in the middle redacts to the bare marker" {
+  KEY="$(fake_key "sk-""ant-" "aB3dE5gH7j" 10).$(fake_key "" "kL7mN9pQ1sT3vX5zA7cD9fG1hJ3" 30)"
+  [ "$(builtin_out "k $KEY k")" = "k <redacted:sk-ant> k" ]
+}
+
+@test "a marker followed by a long lowercase word stays intact" {
+  [ "$(builtin_out "$(fake_slack) abcdefghijklmnopqrstuvwx")" = "<redacted:slack-token> abcdefghijklmnopqrstuvwx" ]
+}
+
+@test "a marker followed by a long lowercase word is not re-matched by the keyword rule" {
+  run builtin_out "$(fake_slack) abcdefghijklmnopqrstuvwx"
+  [[ "$output" != *"slack-<redacted"* ]]
+}
+
+# --- keyword rule: separators and marker boundaries -------------------------
+
+# builtin_twice <text> — redact.builtin applied to its own output.
+builtin_twice() {
+  python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.stdout.write(redact.builtin(redact.builtin(sys.argv[2])))" "$HOOKS/lib" "$1"
+}
+
+@test "a keyword wrapped in xml tags redacts the value to the generic marker" {
+  run builtin_out "<token>abcdefghijklmnopqrstuvwx</token>"
+  [[ "$output" == *"<redacted:generic-secret>"* ]]
+}
+
+@test "a keyword wrapped in xml tags never keeps the value" {
+  run builtin_out "<token>abcdefghijklmnopqrstuvwx</token>"
+  [[ "$output" != *"abcdefghijklmnopqrstuvwx"* ]]
+}
+
+@test "a keyword with an arrow separator never keeps the value" {
+  run builtin_out "secret=> abcdefghijklmnopqrstuvwx"
+  [[ "$output" != *"abcdefghijklmnopqrstuvwx"* ]]
+}
+
+@test "a keyword value right after a marker is still redacted" {
+  [ "$(builtin_out "$(fake_slack) password=abcdefghijklmnopqrstuvwx")" = "<redacted:slack-token> <redacted:generic-secret>" ]
+}
+
+@test "running the built-in rules twice gives the same text as running them once" {
+  IN="$(fake_slack) abcdefghijklmnopqrstuvwx password=abcdefghijklmnopqrstuvwx"
+  [ "$(builtin_twice "$IN")" = "$(builtin_out "$IN")" ]
 }

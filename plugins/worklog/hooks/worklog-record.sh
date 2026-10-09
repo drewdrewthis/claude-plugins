@@ -38,6 +38,29 @@
 # forever, so "the model was careful" is not an acceptable guarantee here —
 # the check is.
 #
+# SECRETS NEVER REACH THE MODEL OR THE FILE. A key pasted into a prompt would
+# otherwise ride the candidates block to a model and then sit in a durable file
+# (issue #172; the same class of leak made gitleaks' pre-commit hook block codex
+# snapshots for 12h). lib/redact.py is the ONE implementation, used twice:
+#   * wl_slice redacts every candidate body BEFORE truncation — redacting after
+#     a cut would keep a partial prefix no full-key pattern matches — so the
+#     model never sees a secret and quotes are sliced from redacted bodies.
+#   * wl_entries redacts the model's text values the SAME way (built-ins + one
+#     gitleaks batch) before THEIR cut. A quote gets built-ins only, then must
+#     match the redacted body: a gitleaks-only secret in a quote cannot match a
+#     gitleaks-redacted body, so it is dropped as invented — the safe direction.
+#   * Redact each string before it enters the row; gitleaks does not draw
+#     keyword context across JSON fields, so scanning the serialized row adds nothing.
+# Built-in named rules always run; gitleaks adds its default rules when on PATH,
+# one batch per call. If gitleaks IS on PATH and fails (either pass), the row is
+# written UNJUDGED (mechanical fields only, which carry no secrets) and
+# gitleaks-failed is noted once: built-ins alone must not stand in for a layer
+# that was meant to run. If gitleaks is ABSENT: built-ins only, no note — a
+# machine without gitleaks has no gitleaks pre-commit to block either, and a
+# note every turn would swamp the fail-open rate. An
+# unreadable lib fails open (lib-unreadable:redact), and a redaction that dies
+# at runtime fails open (redact-failed) — never a row without completed redaction.
+#
 # NOT A GATE, AND NOT A MISTAKE LOG.
 #   * It never emits a `decision` — am-i-done-gate.sh is the Stop hook that
 #     blocks, and it must stay the only one. Two blocking Stop hooks make an
@@ -112,7 +135,8 @@
 # claims and is then killed before appending leaves a marker nobody will
 # release. Markers are therefore STEALABLE once older than
 # WORKLOG_CLAIM_TTL_SECS, which defaults to longer than any live fire can run
-# (settle + model timeout + margin) so a steal cannot race a working fire.
+# (settle + model timeout + two gitleaks batches + margin) so a steal cannot
+# race a working fire.
 # The tradeoff, deliberately: the crashed turn's row is lost until the next
 # Stop fire for it, and a steal on a badly skewed clock could duplicate one row.
 # Both beat the alternative — a permanent silent hole. Markers are keyed PER
@@ -141,6 +165,9 @@ set -uo pipefail
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" 2>/dev/null && pwd 2>/dev/null)" || exit 0
+# Where every python heredoc imports redact from. Only defaulted, so a test
+# that lifts a function out by text can point it elsewhere.
+export WL_REDACT_LIB="${WL_REDACT_LIB:-$SCRIPT_DIR/lib}"
 SELF="$SCRIPT_DIR/${BASH_SOURCE[0]##*/}"
 
 # The recorder cannot record its own absence — with no gate_failopen to call,
@@ -163,6 +190,12 @@ WORKLOG_MODEL_TIMEOUT="${WORKLOG_MODEL_TIMEOUT:-120}"
 WORKLOG_MODEL="${WORKLOG_MODEL:-claude-haiku-4-5-20251001}"
 # Rows of the store scanned for the dedup key. See wl_seen.
 WORKLOG_DEDUP_SCAN="${WORKLOG_DEDUP_SCAN:-500}"
+# Ceiling on each gitleaks batch, enforced inside lib/redact.py (a python
+# subprocess timeout — wl_timeout wraps shell commands and cannot be called
+# from there). Expiry is noted as gitleaks-failed; built-ins still ran.
+# gitleaks on small stdin runs ~1s, so 15 is generous.
+WORKLOG_GITLEAKS_TIMEOUT="${WORKLOG_GITLEAKS_TIMEOUT:-15}"
+export WORKLOG_GITLEAKS_TIMEOUT
 # Non-numeric values feed `sleep`/`timeout`/`tail`, which error rather than
 # default — a typo'd env var must not change the contract.
 case "$WORKLOG_SETTLE_SECS"   in ''|*[!0-9]*) WORKLOG_SETTLE_SECS=3 ;; esac
@@ -173,14 +206,17 @@ case "$WORKLOG_MODEL_TIMEOUT" in ''|*[!0-9]*|0) WORKLOG_MODEL_TIMEOUT=120 ;; esa
 # would write a duplicate row — silently disabling the one-row-per-turn key
 # with no failure anywhere to notice.
 case "$WORKLOG_DEDUP_SCAN"    in ''|*[!0-9]*|0) WORKLOG_DEDUP_SCAN=500 ;; esac
+# Its consumer is python int() in lib/redact.py, not sleep/timeout; 0 would make
+# every batch time out instantly.
+case "$WORKLOG_GITLEAKS_TIMEOUT" in ''|*[!0-9]*|0) WORKLOG_GITLEAKS_TIMEOUT=15 ;; esac
 # Age at which a claim marker is stealable. Derived from the other two rather
 # than fixed, so raising the model timeout cannot make a live fire's own claim
 # stealable out from under it. 0 is rejected like the counts above and for the
 # same class of reason: a zero TTL makes every marker instantly stealable,
 # which is the race with an extra step.
-WORKLOG_CLAIM_TTL_SECS="${WORKLOG_CLAIM_TTL_SECS:-$(( WORKLOG_SETTLE_SECS + WORKLOG_MODEL_TIMEOUT + 60 ))}"
+WORKLOG_CLAIM_TTL_SECS="${WORKLOG_CLAIM_TTL_SECS:-$(( WORKLOG_SETTLE_SECS + WORKLOG_MODEL_TIMEOUT + 2 * WORKLOG_GITLEAKS_TIMEOUT + 60 ))}"
 case "$WORKLOG_CLAIM_TTL_SECS" in
-    ''|*[!0-9]*|0) WORKLOG_CLAIM_TTL_SECS=$(( WORKLOG_SETTLE_SECS + WORKLOG_MODEL_TIMEOUT + 60 )) ;;
+    ''|*[!0-9]*|0) WORKLOG_CLAIM_TTL_SECS=$(( WORKLOG_SETTLE_SECS + WORKLOG_MODEL_TIMEOUT + 2 * WORKLOG_GITLEAKS_TIMEOUT + 60 )) ;;
 esac
 
 INPUT=""
@@ -481,7 +517,14 @@ wl_unclaim() {
 # cannot see the candidate bodies to slice from.
 wl_entries() {
     python3 - "$1" "$2" "$3" <<'PY' 2>/dev/null || true
-import json, re, sys
+import json, os, re, sys
+# Same strict import as wl_slice: an unreadable lib is reported, never tolerated.
+try:
+    sys.path.insert(0, os.environ["WL_REDACT_LIB"])
+    import redact
+except Exception:
+    print(json.dumps({"lib_unreadable": True}))
+    sys.exit(0)
 
 cands, uuids_json, raw = sys.argv[1], sys.argv[2], sys.argv[3]
 MAXTEXT, MAXQUOTE = 100, 120
@@ -493,6 +536,9 @@ try:
 except Exception:
     sys.exit(1)
 if not isinstance(obj, dict):
+    sys.exit(1)
+# A key holding a non-list is a malformed reply: unusable, not an empty one.
+if any(k in obj and not isinstance(obj[k], list) for k in CAPS):
     sys.exit(1)
 
 # Bodies keyed by uuid, normalised the same way norm() does it: collapse all
@@ -510,14 +556,26 @@ for line in cands.split("\n"):
 
 def verified_quote(quote, uuid):
     """Return the run SLICED FROM the candidate body, or None."""
-    q = norm(quote)
+    # Built-ins only, BEFORE matching and cutting: the body is already redacted,
+    # so a raw-key quote would otherwise be dropped as invented, and a cut taken
+    # first would leave a partial key prefix. A gitleaks-only secret in a quote
+    # cannot match the gitleaks-redacted body, so it is dropped as invented.
+    q = norm(redact.builtin(quote))
     if not q or uuid not in bodies:
         return None
     body = bodies[uuid]
     i = body.find(q)
     if i < 0:
         return None
-    return body[i:i + len(q)][:MAXQUOTE]
+    return redact.truncate(body[i:i + len(q)], MAXQUOTE)
+
+# Every model text goes through the SAME pass as wl_slice's bodies (built-ins +
+# ONE gitleaks batch), before the MAXTEXT cut.
+def model_texts():
+    for key in CAPS:
+        for e in (obj.get(key) or [])[:CAPS[key]]:
+            if isinstance(e, dict) and isinstance(e.get("text"), str):
+                yield e["text"].strip()
 
 def entries(key, uuid_field):
     out = []
@@ -555,15 +613,25 @@ def entries(key, uuid_field):
         q = verified_quote(e.get("quote"), anchor)
         if q is None:
             continue
-        ent = {"text": text.strip()[:MAXTEXT], "quote": q}
+        ent = {"text": redact.truncate(rtext[text.strip()], MAXTEXT), "quote": q}
         ent["uuids" if uuid_field == "uuids" else "uuid"] = us if uuid_field == "uuids" else us[0]
         out.append(ent)
     return out
 
+# Only the redaction call is guarded: a redaction that dies is reported (wl_run
+# writes no row), while a malformed model reply just yields no entries.
+uniq = sorted(set(model_texts()))
+try:
+    red, gl_failed = redact.redact_texts(uniq)
+except Exception:
+    print(json.dumps({"redact_failed": True}))
+    sys.exit(0)
+rtext = dict(zip(uniq, red))
 print(json.dumps({
     "requests": entries("requests", "uuid"),
     "outcomes": entries("outcomes", "uuid"),
     "mistakes": entries("mistakes", "uuids"),
+    "gitleaks_failed": gl_failed,
 }, ensure_ascii=False))
 PY
 }
@@ -588,7 +656,15 @@ PY
 # ---------------------------------------------------------------------------
 wl_slice() {
     python3 - "$1" "$2" <<'PY' 2>/dev/null
-import json, re, sys
+import json, os, re, sys
+# First use of the lib, before any model call: an unimportable lib is reported
+# (not tolerated) so wl_run fails open instead of reading the transcript blind.
+try:
+    sys.path.insert(0, os.environ["WL_REDACT_LIB"])
+    import redact
+except Exception:
+    print(json.dumps({"lib_unreadable": True}))
+    sys.exit(0)
 
 path, window = sys.argv[1], int(sys.argv[2])
 MAXTEXT = 200
@@ -629,7 +705,7 @@ def text_of(r):
 
 def flat(s, n=MAXTEXT):
     s = re.sub(r"\s+", " ", (s or "")).strip()
-    return s[:n]
+    return redact.truncate(s, n)
 
 def is_genuine_user(r):
     if r.get("type") != "user":
@@ -790,9 +866,18 @@ for r in recs:
             continue
     if not kind:
         continue
-    cands.append((u, kind, flat(body)))
+    cands.append((u, kind, body))
 
 cands = cands[-window:]
+# Redact the RAW bodies, then truncate: flat() cuts at 200 chars, and a key
+# straddling the cut would survive as a prefix no full-key pattern matches.
+# Built-ins plus one gitleaks batch over every body.
+try:
+    red, gl_failed = redact.redact_texts([b for _, _, b in cands])
+except Exception:
+    print(json.dumps({"redact_failed": True}))
+    sys.exit(0)
+cands = [(u, kind, flat(b)) for (u, kind, _), b in zip(cands, red)]
 lines = []
 for u, kind, body in cands:
     where = "THIS-TURN" if u in turn_uuids else "earlier"
@@ -804,6 +889,7 @@ print(json.dumps({
     "changed": changed,
     "uuids": [u for u, _, _ in cands],
     "candidates": "\n".join(lines),
+    "gitleaks_failed": gl_failed,
 }))
 PY
 }
@@ -946,6 +1032,13 @@ wl_run() {
     # the file could not be opened at all) — blind. A slice carrying "decline"
     # means it read fine and there was nothing to bracket a turn with — a
     # legitimate decline, and recording it would poison the fail-open rate.
+    #
+    # No redactor, no model call, no write: an unreadable lib must not degrade
+    # into storing (or sending the model) unredacted content.
+    [ "$(printf '%s' "$slice" | jq -r '.lib_unreadable // false' 2>/dev/null)" = "true" ] \
+        && gate_failopen worklog-record lib-unreadable:redact "$sid"
+    [ "$(printf '%s' "$slice" | jq -r '.redact_failed // false' 2>/dev/null)" = "true" ] \
+        && gate_failopen worklog-record redact-failed "$sid"
     [ -n "$slice" ] && printf '%s' "$slice" | jq -e 'type == "object"' >/dev/null 2>&1 \
         || gate_failopen worklog-record transcript-unreadable "$sid"
     printf '%s' "$slice" | jq -e 'has("decline") | not' >/dev/null 2>&1 || exit 0
@@ -958,6 +1051,11 @@ wl_run() {
     # timestamps and uuids, and `outcomes` inherits the burden of naming the
     # artifact that changed.
     local ask end uuids cands
+    # gitleaks on PATH but failed: the row goes out unjudged, and the reason is
+    # recorded once at the end (never per pass, never before the claim).
+    local gl_failed=0
+    [ "$(printf '%s' "$slice" | jq -r '.gitleaks_failed // false')" = "true" ] \
+        && gl_failed=1
     ask="$(printf '%s' "$slice" | jq -r '.ask_uuid // empty')"
     end="$(printf '%s' "$slice" | jq -r '.end_uuid // empty')"
     uuids="$(printf '%s' "$slice" | jq -c '.uuids // []')"
@@ -1003,7 +1101,9 @@ wl_run() {
 
     # --- judgment -------------------------------------------------------
     local raw="" entries="" judged=1
-    if command -v claude >/dev/null 2>&1; then
+    # A failed slice pass means the candidates may hold a gitleaks-only secret:
+    # skip the model entirely.
+    if [ "$gl_failed" -eq 0 ] && command -v claude >/dev/null 2>&1; then
         raw="$(wl_candidates "$cands" \
             | WORKLOG_DISABLE=1 wl_timeout "$WORKLOG_MODEL_TIMEOUT" \
               claude -p --model "$WORKLOG_MODEL" --output-format text \
@@ -1025,6 +1125,14 @@ wl_run() {
         # dropped whole — lives in wl_entries. It returns nothing when the
         # object is unusable, and the row is then written unjudged.
         entries="$(wl_entries "$cands" "$uuids" "$raw")"
+        # Redaction died at runtime: no row at all, not an unjudged one.
+        [ "$(printf '%s' "$entries" | jq -r '.redact_failed // false' 2>/dev/null)" = "true" ] \
+            && { wl_unclaim; gate_failopen worklog-record redact-failed "$sid"; }
+        [ "$(printf '%s' "$entries" | jq -r '.lib_unreadable // false' 2>/dev/null)" = "true" ] \
+            && { wl_unclaim; gate_failopen worklog-record lib-unreadable:redact "$sid"; }
+        # Model text may carry a gitleaks-only secret: drop it, keep the row.
+        [ "$(printf '%s' "$entries" | jq -r '.gitleaks_failed // false' 2>/dev/null)" = "true" ] \
+            && { gl_failed=1; entries=""; }
         if [ -n "$entries" ] && printf '%s' "$entries" | jq -e 'type == "object"' >/dev/null 2>&1; then
             judged=0
         else
@@ -1044,6 +1152,8 @@ wl_run() {
     # tolerates it, so the collision hid on a newer toolchain while silently
     # fail-opening every write to `store-unwritable` on 1.6-era machines.
     local row
+    # $entries is picked field-by-field on purpose: it carries flags (e.g.
+    # gitleaks_failed) that must never reach the row.
     row="$(jq -nc \
         --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
         --arg session "$sid" \
@@ -1071,6 +1181,7 @@ wl_run() {
     # Recorded LAST, and only after the mechanical row is safely on disk: the
     # machine-settled half of the turn is the durable part, and losing it to a
     # model outage would lose the turn entirely. gate_failopen exits.
+    [ "$gl_failed" -eq 0 ] || gate_failopen worklog-record gitleaks-failed "$sid"
     [ "$judged" -eq 0 ] || gate_failopen worklog-record judgment-unavailable "$sid"
     exit 0
 }

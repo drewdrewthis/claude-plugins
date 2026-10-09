@@ -50,12 +50,31 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install bats-core jq
 
+      # gitleaks is PINNED, unlike bats/jq: the redaction layer calls
+      # `gitleaks stdin`, which apt's packaged release is too old to have, and an
+      # unpinned brew would let a rule change move the suite under us. The
+      # tarball is fetched straight from the release for the same version on
+      # both legs.
+      - name: Install gitleaks 8.30.1 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+
+      - name: Install gitleaks 8.30.1 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          case "$(uname -m)" in arm64) arch=arm64 ;; *) arch=x64 ;; esac
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_${arch}.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+
       - name: Record the toolchain under test
         run: |
           echo "os: ${{ matrix.os }}"
           bash --version | head -1
           bats --version
           jq --version
+          gitleaks version
           command -v timeout || echo "no GNU timeout (expected on macOS)"
           command -v perl && perl --version | sed -n 2p
 
