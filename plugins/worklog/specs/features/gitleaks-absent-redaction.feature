@@ -297,11 +297,16 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Then the entry is stored and its quote holds the glued-secrets marker
 
   # proves: hooks/tests/worklog-record.bats "an aws-shaped run inside a longer token does not split the token"
-  # proves: hooks/tests/worklog-record.bats "a long uppercase word that starts like an aws key id is redacted"
-  Scenario: An AWS-shaped run keeps a longer token whole, and a long AKIA or ASIA word is redacted
-    Given an npm or gitlab token with an AWS-shaped run inside it, and an uppercase word that starts with ASIA
+  Scenario: An AWS-shaped run keeps a longer token whole
+    Given an npm or gitlab token with an AWS-shaped run inside it
     When the built-in rules run
-    Then the token gets its own single marker, and the word gets the aws-access-key marker
+    Then the token gets its own single marker
+
+  # proves: hooks/tests/worklog-record.bats "a long uppercase word that starts like an aws key id is redacted"
+  Scenario: A long AKIA or ASIA word is redacted
+    Given an uppercase word of 20 or more characters that starts with ASIA
+    When the built-in rules run
+    Then the word gets the aws-access-key marker
 
   # proves: hooks/tests/worklog-record.bats "an aws-shaped run inside a blocked token does not split the token"
   Scenario: An AWS-shaped run inside a still-blocked token keeps the token whole
@@ -320,3 +325,15 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Given a glued ghp pair, a glued AWS key id pair, and a long chain of token pairs
     When the built-in rules run twice
     Then the second run changes nothing
+
+  # proves: hooks/tests/worklog-record.bats "with gitleaks, a short tail after a glued aws key id run is not left raw"
+  Scenario: With gitleaks, a short tail after a glued AWS key id run is not left raw
+    Given a value that holds two AWS key ids in a row followed by a short mixed-case tail
+    When the text is redacted with the real gitleaks
+    Then the short tail is not in the output
+
+  # proves: hooks/tests/worklog-record.bats "with gitleaks, a short piece in front of an aws key id run is not left raw"
+  Scenario: With gitleaks, a short piece in front of an AWS key id run is not left raw
+    Given a Stripe key and a short piece directly in front of an AWS key id run
+    When the text is redacted with the real gitleaks
+    Then the short piece is not in the output

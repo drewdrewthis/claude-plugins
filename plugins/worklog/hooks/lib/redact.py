@@ -16,11 +16,13 @@ Two layers:
     failure is reported to the caller, never swallowed: the built-ins still
     ran, but the operator should see it. Its ABSENCE is not a failure; the
     caller reports it once per session (the built-in list is narrower than
-    gitleaks' rule set). The built-ins run again on the gitleaks output.
+    gitleaks' rule set). It scans the output of the rules alone; the key id run
+    and tail steps then run on its result.
 
 Limits of the built-in layer: once the rules settle, a run of 8 or more token
 characters directly after a marker is swept into <redacted:glued-secrets>, so a
-glued second token (ghp_ then ghp_, two AWS key ids) leaves no raw body. A tail
+glued second token (ghp_ then ghp_) leaves no raw body; two glued AWS key ids
+are taken whole by the key id run rule. A tail
 shorter than 8 characters directly after a marker stays. A letter, digit or
 underscore glued directly in front of a start-guarded token (an uppercase
 letter or digit for an AWS key id) hides it from the start guard, because the
@@ -28,7 +30,7 @@ guard keeps ordinary identifiers such as npm_config_registry unchanged. The
 sweep also removes ordinary text glued directly after a marker, and an
 all-uppercase word of 20 or more characters that starts with AKIA or ASIA is
 redacted as a key id; that over-redaction is accepted. gitleaks scans the
-built-in output, so it adds no cover for these.
+rules' output, so it adds no cover for these.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
@@ -97,7 +99,8 @@ _RULES_ADD = [
 # Open-ended twin of the base aws rule: no end guard, so a longer run (two glued
 # ids, an id plus extra characters) is redacted whole. It is not in _RULES_ADD:
 # it runs only on settled text (see _step), so a token rule that is still
-# blocked cannot lose part of its body to it.
+# blocked cannot lose part of its body to it. Exception: a token blocked by a
+# glued key id run does not keep its named marker; the tail sweep takes its pieces.
 _AWS_RUN = re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16,}")
 
 # Characters a secret value can hold; shared by the keyword rule and tail sweep.
@@ -176,7 +179,8 @@ def _step(s):
     if out != s:
         return out
     # Only on settled text, so every token rule takes its token first and
-    # chains keep their named markers.
+    # chains keep their named markers (except a token blocked by a glued key id
+    # run: the tail sweep takes its pieces).
     out = _aws_runs(s)
     return out if out != s else _sweep(s)
 
@@ -192,6 +196,18 @@ def builtin(s):
         s = out
     # Still changing after the cap, so some token may be raw: one marker for the
     # whole string, never a partly redacted one.
+    return _GLUED
+
+
+def _rules(s):
+    """The rules alone, repeated until stable; fail closed past _MAX_PASSES."""
+    # gitleaks must see what it saw before the run and tail steps existed, so no
+    # finding is lost.
+    for _ in range(_MAX_PASSES):
+        out = _pass(s)
+        if out == s:
+            return s
+        s = out
     return _GLUED
 
 
@@ -255,12 +271,12 @@ def apply(s, findings):
 
 
 def redact_texts(texts):
-    """Built-ins, ONE gitleaks batch over all, built-ins again. -> (texts, failed)."""
-    texts = [builtin(t) for t in texts]
-    findings, failed = scan("\n".join(texts))
+    """Rules, ONE gitleaks batch over all, full built-ins. -> (texts, failed)."""
+    pre = [_rules(t) for t in texts]
+    findings, failed = scan("\n".join(pre))
     if not findings:
-        return texts, failed
+        return [builtin(t) for t in pre], failed
     # The result must be a builtin() fixed point: verified_quote runs builtin() on
     # the model's quote and then needs an exact match in this body. A gitleaks
     # marker with a glued tail would break that match.
-    return [builtin(apply(t, findings)) for t in texts], failed
+    return [builtin(apply(t, findings)) for t in pre], failed

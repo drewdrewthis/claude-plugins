@@ -2523,3 +2523,38 @@ assert_glued_stored() {
       '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
   [ "$(field '.requests[0].text')" = "leaked <redacted:npm-token>" ]
 }
+
+# real_redact_texts <text> — the text through redact_texts with the REAL
+# gitleaks first on PATH (the stub dir otherwise leads it).
+real_redact_texts() {
+  PATH="$(dirname "$(real_gitleaks)"):$PATH" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+texts, failed = redact.redact_texts([sys.argv[2]])
+if failed:
+    sys.exit(3)
+sys.stdout.write(texts[0])
+' "$HOOKS/lib" "$1"
+}
+
+# The open-ended AWS run step must not hide a value from gitleaks. On main,
+# gitleaks (generic-api-key) redacted the whole value; a run replaced before
+# the scan left a short mixed-case piece raw, below the glued-text sweep size.
+@test "with gitleaks, a short tail after a glued aws key id run is not left raw" {
+  require_real_gitleaks
+  tail_piece="aB3dE5g"
+  value="pul-$(fake_aws)$(fake_asia)$tail_piece"
+  run real_redact_texts "key = \"$value\""
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"$tail_piece"* ]]
+}
+
+@test "with gitleaks, a short piece in front of an aws key id run is not left raw" {
+  require_real_gitleaks
+  front_piece="uodm"
+  value="$(fake_key "sk_""live_" "aB3dE5gH7jK9mN1pQ3s" 19)$(fake_key "glp""at-" "$front_piece" 4)$(fake_key "AS""IA" "ZXCVBNMLKJHGFDSA765432QW" 20)"
+  run real_redact_texts "$value"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"$front_piece"* ]]
+}
