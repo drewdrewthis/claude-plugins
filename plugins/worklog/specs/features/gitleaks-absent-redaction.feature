@@ -295,3 +295,10 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Given a Pulumi token that only gitleaks flags, once alone and once directly before a URL path
     When a turn is recorded with the real gitleaks
     Then the entry is stored and its quote holds the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "an aws-shaped run inside a longer token does not split the token"
+  # proves: hooks/tests/worklog-record.bats "a long uppercase word that starts like an aws key id is redacted"
+  Scenario: An AWS-shaped run keeps a longer token whole, and a long AKIA or ASIA word is redacted
+    Given an npm or gitlab token with an AWS-shaped run inside it, and an uppercase word that starts with ASIA
+    When the built-in rules run
+    Then the token gets its own single marker, and the word gets the aws-access-key marker

@@ -2266,6 +2266,7 @@ fake_ghp2() { fake_key "gh""p_" "Zx9Cv8Bn7Mq6Wr5Et4Yu3Io2Pa1Sd0Fg" 36; }
 fake_gho()  { fake_key "gh""o_" "Mn4Bv5Cx6Zl7Ka8Js9Hd1Gf2Ep3Wo4Ui" 36; }
 fake_aws2() { fake_key "AK""IA" "MJHGFDSALKPOIUYT2345672W" 16; }
 fake_asia() { fake_key "AS""IA" "ZXCVBNMLKJHGFDSA765432QW" 16; }
+fake_aws3() { fake_key "AK""IA" "QZXRT5NBKDWP2367" 16; }
 
 # glued_rows <tokA> <tokB> — wraps the pair at the string start, after a space
 # and after "=", and checks the lead and trail are kept, a marker is present
@@ -2287,8 +2288,8 @@ glued_rows() {
 }
 
 @test "two glued aws key ids leave no raw key body" {
-  glued_rows "$(fake_aws2)" "$(fake_key "AK""IA" "QZXRT5NBKDWP2367" 16)"
-  glued_rows "$(fake_key "AK""IA" "QZXRT5NBKDWP2367" 16)" "$(fake_asia)"
+  glued_rows "$(fake_aws2)" "$(fake_aws3)"
+  glued_rows "$(fake_aws3)" "$(fake_asia)"
 }
 
 @test "three glued ghp tokens leave no raw token body" {
@@ -2331,10 +2332,14 @@ glued_rows() {
   input="x$(fake_npm)
 _$(fake_do)"
   [ "$(builtin_out "$input")" = "$input" ]
+  input="1$(fake_npm)"
+  [ "$(builtin_out "$input")" = "$input" ]
 }
 
 @test "known limit: an uppercase letter glued in front of an aws key id keeps the id raw" {
   input="A$(fake_aws)"
+  [ "$(builtin_out "$input")" = "$input" ]
+  input="9$(fake_aws)"
   [ "$(builtin_out "$input")" = "$input" ]
 }
 
@@ -2368,6 +2373,7 @@ for s in (ghp * (200000 // len(ghp) + 1),
 # An open-ended body takes the start of the next token; the tail sweep removes
 # what is left of it.
 @test "a token directly after an open-ended body leaves no raw token body" {
+  # row: first|second|marker the output starts with|chars cut from first|from second
   for row in "$(fake_npm)|$(fake_key "sk_""test_" "$ALNUM" 24)|<redacted:npm-token>|4|8" \
              "$(fake_hf)|$(fake_npm)|<redacted:huggingface-token>|3|4" \
              "$(fake_ghp)|$(fake_ghp2)|<redacted:github-pat>|4|4" \
@@ -2379,11 +2385,24 @@ for s in (ghp * (200000 // len(ghp) + 1),
   done
 }
 
+# An AWS-shaped run inside a longer token must not cut it in two.
+@test "an aws-shaped run inside a longer token does not split the token" {
+  local lower="abcdefghijklmnopqrst" aws
+  aws="$(fake_key "AK""IA" "QZXRT5NBKDWP2367AB" 18)"
+  [ "$(builtin_out "$(fake_key "np""m_" "$lower" 20)$aws$lower")" = "<redacted:npm-token>" ]
+  [ "$(builtin_out "$(fake_key "glpat-" "$lower" 10)${aws}ccc")" = "<redacted:gitlab-pat>" ]
+}
+
+@test "a long uppercase word that starts like an aws key id is redacted" {
+  [ "$(builtin_out "ASIAPACIFICHEADQUARTERSOFFICE")" = "<redacted:aws-access-key>" ]
+}
+
 # --- glued pairs end to end -------------------------------------------------
 
 # glued_turn <pair> — one turn whose prompt holds the pair in a plain sentence
 # (no keyword near it). The stub reply quotes the sentence as the model is
-# shown it: the built-in output of the sentence.
+# shown it: the built-in output of the sentence; body_free is the independent
+# check.
 glued_turn() {
   local sentence="we saw $1 in the logs yesterday"
   user_line "$U1" "$sentence" > "$TX"
@@ -2395,12 +2414,12 @@ glued_turn() {
 # marker, the row and the model stdin are body-free, and the words around the
 # pair reach the model.
 assert_glued_stored() {
-  [ "$(field '.requests|length')" -eq 1 ]
-  [[ "$(field '.requests[0].quote')" == *'<redacted:'* ]]
-  body_free "$(cat "$WORKLOG_JSONL")" "$@"
-  body_free "$(cat "$CLAUDE_STDIN_LOG")" "$@"
-  grep -qF -- "we saw " "$CLAUDE_STDIN_LOG"
-  grep -qF -- " in the logs yesterday" "$CLAUDE_STDIN_LOG"
+  [ "$(field '.requests|length')" -eq 1 ] || { echo "not one request stored" >&2; return 1; }
+  [[ "$(field '.requests[0].quote')" == *'<redacted:'* ]] || { echo "quote has no marker" >&2; return 1; }
+  body_free "$(cat "$WORKLOG_JSONL")" "$@" || { echo "raw body in the row" >&2; return 1; }
+  body_free "$(cat "$CLAUDE_STDIN_LOG")" "$@" || { echo "raw body in the model stdin" >&2; return 1; }
+  grep -qF -- "we saw " "$CLAUDE_STDIN_LOG" || { echo "lead words missing from the model stdin" >&2; return 1; }
+  grep -qF -- " in the logs yesterday" "$CLAUDE_STDIN_LOG" || { echo "trail words missing from the model stdin" >&2; return 1; }
 }
 
 @test "with gitleaks absent a glued ghp pair in the prompt is stored redacted" {
