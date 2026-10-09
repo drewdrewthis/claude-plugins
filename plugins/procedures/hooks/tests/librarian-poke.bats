@@ -79,6 +79,11 @@ claude_never_ran() { [ ! -f "$CLAUDE_LOG" ]; }
 # An unread line, so the worker's batch issues something and claude runs.
 unread_line() { user_prompt; }
 
+# Epoch seconds -> touch -t stamp. GNU date takes -d @N, BSD date takes -r N;
+# `touch -d` itself is GNU-only, `touch -t` is POSIX.
+_stamp() { date -d "@$1" +%Y%m%d%H%M.%S 2>/dev/null || date -r "$1" +%Y%m%d%H%M.%S; }
+_touch_ago() { touch -t "$(_stamp $(( $(date +%s) - $2 )))" "$1"; }
+
 @test "hooks.json registers librarian-poke on Stop with async, no asyncRewake" {
   jq -e '.hooks.Stop[] | .hooks[] | select(.command == "bash ${CLAUDE_PLUGIN_ROOT}/hooks/librarian-poke.sh")
         | .async == true and (has("asyncRewake") | not)' "$HOOKS/hooks.json" >/dev/null
@@ -433,7 +438,7 @@ EOF
 # claim is stolen and two librarians write at once.
 @test "claim: the default TTL derives from the runtime cap — a 1000s-old claim is kept, then stolen under a 100s cap" {
   user_prompt
-  mkdir -p "$LIBRARIAN_LOCK.d"; touch -d "@$(( $(date +%s) - 1000 ))" "$LIBRARIAN_LOCK.d"
+  mkdir -p "$LIBRARIAN_LOCK.d"; _touch_ago "$LIBRARIAN_LOCK.d" 1000
   wake; [ "$status" -eq 0 ]
   claude_never_ran
   [ -d "$LIBRARIAN_LOCK.d" ]

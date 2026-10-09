@@ -94,6 +94,10 @@ EOF
 }
 
 # ---- AC1: malformed frontmatter blocks, no commit, actionable queue ----
+# GNU stat -c vs BSD stat -f.
+_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+_inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
+
 @test "AC1: missing required key blocks, no commit, queue names record+root+check" {
   _fm "$ROOT/records/failure-modes/bad.md" fm.bad
   sed -i.bak '/^status:/d' "$ROOT/records/failure-modes/bad.md"; rm -f "$ROOT"/records/failure-modes/*.bak
@@ -809,7 +813,7 @@ _leak_row() { printf '{"leak":"ghp_abcdefghijklmnopqrstuvwxyz0123456789"}\n' >> 
   _leak_row; printf '{"clean":1}\n' >> "$ROOT/mistakes.jsonl"
   _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "2 mistakes" --why w --source s --evidence e
   [ "$status" -eq 0 ]
-  [ "$(stat -c %a "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl")" = "600" ]
+  [ "$(_mode "$PROCEDURES_STATE_DIR/mistakes.quarantine.jsonl")" = "600" ]
   [[ "$(git -C "$ROOT" log -1 --format=%s)" == *": 1 mistake (1 quarantined)" ]]
   grep -q -- '--release-quarantine' "$QUEUE"
 }
@@ -932,11 +936,11 @@ _glued_head() {
   _committed_jsonl '{"old":1}'
   _leak_row
   chmod 640 "$ROOT/mistakes.jsonl"
-  local ino; ino="$(stat -c %i "$ROOT/mistakes.jsonl")"
+  local ino; ino="$(_inode "$ROOT/mistakes.jsonl")"
   _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what x --why w --source s --evidence e
   [ "$status" -eq 0 ]
-  [ "$(stat -c %i "$ROOT/mistakes.jsonl")" != "$ino" ]
-  [ "$(stat -c %a "$ROOT/mistakes.jsonl")" = "640" ]
+  [ "$(_inode "$ROOT/mistakes.jsonl")" != "$ino" ]
+  [ "$(_mode "$ROOT/mistakes.jsonl")" = "640" ]
 }
 
 @test "AC37: --release-quarantine refuses while mistakes.jsonl has uncommitted changes" {

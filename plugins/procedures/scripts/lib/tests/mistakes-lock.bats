@@ -8,9 +8,14 @@ setup() {
   export MISTAKES_NO_FLOCK=1 MISTAKES_LOCK_WAIT_SECS=0
 }
 
+# Epoch seconds -> touch -t stamp. GNU date takes -d @N, BSD date takes -r N;
+# `touch -d` itself is GNU-only, `touch -t` is POSIX.
+_stamp() { date -d "@$1" +%Y%m%d%H%M.%S 2>/dev/null || date -r "$1" +%Y%m%d%H%M.%S; }
+_touch_ago() { touch -t "$(_stamp $(( $(date +%s) - $2 )))" "$1"; }
+
 @test "a stale lock is taken over even when it holds files (renamed, not removed in place)" {
   mkdir "$D/l.d"; : > "$D/l.d/owner"
-  touch -d '-5 minutes' "$D/l.d"
+  _touch_ago "$D/l.d" 300
   run bash -c "source '$LIB'; mistakes_locked '$D/l' true"
   [ "$status" -eq 0 ]
   [ ! -e "$D/l.d" ]
