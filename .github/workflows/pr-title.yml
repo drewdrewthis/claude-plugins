@@ -56,9 +56,10 @@ jobs:
   # never see the change. Lives here (not a new workflow) to inherit `edited`.
   # Script tests: release-title-tests.yml.
   release-title:
-    # release-please own PRs are `chore(main): release ...` and touch plugin
-    # files by design.
-    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
+    # release-please PRs are opened by github-actions[bot] and touch plugin
+    # files by design. Matching the author stops a branch name alone from
+    # skipping the check.
+    if: ${{ !(startsWith(github.head_ref, 'release-please--') && github.event.pull_request.user.login == 'github-actions[bot]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -73,6 +74,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Via env, never interpolated into the script: titles are attacker-controlled.
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
         run: |
-          gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename' \
-            | .github/scripts/check-release-title.sh release-please-config.json
+          # A failed fetch must fail the step, not pass with an empty list.
+          # previous_filename catches files moved out of a plugin.
+          files="$RUNNER_TEMP/changed-files"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)' > "$files"
+          .github/scripts/check-release-title.sh release-please-config.json < "$files"

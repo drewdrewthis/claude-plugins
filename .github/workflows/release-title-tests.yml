@@ -33,7 +33,7 @@ concurrency:
 jobs:
   bats:
     runs-on: ubuntu-latest
-    # The suite is seconds of work with no network calls. A ten-minute ceiling
+    # The suite itself makes no network calls (apt runs before it). A ten-minute ceiling
     # turns a hang into a failed check instead of a job that burns the runner.
     timeout-minutes: 10
     steps:

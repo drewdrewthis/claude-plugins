@@ -78,3 +78,27 @@ run_check() { # <title> <config> <files...>
   run_check "fix(procedures): x" "$REAL" plugins/procedures/a
   [ "$status" -eq 0 ]
 }
+
+@test "empty stdin exits 2" {
+  export PR_TITLE="fix(alpha): x"
+  run bash -c 'printf "" | "$0" "$1"' "$SCRIPT" "$CFG"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no changed files"* ]]
+}
+
+@test "perf on managed plugin passes" {
+  run_check "perf(procedures): x" "$REAL" plugins/procedures/a
+  [ "$status" -eq 0 ]
+}
+
+@test "feat with breaking bang passes" {
+  run_check "feat(alpha)!: x" "$CFG" plugins/alpha/x
+  [ "$status" -eq 0 ]
+}
+
+@test "two plugins, one unmanaged: fails and names only the unmanaged one" {
+  run_check "fix(alpha): x" "$CFG" plugins/alpha/x plugins/beta/y
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not manage plugins/beta"* ]]
+  [[ "$output" != *"does not manage plugins/alpha"* ]]
+}

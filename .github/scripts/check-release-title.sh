@@ -8,6 +8,7 @@
 #
 # Usage: PR_TITLE="fix(x): y" check-release-title.sh <release-please-config.json>
 #        changed file paths, one per line, on stdin.
+# Empty stdin exits 2: a real PR always changes at least one file.
 set -euo pipefail
 
 usage() {
@@ -22,7 +23,13 @@ join() { paste -sd, - | sed 's/,/, /g'; }
 
 releasing_types=$(jq -r '.["changelog-sections"][] | select(.hidden != true) | .type' "$config")
 
-plugins=$(sed -n 's#^plugins/\([^/]\{1,\}\)/.*#\1#p' | sort -u)
+changed=$(cat)
+if [[ -z "$changed" ]]; then
+  echo "::error::no changed files on stdin; refusing to pass" >&2
+  exit 2
+fi
+
+plugins=$(printf '%s\n' "$changed" | sed -n 's#^plugins/\([^/]\{1,\}\)/.*#\1#p' | sort -u)
 if [[ -z "$plugins" ]]; then
   echo "no plugin changes; nothing to release"
   exit 0
