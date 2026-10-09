@@ -931,7 +931,7 @@ PY
   # would silently keep these rows out of any rate a consumer computes.
   for w in transcript-unreadable judgment-unavailable store-unwritable \
            malformed-payload non-object-payload no-jq detach-failed \
-           gitleaks-failed lib-unreadable:redact redact-failed; do
+           gitleaks-failed lib-unreadable:redact redact-failed gitleaks-absent; do
     : > "$GATE_FAILOPEN_LOG"
     env HOME="$FAKE_HOME" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
       bash -c ". '$HOOKS/lib/gate-failopen.sh'; gate_failopen 'worklog-record' '$w' 'sess1'"
@@ -1416,9 +1416,12 @@ fake_ant() { fake_key "sk-""ant-""api03-" "Zy9Xw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe" 40;
 fake_ghp() { fake_key "gh""p_" "Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7k8" 36; }
 fake_slack() { printf '%s' "xo""xb-1234567890-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"; }
 fake_aws() { printf '%s' "AK""IA""Q3XZ7RT5NB2KD8WP"; }
-# An npm token: gitleaks 8.30.1 flags it (npm-access-token) with no keyword
-# context, and none of the hook's built-in rules match it.
+# An npm token. gitleaks 8.30.1 flags it (npm-access-token) AND the hook's
+# built-in rules now cover it (npm-token), so it is NOT a gitleaks-only fixture.
 fake_npm() { fake_key "np""m_" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5" 36; }
+# A Pulumi token: gitleaks 8.30.1 flags it (pulumi-api-token) with no keyword
+# context, and no built-in rule matches it. The gitleaks-only fixture.
+fake_pulumi() { fake_key "pu""l-" "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678" 40; }
 
 # real_gitleaks — path of the real binary, searched outside the stub dir.
 real_gitleaks() {
@@ -1431,13 +1434,13 @@ real_gitleaks() {
   return 1
 }
 
-# assert_gitleaks_only <key> — premise guard (real binary): gitleaks names
-# npm-access-token for the key and the built-in rules leave it untouched, so
-# the stubbed tests model a real finding on a shape no built-in covers.
+# assert_gitleaks_only <key> <rule-id> — premise guard (real binary): gitleaks
+# names <rule-id> for the key and the built-in rules leave it untouched, so the
+# stubbed tests model a real finding on a shape no built-in covers.
 assert_gitleaks_only() {
   local gl; gl="$(real_gitleaks)"
   run bash -c "printf 'key = \"%s\"\n' '$1' | '$gl' stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null | jq -r '.[].RuleID'"
-  [ "$output" = "npm-access-token" ]
+  [ "$output" = "$2" ]
   run python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.exit(0 if redact.builtin(sys.argv[2]) == sys.argv[2] else 1)" "$HOOKS/lib" "$1"
   [ "$status" -eq 0 ]
 }
@@ -1526,30 +1529,30 @@ assert_redacted_in_worklog() {
 }
 
 @test "a gitleaks-only secret in the prompt is redacted in the stored row" {
-  KEY="$(fake_npm)"
+  KEY="$(fake_pulumi)"
   fixture_secret_prompt "$KEY"
-  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- \
-    "$(redacted_reply npm-access-token)"
-  assert_redacted_in_worklog npm-access-token "$KEY"
+  drive_with "GITLEAKS_STUB=find:pulumi-api-token:$KEY" -- \
+    "$(redacted_reply pulumi-api-token)"
+  assert_redacted_in_worklog pulumi-api-token "$KEY"
 }
 
 @test "a gitleaks-only secret in the prompt is redacted in the stdin the model receives" {
-  KEY="$(fake_npm)"
+  KEY="$(fake_pulumi)"
   fixture_secret_prompt "$KEY"
-  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- "$CLEAN"
-  grep -qF -- "<redacted:npm-access-token>" "$CLAUDE_STDIN_LOG"
+  drive_with "GITLEAKS_STUB=find:pulumi-api-token:$KEY" -- "$CLEAN"
+  grep -qF -- "<redacted:pulumi-api-token>" "$CLAUDE_STDIN_LOG"
   ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
 }
 
 @test "a gitleaks-only secret in a model-written text is stored redacted" {
   # Proves the gitleaks pass in wl_entries: no built-in matches this shape and
   # the candidate body never held it.
-  KEY="$(fake_npm)"
+  KEY="$(fake_pulumi)"
   fixture_full
-  drive_with "GITLEAKS_STUB=find:npm-access-token:$KEY" -- \
+  drive_with "GITLEAKS_STUB=find:pulumi-api-token:$KEY" -- \
     "$(jq -nc --arg u "$U1" --arg t "leaked $KEY" \
       '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
-  [ "$(field '.requests[0].text')" = "leaked <redacted:npm-access-token>" ]
+  [ "$(field '.requests[0].text')" = "leaked <redacted:pulumi-api-token>" ]
 }
 
 # unjudged_row — the stored row is the mechanical envelope with no model output.
@@ -1720,9 +1723,9 @@ gitleaks_findings() {
   [ "$(gitleaks_findings "$WORKLOG_JSONL" | jq -c .)" = "[]" ]
 }
 
-@test "the real gitleaks flags the npm token shape no built-in rule covers" {
+@test "the real gitleaks flags the pulumi token shape no built-in rule covers" {
   require_real_gitleaks
-  assert_gitleaks_only "$(fake_npm)"
+  assert_gitleaks_only "$(fake_pulumi)" pulumi-api-token
 }
 
 @test "a password= value with no known prefix is redacted as generic-secret by the built-ins" {
@@ -1827,12 +1830,12 @@ PY
 
 # --- real binary, end to end ----------------------------------------------
 
-@test "the real gitleaks redacts an npm token from prompt to stored row" {
+@test "the real gitleaks redacts a pulumi token from prompt to stored row" {
   require_real_gitleaks
-  KEY="$(fake_npm)"
+  KEY="$(fake_pulumi)"
   fixture_secret_prompt "$KEY"
-  drive_with "GITLEAKS_STUB=passthrough" -- "$(redacted_reply npm-access-token)"
-  assert_redacted_in_worklog npm-access-token "$KEY"
+  drive_with "GITLEAKS_STUB=passthrough" -- "$(redacted_reply pulumi-api-token)"
+  assert_redacted_in_worklog pulumi-api-token "$KEY"
 }
 
 # --- truncation never leaves half a marker ---------------------------------
@@ -1876,10 +1879,81 @@ path_without_gitleaks() {
   [ "$(field '.requests|length')" -eq 1 ]
 }
 
-@test "with gitleaks absent no fail-open row is logged" {
+# gitleaks_absent_lines — fail-open lines for this writer carrying the
+# gitleaks-absent why, verbatim.
+gitleaks_absent_lines() { grep -F -- '"why":"gitleaks-absent"' "$GATE_FAILOPEN_LOG" 2>/dev/null || true; }
+
+# payload_for_session <sid> <transcript> — a Stop payload for another session.
+payload_for_session() {
+  jq -nc --arg s "$1" --arg tp "$2" \
+    '{session_id:$s, hook_event_name:"Stop", transcript_path:$tp, cwd:"/tmp"}'
+}
+
+@test "with gitleaks absent one gitleaks-absent note is logged, stored literally" {
   fixture_full
   drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
-  no_log
+  [ "$(why)" = "gitleaks-absent" ]
+}
+
+@test "the gitleaks-absent note is attributed to this writer and this session" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  [ "$(jq -r '.gate + " " + .session_id' "$GATE_FAILOPEN_LOG")" = "worklog-record $SID" ]
+}
+
+@test "a second turn of the same session adds no gitleaks-absent note" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  fixture_next_turn
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 2 ]          # turn 2 reached the store
+  [ "$(gitleaks_absent_lines | wc -l)" -eq 1 ]
+}
+
+@test "the first turn of a different session adds one more gitleaks-absent note" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  # Its own transcript and turn: the store dedups on the turn, so a repeat of
+  # the first turn would store no row and never reach the note.
+  user_line "$U7" "do another thing" > "$TXDIR/other.jsonl"
+  PAYLOAD="$(payload_for_session "$SID-other" "$TXDIR/other.jsonl")" \
+    drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 2 ]          # session 2 stored its row
+  [ "$(gitleaks_absent_lines | jq -r .session_id | sort | tr '\n' ' ')" = "$SID $SID-other " ]
+}
+
+@test "a gitleaks file without the execute bit gives the same note as no file" {
+  d="$(path_without_gitleaks)"
+  printf '#!/bin/sh\nexit 0\n' > "$d/gitleaks"
+  chmod -x "$d/gitleaks"
+  fixture_full
+  drive_with "PATH=$d" -- "$CLEAN"
+  [ "$(gitleaks_absent_lines | wc -l)" -eq 1 ]
+}
+
+@test "with gitleaks absent and the fail-open log unwritable the row is still stored" {
+  fixture_full
+  run drive_with "PATH=$(path_without_gitleaks)" "GATE_FAILOPEN_LOG=$SCRATCH/no-such-dir/gate-failopen.jsonl" -- "$CLEAN"
+  [ "$status" -eq 0 ]
+  [ "$(field '.requests|length')" -eq 1 ]
+}
+
+@test "with gitleaks absent and the model unavailable exactly one gitleaks-absent is logged" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- ""
+  [ "$(gitleaks_absent_lines | wc -l)" -eq 1 ]
+}
+
+@test "with gitleaks absent and the model unavailable exactly one judgment-unavailable is logged" {
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- ""
+  [ "$(note_count judgment-unavailable)" -eq 1 ]
+}
+
+@test "with a working gitleaks no gitleaks-absent note is logged" {
+  fixture_full
+  drive "$CLEAN"
+  [ "$(gitleaks_absent_lines | wc -l)" -eq 0 ]
 }
 
 @test "the gitleaks-absent PATH really has no gitleaks" {
@@ -1959,4 +2033,104 @@ builtin_twice() {
 @test "running the built-in rules twice gives the same text as running them once" {
   IN="$(fake_slack) abcdefghijklmnopqrstuvwx password=abcdefghijklmnopqrstuvwx"
   [ "$(builtin_twice "$IN")" = "$(builtin_out "$IN")" ]
+}
+
+# --- built-in coverage of shapes that were gitleaks-only ---------------------
+#
+# With gitleaks absent the built-in rules are the only layer, so the common
+# gitleaks-only shapes need a built-in each. Widths follow gitleaks 8.30.1: the
+# short-prefix rules are strict so ordinary code text is not eaten.
+
+ALNUM="aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5kL7mN9pQ1sT3vX5zA7cD9fG1hJ3kL5mN7pQ9sT1vX3zA5cD7fG9hJ1kL3mN5pQ7sT9vX1zA3cD5fG7hJ9kL1mN3pQ5sT7vX9zA1cD3fG5hJ7kL9mN1pQ3sT5vX7zA9cD1fG3hJ5kL7mN9pQ1sT3vX5zA7cD9fG1hJ3kL5mN7pQ9sT1vX3zA5cD7fG9hJ1kL3"
+HEX="a1b2c3d4e5f60718293a4b5c6d7e8f9012345678a1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+fake_gitlab()   { fake_key "glp""at-" "$ALNUM" 20; }
+fake_hf()       { fake_key "h""f_" "kQmZpXvRtYwNcBdLfHgJsAeUoI" 34; }
+fake_sendgrid() { printf '%s.%s' "$(fake_key "S""G." "$ALNUM" 22)" "$(fake_key "" "$ALNUM" 43)"; }
+fake_xapp()     { printf '%s%s-%s-%s' "xa""pp-1-A" "$(fake_key "" "A1B2C3D4E5" 10)" "$(fake_key "" "1234567890123" 13)" "$(fake_key "" "$HEX" 64)"; }
+fake_xoxe()     { fake_key "xo""xe-1-" "A1B2C3D4E5F6G7H8I9J0" 146; }
+fake_whook()    { printf '%s%s' "https://ho""oks.slack.com/services/" "T01ABCDEF/B01ABCDEF/$(fake_key "" "$ALNUM" 24)"; }
+fake_stripe()   { fake_key "sk_""test_" "$ALNUM" 24; }
+fake_jwt()      { printf '%s.%s.%s' "ey""JhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" "ey""JzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ" "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"; }
+fake_op()       { fake_key "ops_""eyJ" "$ALNUM" 250; }
+fake_do()       { fake_key "do""p_v1_" "$HEX" 64; }
+fake_pypi()     { fake_key "py""pi-AgEIcHlwaS5vcmc" "$ALNUM" 70; }
+fake_shopify()  { fake_key "shp""at_" "$HEX" 32; }
+fake_linear()   { fake_key "lin""_api_" "$ALNUM" 40; }
+fake_vault()    { fake_key "hv""s." "$ALNUM" 95; }
+fake_doppler()  { fake_key "dp.""pt." "$ALNUM" 43; }
+fake_atlassian() { fake_key "AT""ATT3" "$ALNUM" 186; }
+fake_grafana()  { printf '%s_%s' "$(fake_key "gl""sa_" "$ALNUM" 32)" "$(fake_key "" "a1b2c3d4" 8)"; }
+
+# The rows of the planning marker table: <builder> <marker>.
+BUILTIN_TABLE="fake_npm:npm-token fake_gitlab:gitlab-pat fake_hf:huggingface-token
+fake_sendgrid:sendgrid-key fake_xapp:slack-token fake_xoxe:slack-token
+fake_whook:slack-webhook fake_stripe:stripe-key fake_jwt:jwt
+fake_op:1password-token fake_do:digitalocean-token fake_pypi:pypi-token
+fake_shopify:shopify-token fake_linear:linear-key fake_vault:vault-token
+fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-token"
+
+@test "every listed token shape redacts to exactly its own marker" {
+  bad=""
+  for row in $BUILTIN_TABLE; do
+    t="$("${row%%:*}")"
+    [ "$(builtin_out "before $t after")" = "before <redacted:${row#*:}> after" ] || bad="$bad ${row%%:*}"
+  done
+  [ -z "$bad" ] || { echo "wrong or missing marker for:$bad" >&2; return 1; }
+}
+
+@test "a 1Password service-account token maps to 1password-token, not jwt" {
+  [ "$(builtin_out "k $(fake_op) k")" = "k <redacted:1password-token> k" ]
+}
+
+@test "running the built-ins twice on every listed token gives the same text as once" {
+  IN=""
+  for row in $BUILTIN_TABLE; do IN="$IN $("${row%%:*}")"; done
+  [ "$(builtin_twice "$IN")" = "$(builtin_out "$IN")" ]
+}
+
+@test "the real gitleaks flags every fake in the table, so the fakes are realistic" {
+  require_real_gitleaks
+  bad=""
+  for row in $BUILTIN_TABLE; do
+    t="$("${row%%:*}")"
+    n="$(printf 'key = "%s"\n' "$t" | "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null | jq 'length')"
+    [ "${n:-0}" -ge 1 ] || bad="$bad ${row%%:*}"
+  done
+  [ -z "$bad" ] || { echo "gitleaks did not flag:$bad" >&2; return 1; }
+}
+
+@test "ordinary code text that resembles a short prefix comes back unchanged" {
+  bad=""
+  for s in npm_config_registry 'hf_hub_download(repo_id)' SG.fields \
+           "ey""Jabcdefghijklmn.ey""Jabcdefghijklmn.abcdefghij" \
+           lin_api_version dp.pt.x glpat-short hvs.short; do
+    [ "$(builtin_out "$s")" = "$s" ] || bad="$bad [$s]"
+  done
+  [ -z "$bad" ] || { echo "changed:$bad" >&2; return 1; }
+}
+
+# --- end to end with gitleaks absent ----------------------------------------
+
+@test "with gitleaks absent an npm token in the prompt is stored as its marker" {
+  KEY="$(fake_npm)"
+  fixture_secret_prompt "$KEY"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$(redacted_reply npm-token)"
+  assert_redacted_in_worklog npm-token "$KEY"
+}
+
+@test "with gitleaks absent an npm token in the prompt is not in the stdin the model receives" {
+  KEY="$(fake_npm)"
+  fixture_secret_prompt "$KEY"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$CLEAN"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
+}
+
+@test "with gitleaks absent a model-written text holding an npm token is stored redacted" {
+  KEY="$(fake_npm)"
+  fixture_full
+  drive_with "PATH=$(path_without_gitleaks)" -- \
+    "$(jq -nc --arg u "$U1" --arg t "leaked $KEY" \
+      '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests[0].text')" = "leaked <redacted:npm-token>" ]
 }

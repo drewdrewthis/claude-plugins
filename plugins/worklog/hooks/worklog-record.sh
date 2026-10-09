@@ -55,9 +55,10 @@
 # one batch per call. If gitleaks IS on PATH and fails (either pass), the row is
 # written UNJUDGED (mechanical fields only, which carry no secrets) and
 # gitleaks-failed is noted once: built-ins alone must not stand in for a layer
-# that was meant to run. If gitleaks is ABSENT: built-ins only, no note — a
-# machine without gitleaks has no gitleaks pre-commit to block either, and a
-# note every turn would swamp the fail-open rate. An
+# that was meant to run. If gitleaks is ABSENT: built-ins only, and
+# gitleaks-absent is noted ONCE per session (not per turn, which would swamp the
+# fail-open rate). It is not a failure: the row is complete and judged, but the
+# built-in list is narrower than gitleaks' rule set. An
 # unreadable lib fails open (lib-unreadable:redact), and a redaction that dies
 # at runtime fails open (redact-failed) — never a row without completed redaction.
 #
@@ -246,6 +247,16 @@ wl_sid() {
 # subshell so its exit does not end this process; best-effort, never blocks.
 wl_note() {
     ( gate_failopen worklog-record "$1" "$(wl_sid)" ) 2>/dev/null || true
+}
+
+# wl_note_once WHY — wl_note, unless this session already logged WHY.
+# The fail-open log is the dedupe state, so no marker file can drift from it.
+# The closing quote on the session id keeps one sid from matching as a prefix
+# of another. A missing or unreadable log means "not noted yet".
+wl_note_once() {
+    local sid; sid="$(wl_sid)"
+    grep -qF -- "\"gate\":\"worklog-record\",\"why\":\"$1\",\"session_id\":\"$sid\"" \
+        "$GATE_FAILOPEN_LOG" 2>/dev/null || wl_note "$1"
 }
 
 # wl_timeout SECS CMD... — run CMD with a hard wall-clock ceiling, portably.
@@ -632,6 +643,7 @@ print(json.dumps({
     "outcomes": entries("outcomes", "uuid"),
     "mistakes": entries("mistakes", "uuids"),
     "gitleaks_failed": gl_failed,
+    "gitleaks_absent": not redact.gitleaks_present(),
 }, ensure_ascii=False))
 PY
 }
@@ -890,6 +902,7 @@ print(json.dumps({
     "uuids": [u for u, _, _ in cands],
     "candidates": "\n".join(lines),
     "gitleaks_failed": gl_failed,
+    "gitleaks_absent": not redact.gitleaks_present(),
 }))
 PY
 }
@@ -1056,6 +1069,9 @@ wl_run() {
     local gl_failed=0
     [ "$(printf '%s' "$slice" | jq -r '.gitleaks_failed // false')" = "true" ] \
         && gl_failed=1
+    local gl_absent=0
+    [ "$(printf '%s' "$slice" | jq -r '.gitleaks_absent // false')" = "true" ] \
+        && gl_absent=1
     ask="$(printf '%s' "$slice" | jq -r '.ask_uuid // empty')"
     end="$(printf '%s' "$slice" | jq -r '.end_uuid // empty')"
     uuids="$(printf '%s' "$slice" | jq -c '.uuids // []')"
@@ -1181,6 +1197,7 @@ wl_run() {
     # Recorded LAST, and only after the mechanical row is safely on disk: the
     # machine-settled half of the turn is the durable part, and losing it to a
     # model outage would lose the turn entirely. gate_failopen exits.
+    [ "$gl_absent" -eq 0 ] || wl_note_once gitleaks-absent
     [ "$gl_failed" -eq 0 ] || gate_failopen worklog-record gitleaks-failed "$sid"
     [ "$judged" -eq 0 ] || gate_failopen worklog-record judgment-unavailable "$sid"
     exit 0

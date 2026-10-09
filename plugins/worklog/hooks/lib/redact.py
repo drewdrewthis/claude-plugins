@@ -6,9 +6,11 @@ becomes <redacted:NAME>.
 
 Two layers:
   * BUILT-IN rules — named regexes that need no binary and always run.
-  * gitleaks — when on PATH, ONE invocation per batch (never per string), whose
+  * gitleaks — when usable (gitleaks_present), ONE invocation per batch (never per string), whose
     findings' exact `Secret` is replaced. Its failure is reported to the caller,
     never swallowed: the built-ins still ran, but the operator should see it.
+    Its ABSENCE is not a failure; the caller reports it once per session (the
+    built-in list is narrower than gitleaks' rule set).
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
@@ -23,6 +25,9 @@ _PEM = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
     re.S)
 
+# Start guard for short prefixes: not mid-identifier.
+_B = r"(?<![A-Za-z0-9_])"
+
 # Most specific first: sk-lw/sk-ant must be consumed before the generic OpenAI
 # `sk-` shape, which would otherwise swallow them under the wrong name.
 _RULES = [
@@ -34,10 +39,31 @@ _RULES = [
     ("sk-ant", re.compile(r"sk-ant-[^\s\"'<>]{8,}")),
     ("openai-key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{32,}")),
     ("github-pat", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}")),
-    ("slack-token", re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}")),
+    ("slack-token", re.compile(
+        r"xox[abposre]-[A-Za-z0-9-]{10,}|xapp-\d-[A-Z0-9]+-\d+-[a-z0-9]+")),
+    ("slack-webhook", re.compile(
+        r"https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
     ("aws-access-key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")),
     ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
-    ("stripe-key", re.compile(r"[sr]k_live_[0-9A-Za-z]{16,}")),
+    ("stripe-key", re.compile(r"[sr]k_(?:live|test)_[0-9A-Za-z]{16,}")),
+    # Widths follow gitleaks 8.30.1. Short prefixes (npm_, hf_, SG., dp.pt.)
+    # are strict and start-guarded so ordinary identifiers are left alone.
+    ("npm-token", re.compile(_B + r"npm_[A-Za-z0-9]{36}")),
+    ("gitlab-pat", re.compile(_B + r"glpat-[\w-]{20,}")),
+    ("huggingface-token", re.compile(_B + r"hf_[A-Za-z]{34}")),
+    ("sendgrid-key", re.compile(_B + r"SG\.[\w-]{22}\.[\w-]{43}")),
+    # Before jwt: its base64 body is a JWT-shaped prefix.
+    ("1password-token", re.compile(r"ops_eyJ[A-Za-z0-9+/=_-]{250,}")),
+    ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{17,}\.eyJ[A-Za-z0-9_-]{17,}\.[A-Za-z0-9_-]{10,}")),
+    ("digitalocean-token", re.compile(_B + r"do[opr]_v1_[a-f0-9]{64}")),
+    ("pypi-token", re.compile(r"pypi-AgEIcHlwaS5vcmc[\w-]{50,}")),
+    ("shopify-token", re.compile(_B + r"shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}")),
+    ("linear-key", re.compile(_B + r"lin_api_[A-Za-z0-9]{40}")),
+    ("vault-token", re.compile(_B + r"hvs\.[\w-]{90,120}")),
+    ("doppler-token", re.compile(_B + r"dp\.pt\.[A-Za-z0-9]{43}")),
+    ("atlassian-token", re.compile(r"ATATT3[A-Za-z0-9_\-=]{186}")),
+    ("grafana-token", re.compile(
+        _B + r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}|" + _B + r"glc_[A-Za-z0-9+/]{32,400}={0,2}")),
 ]
 
 # A keyword plus a separator plus a 16+ char value. The whole match is replaced,
@@ -70,13 +96,22 @@ def builtin(s):
         for i, p in enumerate(parts))
 
 
+def gitleaks_present():
+    """True when a usable (executable, on PATH) gitleaks exists.
+
+    The single definition of "usable": scan() and the caller's absent note
+    both use it, so they cannot disagree.
+    """
+    return bool(shutil.which("gitleaks"))
+
+
 def scan(text):
     """One gitleaks run over `text`. Returns (findings, failed).
 
     findings is [(secret, rule_id)]. Absent gitleaks is (not failed): nothing
-    was attempted, so there is nothing to report.
+    was attempted; the caller reports absence via gitleaks_present().
     """
-    if not shutil.which("gitleaks") or not text.strip():
+    if not gitleaks_present() or not text.strip():
         return [], False
     try:
         secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
