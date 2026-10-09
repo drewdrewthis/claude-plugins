@@ -17,13 +17,13 @@ Two layers:
     caller reports it once per session (the built-in list is narrower than
     gitleaks' rule set).
 
-Known limit of the built-in layer: when two tokens are glued with no separator
-and the first token's body is open-ended and its alphabet includes the
-characters of the second token's prefix, the first rule takes the start of the
-second token, stops before the end of the second token, and the second body
-stays raw. This holds for most open-ended bodies and for the same token type
-twice (ghp_ directly followed by ghp_).
-gitleaks is the cover.
+Known limit of the built-in layer: two tokens glued with no separator can leave
+a token body raw. An open-ended first body can take the first characters of the
+second token, so the second rule cannot match (ghp_ directly followed by ghp_
+leaves the second body raw). An end guard can reject the first match (two AWS
+key ids glued together both stay raw). The repeat closes only the case where
+the second token matches once the first one is a marker. gitleaks is the
+cover.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
