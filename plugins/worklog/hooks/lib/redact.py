@@ -27,8 +27,9 @@ _PEM = re.compile(
     re.S)
 
 # Start guard for short prefixes: not mid-identifier. A JSON escape
-# (\n, \r, \t) directly before the prefix still counts as a start.
-_B = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrt]))"
+# (\n \r \t \b \f or \uXXXX) directly before the prefix still counts as a
+# start. Separate alternatives because lookbehinds are fixed-width.
+_B = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrtbf])|(?<=\\u[0-9A-Fa-f]{4}))"
 
 # Most specific first: sk-lw/sk-ant must be consumed before the generic OpenAI
 # `sk-` shape, which would otherwise swallow them under the wrong name.
@@ -47,7 +48,11 @@ _RULES = [
         r"(?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
     ("aws-access-key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")),
     ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
-    ("stripe-key", re.compile(_B + r"[sr]k_(?:live|test|prod)_[0-9A-Za-z]{10,}")),
+    # The live shape is unguarded (a guard would only remove matches);
+    # the wider test/prod and 10+ forms are start-guarded.
+    ("stripe-key", re.compile(
+        r"[sr]k_live_[0-9A-Za-z]{16,}|"
+        + _B + r"[sr]k_(?:live|test|prod)_[0-9A-Za-z]{10,}")),
     # Widths are gitleaks 8.30.1's minimums, open-ended so a longer token
     # leaves no raw tail. Rules that start with _B are start-guarded so
     # ordinary identifiers are left alone.

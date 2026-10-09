@@ -249,13 +249,14 @@ wl_note() {
     ( gate_failopen worklog-record "$1" "$(wl_sid)" ) 2>/dev/null || true
 }
 
-# wl_note_once WHY SID — wl_note, unless this session already logged WHY.
+# wl_note_once WHY SID — note WHY under SID, unless SID already logged it.
 # The fail-open log is the dedupe state, so no marker file can drift from it.
 # The closing quote on the session id keeps one sid from matching as a prefix
 # of another. A missing or unreadable log means "not noted yet".
 wl_note_once() {
     grep -qF -- "\"gate\":\"worklog-record\",\"why\":\"$1\",\"session_id\":\"$2\"" \
-        "$GATE_FAILOPEN_LOG" 2>/dev/null || wl_note "$1"
+        "$GATE_FAILOPEN_LOG" 2>/dev/null \
+        || ( gate_failopen worklog-record "$1" "$2" ) 2>/dev/null || true
 }
 
 # wl_timeout SECS CMD... — run CMD with a hard wall-clock ceiling, portably.

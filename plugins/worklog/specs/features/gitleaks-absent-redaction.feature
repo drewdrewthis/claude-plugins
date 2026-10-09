@@ -110,6 +110,12 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run
     Then the key is replaced by its marker and the backslash-n is kept
 
+  # proves: hooks/tests/worklog-record.bats "a stripe live key right after KEY_ or a literal equals sign still redacts"
+  Scenario: A live stripe key is redacted after an identifier or an escaped equals sign
+    Given a stripe live key directly after KEY_, and directly after a literal backslash-u equals sign
+    When the built-in rules run
+    Then the raw key body is gone and the stripe marker is present
+
   # proves: hooks/tests/worklog-record.bats "with gitleaks absent an npm token in the prompt is stored as its marker"
   Scenario: An npm token in the prompt is stored redacted
     Given gitleaks is not on PATH and an npm token in the prompt

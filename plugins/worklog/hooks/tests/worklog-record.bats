@@ -2113,7 +2113,7 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   for s in npm_config_registry 'hf_hub_download(repo_id)' SG.fields \
            "ey""Jabcdefghijklmn.ey""Jabcdefghijklmn.abcdefghij" \
            lin_api_version dp.pt.x glpat-short hvs.short \
-           risk_test_handlesemptystringinput task_live_ConfigurationSettings \
+           risk_test_handlesemptystringinput \
            '\task_test_ConfigurationSettings'; do
     [ "$(builtin_out "$s")" = "$s" ] || bad="$bad [$s]"
   done
@@ -2124,6 +2124,15 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
 @test "a stripe key right after a literal backslash-n still redacts" {
   t="$(fake_key "sk_""live_" "$ALNUM" 24)"
   [ "$(builtin_out "x\\n$t")" = 'x\n<redacted:stripe-key>' ]
+}
+
+@test "a stripe live key right after KEY_ or a literal equals sign still redacts" {
+  t="$(fake_key "sk_""live_" "$ALNUM" 24)"
+  for pre in 'KEY_' '\u003d'; do
+    out="$(builtin_out "$pre$t")"
+    [[ "$out" == *'<redacted:stripe-key>'* ]] || { echo "kept: $out" >&2; return 1; }
+    [[ "$out" != *"${t#sk_live_}"* ]] || { echo "raw body: $out" >&2; return 1; }
+  done
 }
 
 # --- end to end with gitleaks absent ----------------------------------------
