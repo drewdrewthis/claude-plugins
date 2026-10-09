@@ -2245,33 +2245,258 @@ if dt >= 10:
   [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
 }
 
-# When the first token's body is open-ended and its alphabet includes the next
-# token's prefix characters, the first rule takes the start of the second token
-# and the second body stays raw in the built-in output. This includes the same
-# type twice. gitleaks scans the built-in output: its generic rule catches some
-# leftovers and misses others (the ghp_ leftover stays raw). If a rule change
-# closes it, update this test.
-@test "known limit: a token directly after an open-ended body keeps its raw body" {
-  for row in "$(fake_npm)$(fake_key "sk_""test_" "$ALNUM" 24)|<redacted:npm-token>_test_" \
-             "$(fake_hf)$(fake_npm)|<redacted:huggingface-token>_" \
-             "$(fake_ghp)$(fake_ghp)|<redacted:github-pat>_" \
-             "$(fake_shopify)$(fake_do)|<redacted:shopify-token>op_v1_"; do
-    out="$(builtin_out "${row%|*}")"
-    want="${row#*|}"
-    [[ "$out" == "$want"* ]] || { echo "got: $out want prefix: $want" >&2; return 1; }
-    rest="${out//<redacted:/}"
-    [ "$(( ${#out} - ${#rest} ))" -eq 10 ] || { echo "more than one marker: $out" >&2; return 1; }
+# body_free <out> <body>... — fails on an empty output (a dropped or failed
+# redaction must not read as clean) or when any 8-character window of a body
+# is still in the output.
+body_free() {
+  python3 -c '
+import sys
+out = sys.argv[1]
+if not out:
+    sys.stderr.write("empty output\n"); sys.exit(1)
+for b in sys.argv[2:]:
+    for i in range(len(b) - 7):
+        if b[i:i + 8] in out:
+            sys.stderr.write("raw body window %d of a body in: %s\n" % (i, out[:200])); sys.exit(1)
+' "$@"
+}
+
+# Two different bodies per type, so a rule cannot pass by matching one fixed string.
+fake_ghp2() { fake_key "gh""p_" "Zx9Cv8Bn7Mq6Wr5Et4Yu3Io2Pa1Sd0Fg" 36; }
+fake_gho()  { fake_key "gh""o_" "Mn4Bv5Cx6Zl7Ka8Js9Hd1Gf2Ep3Wo4Ui" 36; }
+fake_aws2() { fake_key "AK""IA" "MJHGFDSALKPOIUYT2345672W" 16; }
+fake_asia() { fake_key "AS""IA" "ZXCVBNMLKJHGFDSA765432QW" 16; }
+fake_aws3() { fake_key "AK""IA" "QZXRT5NBKDWP2367" 16; }
+
+# glued_rows <tokA> <tokB> — wraps the pair at the string start, after a space
+# and after "=", and checks the lead and trail are kept, a marker is present
+# and neither body (the token minus its 4-character prefix) survives.
+glued_rows() {
+  local pair="$1$2" lead out
+  for lead in "" "pre " "pre="; do
+    out="$(builtin_out "$lead$pair post")"
+    [[ "$out" == "$lead"* ]] || { echo "lead lost: $out" >&2; return 1; }
+    [[ "$out" == *' post' ]] || { echo "trail lost: $out" >&2; return 1; }
+    [[ "$out" == *'<redacted:'* ]] || { echo "no marker: $out" >&2; return 1; }
+    body_free "$out" "${1:4}" "${2:4}" || return 1
   done
 }
 
-# The end guard rejects the first id and the start guard rejects the second, so
-# both stay raw. The gitleaks AWS rule does not match two glued key ids, so
-# they stay raw here.
-@test "known limit: two glued aws key ids both stay raw" {
-  in="$(fake_aws)$(fake_aws)"
-  out="$(builtin_out "$in")"
-  [ "$out" = "$in" ] || { echo "got: $out" >&2; return 1; }
-  [[ "$out" != *"<redacted:"* ]]
+@test "two glued ghp tokens leave no raw token body" {
+  glued_rows "$(fake_ghp)" "$(fake_ghp2)"
+  glued_rows "$(fake_ghp)" "$(fake_gho)"
+}
+
+@test "two glued aws key ids leave no raw key body" {
+  glued_rows "$(fake_aws2)" "$(fake_aws3)"
+  glued_rows "$(fake_aws3)" "$(fake_asia)"
+}
+
+@test "three glued ghp tokens leave no raw token body" {
+  out="$(builtin_out "pre $(fake_ghp)$(fake_ghp2)$(fake_gho) post")"
+  [[ "$out" == 'pre '*' post' ]] || { echo "got: $out" >&2; return 1; }
+  body_free "$out" "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)" "$(fake_gho | cut -c5-)"
+}
+
+@test "three glued aws key ids leave no raw key body" {
+  out="$(builtin_out "pre $(fake_aws2)$(fake_asia)$(fake_aws2) post")"
+  [[ "$out" == 'pre '*' post' ]] || { echo "got: $out" >&2; return 1; }
+  body_free "$out" "$(fake_aws2 | cut -c5-)" "$(fake_asia | cut -c5-)"
+}
+
+# Ordinary text next to a marker or an uppercase run must stay as written.
+@test "forty uppercase letters and digits with no key id prefix are kept" {
+  in="Q3XZ7RT5NB2KD8WPQ3XZ7RT5NB2KD8WPQ3XZ7RT5"
+  [ "$(builtin_out "$in")" = "$in" ]
+}
+
+@test "a token then a space then a long word redacts only the token" {
+  word="abcdefghijklmnopqrst"
+  [ "$(builtin_out "$(fake_ghp) $word")" = "<redacted:github-pat> $word" ]
+}
+
+@test "a token then a git remote path keeps the path" {
+  suffix="@github.com/owner/repository-name.git"
+  [ "$(builtin_out "$(fake_ghp)$suffix")" = "<redacted:github-pat>$suffix" ]
+}
+
+@test "known limit: a token then a 7 character tail keeps the tail" {
+  [ "$(builtin_out "$(fake_ghp)_abcdef")" = "<redacted:github-pat>_abcdef" ]
+}
+
+@test "a token then an 8 character tail sweeps the tail" {
+  [ "$(builtin_out "$(fake_ghp)_abcdefg")" = "<redacted:github-pat><redacted:glued-secrets>" ]
+}
+
+@test "known limit: a word character glued in front of a token keeps the token raw" {
+  input="x$(fake_npm)
+_$(fake_do)"
+  [ "$(builtin_out "$input")" = "$input" ]
+  input="1$(fake_npm)"
+  [ "$(builtin_out "$input")" = "$input" ]
+}
+
+@test "known limit: an uppercase letter glued in front of an aws key id keeps the id raw" {
+  input="A$(fake_aws)"
+  [ "$(builtin_out "$input")" = "$input" ]
+  input="9$(fake_aws)"
+  [ "$(builtin_out "$input")" = "$input" ]
+}
+
+@test "six grafana shopify pairs then a glued ghp pair fail closed to one marker" {
+  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6 + sys.argv[3] + sys.argv[4])' \
+    "$(fake_grafana)" "$(fake_shopify)" "$(fake_ghp)" "$(fake_ghp2)")"
+  [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
+}
+
+@test "a 200000 character run of glued ghp tokens, glued aws key ids or uppercase letters uses under 10 seconds of CPU time each" {
+  run python3 -c '
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import redact
+ghp = sys.argv[2] + sys.argv[3]
+aws = sys.argv[4] + sys.argv[5]
+for s in (ghp * (200000 // len(ghp) + 1),
+          aws * (200000 // len(aws) + 1),
+          "BCDEFGHJKLMNPQRSTUVWXYZ" * (200000 // 23 + 1)):
+    # CPU time, so machine load does not fail the test.
+    t = time.process_time()
+    redact.builtin(s)
+    dt = time.process_time() - t
+    if dt >= 10:
+        sys.stderr.write("used %.1f seconds of CPU time\n" % dt)
+        sys.exit(1)
+' "$HOOKS/lib" "$(fake_ghp)" "$(fake_ghp2)" "$(fake_aws2)" "$(fake_asia)"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+}
+
+# An open-ended body takes the start of the next token; the tail sweep removes
+# what is left of it.
+@test "a token directly after an open-ended body leaves no raw token body" {
+  # row: first|second|marker the output starts with|chars cut from first|from second
+  for row in "$(fake_npm)|$(fake_key "sk_""test_" "$ALNUM" 24)|<redacted:npm-token>|4|8" \
+             "$(fake_hf)|$(fake_npm)|<redacted:huggingface-token>|3|4" \
+             "$(fake_ghp)|$(fake_ghp2)|<redacted:github-pat>|4|4" \
+             "$(fake_shopify)|$(fake_do)|<redacted:shopify-token>|6|7"; do
+    IFS='|' read -r first second marker n1 n2 <<<"$row"
+    out="$(builtin_out "$first$second")"
+    [[ "$out" == "$marker"* ]] || { echo "got: $out want prefix: $marker" >&2; return 1; }
+    body_free "$out" "${first:$n1}" "${second:$n2}" || return 1
+  done
+}
+
+# An AWS-shaped run inside a longer token must not cut it in two.
+@test "an aws-shaped run inside a longer token does not split the token" {
+  local lower="abcdefghijklmnopqrst" aws
+  aws="$(fake_key "AK""IA" "QZXRT5NBKDWP2367AB" 18)"
+  [ "$(builtin_out "$(fake_key "np""m_" "$lower" 20)$aws$lower")" = "<redacted:npm-token>" ]
+  [ "$(builtin_out "$(fake_key "glpat-" "$lower" 10)${aws}ccc")" = "<redacted:gitlab-pat>" ]
+}
+
+@test "an aws-shaped run inside a blocked token does not split the token" {
+  local aws shp
+  aws="$(fake_key "AK""IA" "QZXRT5NBKDWP2367AB" 22)"
+  shp="$(fake_key "shp""at_" "0123456789abcdef" 38)"
+  [ "$(builtin_out "$shp$(fake_key "glpat-" "$aws" 26)tail")" = "<redacted:shopify-token><redacted:gitlab-pat>" ]
+  [ "$(builtin_out "$shp$(fake_key "np""m_" "${aws}abcdefghijklmnopqrstuvwx" 46)tail")" = "<redacted:shopify-token><redacted:npm-token>" ]
+}
+
+@test "swept and collapsed outputs are stable under a second run" {
+  local pair chain i
+  pair="$(fake_ghp)$(fake_ghp2)"
+  chain="$(fake_key "gls""a_" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG" 37)_ab12cd34$(fake_key "shp""at_" "0123456789abcdef" 38)"
+  for i in 1 2 3 4 5; do chain="$chain$chain"; done
+  chain="$chain$pair"
+  for IN in "$pair" "$(fake_aws2)$(fake_asia)" "$chain"; do
+    [ "$(builtin_twice "$IN")" = "$(builtin_out "$IN")" ]
+  done
+}
+
+@test "a long uppercase word that starts like an aws key id is redacted" {
+  [ "$(builtin_out "ASIAPACIFICHEADQUARTERSOFFICE")" = "<redacted:aws-access-key>" ]
+}
+
+# --- glued pairs end to end -------------------------------------------------
+
+# glued_turn <pair> — one turn whose prompt holds the pair in a plain sentence
+# (no keyword near it). The stub reply quotes the sentence as the model is
+# shown it: the built-in output of the sentence; body_free is the independent
+# check.
+glued_turn() {
+  local sentence="we saw $1 in the logs yesterday"
+  user_line "$U1" "$sentence" > "$TX"
+  GLUED_REPLY="$(jq -nc --arg u "$U1" --arg q "$(builtin_out "$sentence")" \
+    '{requests:[{text:"user saw a pair",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+}
+
+# assert_glued_stored <body>... — one request is stored, its quote holds a
+# marker, the row and the model stdin are body-free, and the words around the
+# pair reach the model.
+assert_glued_stored() {
+  [ "$(field '.requests|length')" -eq 1 ] || { echo "not one request stored" >&2; return 1; }
+  [[ "$(field '.requests[0].quote')" == *'<redacted:'* ]] || { echo "quote has no marker" >&2; return 1; }
+  body_free "$(cat "$WORKLOG_JSONL")" "$@" || { echo "raw body in the row" >&2; return 1; }
+  body_free "$(cat "$CLAUDE_STDIN_LOG")" "$@" || { echo "raw body in the model stdin" >&2; return 1; }
+  grep -qF -- "we saw " "$CLAUDE_STDIN_LOG" || { echo "lead words missing from the model stdin" >&2; return 1; }
+  grep -qF -- " in the logs yesterday" "$CLAUDE_STDIN_LOG" || { echo "trail words missing from the model stdin" >&2; return 1; }
+}
+
+@test "with gitleaks absent a glued ghp pair in the prompt is stored redacted" {
+  glued_turn "$(fake_ghp)$(fake_ghp2)"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$GLUED_REPLY"
+  assert_glued_stored "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
+}
+
+@test "with gitleaks absent a glued aws key id pair in the prompt is stored redacted" {
+  glued_turn "$(fake_aws2)$(fake_asia)"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$GLUED_REPLY"
+  assert_glued_stored "$(fake_aws2 | cut -c5-)" "$(fake_asia | cut -c5-)"
+}
+
+@test "with the real gitleaks a glued ghp pair in the prompt is stored redacted" {
+  require_real_gitleaks
+  glued_turn "$(fake_ghp)$(fake_ghp2)"
+  drive_with "GITLEAKS_STUB=passthrough" -- "$GLUED_REPLY"
+  assert_glued_stored "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
+}
+
+@test "with the real gitleaks a glued aws key id pair in the prompt is stored redacted" {
+  require_real_gitleaks
+  glued_turn "$(fake_aws2)$(fake_asia)"
+  drive_with "GITLEAKS_STUB=passthrough" -- "$GLUED_REPLY"
+  assert_glued_stored "$(fake_aws2 | cut -c5-)" "$(fake_asia | cut -c5-)"
+}
+
+# gitleaks flags the Pulumi token in the first position of this sentence only;
+# no built-in rule matches it. Its marker then lands directly before the URL
+# path, so the built-ins must run again after the gitleaks replacement or the
+# quote and the body redact differently and the entry is dropped.
+@test "a gitleaks marker directly before a URL path is swept in the quote and the body alike" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  sentence="set the access token var to $KEY then open https://app.example.com/$KEY/stacks/production to check"
+  printf '%s\n' "$sentence" | "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null \
+    | jq -e 'map(.RuleID) | index("pulumi-api-token")' >/dev/null
+  [ "$(builtin_out "$sentence")" = "$sentence" ]
+  user_line "$U1" "$sentence" > "$TX"
+  drive_with "GITLEAKS_STUB=passthrough" -- \
+    "$(jq -nc --arg u "$U1" --arg q 'https://app.example.com/<redacted:pulumi-api-token><redacted:glued-secrets> to check' \
+      '{requests:[{text:"user opened a stack",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [[ "$(field '.requests[0].quote')" == *'<redacted:glued-secrets>'* ]]
+}
+
+# Stub twin of the real-gitleaks test above: the stub flags the same secret, so
+# the path is covered with no gitleaks binary.
+@test "a stubbed gitleaks marker directly before a URL path is swept in the quote and the body alike" {
+  KEY="$(fake_pulumi)"
+  sentence="set the access token var to $KEY then open https://app.example.com/$KEY/stacks/production to check"
+  user_line "$U1" "$sentence" > "$TX"
+  drive_with "GITLEAKS_STUB=find:pulumi-api-token:$KEY" -- \
+    "$(jq -nc --arg u "$U1" --arg q 'https://app.example.com/<redacted:pulumi-api-token><redacted:glued-secrets> to check' \
+      '{requests:[{text:"user opened a stack",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [[ "$(field '.requests[0].quote')" == *'<redacted:glued-secrets>'* ]]
 }
 
 # --- end to end with gitleaks absent ----------------------------------------
@@ -2297,4 +2522,41 @@ if dt >= 10:
     "$(jq -nc --arg u "$U1" --arg t "leaked $KEY" \
       '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
   [ "$(field '.requests[0].text')" = "leaked <redacted:npm-token>" ]
+}
+
+# real_redact_texts <text> — the text through redact_texts with the REAL
+# gitleaks first on PATH (the stub dir otherwise leads it).
+real_redact_texts() {
+  PATH="$(dirname "$(real_gitleaks)"):$PATH" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+texts, failed = redact.redact_texts([sys.argv[2]])
+if failed:
+    sys.exit(3)
+sys.stdout.write(texts[0])
+' "$HOOKS/lib" "$1"
+}
+
+# The key id run step must not hide a value from gitleaks: its generic rule
+# redacts the whole value, so no short mixed-case piece stays raw below the
+# glued-text sweep size.
+@test "with gitleaks, a short tail after a glued aws key id run is not left raw" {
+  require_real_gitleaks
+  tail_piece="aB3dE5g"
+  value="pul-$(fake_aws)$(fake_asia)$tail_piece"
+  run real_redact_texts "key = \"$value\""
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"<redacted:"* ]]
+  [[ "$output" != *"$tail_piece"* ]]
+}
+
+@test "with gitleaks, a short piece in front of an aws key id run is not left raw" {
+  require_real_gitleaks
+  front_piece="uodm"
+  value="$(fake_key "sk_""live_" "aB3dE5gH7jK9mN1pQ3s" 19)$(fake_key "glp""at-" "$front_piece" 4)$(fake_key "AS""IA" "ZXCVBNMLKJHGFDSA765432QW" 20)"
+  run real_redact_texts "$value"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"<redacted:"* ]]
+  [[ "$output" != *"$front_piece"* ]]
 }

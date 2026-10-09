@@ -182,14 +182,158 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run
     Then the call uses under 10 seconds of CPU time
 
-  # proves: hooks/tests/worklog-record.bats "known limit: a token directly after an open-ended body keeps its raw body"
-  Scenario: A token directly after an open-ended body keeps its raw body
-    Given a token with an open-ended body directly followed by another token, including the same type twice
+  # proves: hooks/tests/worklog-record.bats "two glued ghp tokens leave no raw token body"
+  Scenario: Two glued ghp tokens leave no raw token body
+    Given two different ghp bodies, or ghp then gho, at the string start, after a space and after an equals sign
     When the built-in rules run
-    Then the output holds one marker followed by the start of the second token
+    Then a marker is present, the text around the pair is kept, and no 8-character window of either body is left
 
-  # proves: hooks/tests/worklog-record.bats "known limit: two glued aws key ids both stay raw"
-  Scenario: Two glued AWS key ids both stay raw
-    Given two AWS key ids glued with no separator
+  # proves: hooks/tests/worklog-record.bats "two glued aws key ids leave no raw key body"
+  Scenario: Two glued AWS key ids leave no raw key body
+    Given two different AKIA ids, or AKIA then ASIA, at the string start, after a space and after an equals sign
     When the built-in rules run
-    Then the output equals the input and holds no marker
+    Then a marker is present, the text around the pair is kept, and no 8-character window of either body is left
+
+  # proves: hooks/tests/worklog-record.bats "three glued ghp tokens leave no raw token body"
+  Scenario: Three glued ghp tokens leave no raw token body
+    Given three ghp tokens with no separator
+    When the built-in rules run
+    Then no 8-character window of any body is left
+
+  # proves: hooks/tests/worklog-record.bats "three glued aws key ids leave no raw key body"
+  Scenario: Three glued AWS key ids leave no raw key body
+    Given three AWS key ids with no separator
+    When the built-in rules run
+    Then no 8-character window of any body is left
+
+  # proves: hooks/tests/worklog-record.bats "forty uppercase letters and digits with no key id prefix are kept"
+  Scenario: A long uppercase run with no key id prefix is kept
+    Given forty uppercase letters and digits that do not start with AKIA or ASIA
+    When the built-in rules run
+    Then the output equals the input
+
+  # proves: hooks/tests/worklog-record.bats "a token then a space then a long word redacts only the token"
+  Scenario: A word after a token and a space is kept
+    Given a ghp token, a space, then a 20-character word
+    When the built-in rules run
+    Then only the token becomes a marker
+
+  # proves: hooks/tests/worklog-record.bats "a token then a git remote path keeps the path"
+  Scenario: A git remote path after a token is kept
+    Given a ghp token directly followed by @github.com/owner/repository-name.git
+    When the built-in rules run
+    Then the output is the marker followed by the path
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a token then a 7 character tail keeps the tail"
+  Scenario: A 7-character tail after a token is kept
+    Given a ghp token directly followed by a 7-character tail
+    When the built-in rules run
+    Then the output is the marker followed by the tail
+
+  # proves: hooks/tests/worklog-record.bats "a token then an 8 character tail sweeps the tail"
+  Scenario: An 8-character tail after a token is swept
+    Given a ghp token directly followed by an 8-character tail
+    When the built-in rules run
+    Then the output is the github-pat marker then the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a word character glued in front of a token keeps the token raw"
+  Scenario: A word character glued in front of a token keeps the token raw
+    Given an npm token preceded by x and a digitalocean token preceded by an underscore
+    When the built-in rules run
+    Then the output equals the input
+
+  # proves: hooks/tests/worklog-record.bats "known limit: an uppercase letter glued in front of an aws key id keeps the id raw"
+  Scenario: An uppercase letter glued in front of an AWS key id keeps the id raw
+    Given an AWS key id preceded by an uppercase letter
+    When the built-in rules run
+    Then the output equals the input
+
+  # proves: hooks/tests/worklog-record.bats "six grafana shopify pairs then a glued ghp pair fail closed to one marker"
+  Scenario: A settled chain plus a glued ghp pair fails closed
+    Given six grafana and shopify pairs followed by a glued ghp pair
+    When the built-in rules run
+    Then the output is exactly the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "a 200000 character run of glued ghp tokens, glued aws key ids or uppercase letters uses under 10 seconds of CPU time each"
+  Scenario: Long glued runs use under 10 seconds of CPU time
+    Given 200000 characters of glued ghp tokens, of glued AWS key ids, and of uppercase letters
+    When the built-in rules run on each
+    Then each call uses under 10 seconds of CPU time
+
+  # proves: hooks/tests/worklog-record.bats "a token directly after an open-ended body leaves no raw token body"
+  Scenario: A token directly after an open-ended body leaves no raw token body
+    Given npm then sk_test, huggingface then npm, ghp then ghp, or shopify then digitalocean
+    When the built-in rules run
+    Then the output starts with the first token's marker and no 8-character window of either body is left
+
+  # proves: hooks/tests/worklog-record.bats "with gitleaks absent a glued ghp pair in the prompt is stored redacted"
+  Scenario: Absent gitleaks: a glued ghp pair in the prompt is stored redacted
+    Given gitleaks is not on PATH and a prompt with a glued ghp pair in a plain sentence
+    When a turn is recorded
+    Then the row keeps one request with a marker in its quote, the row and the model stdin hold no body, and the words around the pair reach the model
+
+  # proves: hooks/tests/worklog-record.bats "with gitleaks absent a glued aws key id pair in the prompt is stored redacted"
+  Scenario: Absent gitleaks: a glued AWS key id pair in the prompt is stored redacted
+    Given gitleaks is not on PATH and a prompt with a glued AWS key id pair in a plain sentence
+    When a turn is recorded
+    Then the row keeps one request with a marker in its quote, the row and the model stdin hold no body, and the words around the pair reach the model
+
+  # proves: hooks/tests/worklog-record.bats "with the real gitleaks a glued ghp pair in the prompt is stored redacted"
+  Scenario: Real gitleaks: a glued ghp pair in the prompt is stored redacted
+    Given the real gitleaks and a prompt with a glued ghp pair in a plain sentence
+    When a turn is recorded
+    Then the row keeps one request with a marker in its quote, and the row and the model stdin hold no body
+
+  # proves: hooks/tests/worklog-record.bats "with the real gitleaks a glued aws key id pair in the prompt is stored redacted"
+  Scenario: Real gitleaks: a glued AWS key id pair in the prompt is stored redacted
+    Given the real gitleaks and a prompt with a glued AWS key id pair in a plain sentence
+    When a turn is recorded
+    Then the row keeps one request with a marker in its quote, and the row and the model stdin hold no body
+
+  # proves: hooks/tests/worklog-record.bats "a gitleaks marker directly before a URL path is swept in the quote and the body alike"
+  Scenario: A gitleaks marker before a URL path is swept in the quote and the body
+    Given a Pulumi token that only gitleaks flags, once alone and once directly before a URL path
+    When a turn is recorded with the real gitleaks
+    Then the entry is stored and its quote holds the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "an aws-shaped run inside a longer token does not split the token"
+  Scenario: An AWS-shaped run keeps a longer token whole
+    Given an npm or gitlab token with an AWS-shaped run inside it
+    When the built-in rules run
+    Then the token gets its own single marker
+
+  # proves: hooks/tests/worklog-record.bats "a long uppercase word that starts like an aws key id is redacted"
+  Scenario: A long AKIA or ASIA word is redacted
+    Given an uppercase word of 20 or more characters that starts with ASIA
+    When the built-in rules run
+    Then the word gets the aws-access-key marker
+
+  # proves: hooks/tests/worklog-record.bats "an aws-shaped run inside a blocked token does not split the token"
+  Scenario: An AWS-shaped run inside a still-blocked token keeps the token whole
+    Given a Shopify token directly followed by a gitlab or npm token that holds an AWS-shaped run
+    When the built-in rules run
+    Then each token gets its own single marker and the run is not cut out of it
+
+  # proves: hooks/tests/worklog-record.bats "a stubbed gitleaks marker directly before a URL path is swept in the quote and the body alike"
+  Scenario: A stubbed gitleaks marker before a URL path is swept in the quote and the body
+    Given a Pulumi token that a stubbed gitleaks flags, once alone and once directly before a URL path
+    When a turn is recorded
+    Then the entry is stored and its quote holds the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "swept and collapsed outputs are stable under a second run"
+  Scenario: Swept and collapsed outputs are stable under a second run
+    Given a glued ghp pair, a glued AWS key id pair, and a long chain of token pairs
+    When the built-in rules run twice
+    Then the second run changes nothing
+
+  # proves: hooks/tests/worklog-record.bats "with gitleaks, a short tail after a glued aws key id run is not left raw"
+  Scenario: With gitleaks, a short tail after a glued AWS key id run is not left raw
+    Given a value that holds two AWS key ids in a row followed by a short mixed-case tail
+    When the text is redacted with the real gitleaks
+    Then the short tail is not in the output
+
+  # proves: hooks/tests/worklog-record.bats "with gitleaks, a short piece in front of an aws key id run is not left raw"
+  Scenario: With gitleaks, a short piece in front of an AWS key id run is not left raw
+    Given a Stripe key and a short piece directly in front of an AWS key id run
+    When the text is redacted with the real gitleaks
+    Then the short piece is not in the output
