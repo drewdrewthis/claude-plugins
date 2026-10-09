@@ -17,8 +17,9 @@
 #   later   the URL footer, fenced code footer and ternary tests pin the later-block rule
 #           together with the strip; a prose-question footer is not an ask, a real later
 #           ask (also one ending in a URL) is
-#   dots    an ask tail may cross a dot inside a token (config.yml, 0.3.0); a dot continues
-#           the ask only before a word character, so a quote/bracket after it ends the sentence
+#   dots    an ask tail may cross a dot inside a token (config.yml, 0.3.0, ./build, etc.), ...);
+#           a period ends the ask only when closers (quote, bracket, *, _) and then whitespace
+#           or the end of the text follow it
 #   other   non-reply tool or non-PreToolUse event carrying ask text, empty text ->
 #           empty output, exit 0; word-boundary allows (took to, American, google creds)
 #   open    invalid JSON, no jq, or no python3 on PATH -> fails open (empty stdout,
@@ -384,6 +385,22 @@ assert_allowed() { # text
 
 @test "ask with a version number -> deny" {
   assert_denied "Should I bump the plugin to 0.3.0?"
+}
+
+@test "ask ending in etc.) -> deny" {
+  assert_denied "Should I clean up the temp files (logs, caches, etc.)?"
+}
+
+@test "ask with e.g., in parentheses -> deny" {
+  assert_denied "Should I use a managed queue (e.g., SQS) instead?"
+}
+
+@test "ask ending in an ellipsis -> deny" {
+  assert_denied "Should I merge now, or wait...?"
+}
+
+@test "ask about a ./ path -> deny" {
+  assert_denied "Should I delete ./build?"
 }
 
 @test "sentence end before a closing quote, then a question -> empty" {
