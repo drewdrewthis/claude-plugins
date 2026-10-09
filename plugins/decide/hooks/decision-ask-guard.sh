@@ -2,6 +2,7 @@
 # An agent must make reversible calls itself and bring the owner only one-way-door
 # or values-laden decisions, each with a recommendation. Deny a Discord reply that
 # asks the owner to decide and has an item lacking either.
+# A "?" inside a URL or code is not a question; fenced blocks are not scored.
 # Never echoes the text; always exits 0 so it can never wedge the agent.
 # Fails open (bad JSON, no jq, no python3, scorer failure); each is a blind release, so it
 # is logged to stderr. No PATH pin: jq/python3 live in /opt/homebrew/bin on macOS.
@@ -25,8 +26,8 @@ jq -e . >/dev/null 2>&1 <<<"$input" || { echo "decision-ask-guard: unparseable i
 # Prints the number of items that miss a marker or a recommendation, or "noask".
 verdict="$(python3 -I -c '
 import re, sys
-# a "?" inside a URL or code is not a question
-t = re.sub(r"```.*?```|`[^`\n]*`|https?://\S+", "", sys.stdin.read(), flags=re.S)
+# A URL becomes a word (ok to \w+ needs one) and keeps trailing punctuation; fenced blocks vanish; inline code keeps its text minus "?" so a marker or rec in it still counts.
+t = re.sub(r"```.*?```|(`[^`\n]*`)|(https?://[^\s]*[^\s?.,;:!)\]>])", lambda m: "URL" if m.group(2) else m.group(1).replace("?", "") if m.group(1) else "", sys.stdin.read(), flags=re.S)
 # Phrases that are an ask on their own, and phrases that are an ask only as a question.
 always = r"decisions? for you|for you to decide|\bneeds? your (?:approval|decision|call|input|ok|go|nod|sign-off)\b" \
   r"|needs? from you\b|pending (?:on|from) you\b|waiting on you\b|let me know (?:if|whether) (?:i|we) should" \
@@ -34,7 +35,7 @@ always = r"decisions? for you|for you to decide|\bneeds? your (?:approval|decisi
 quest = r"(?:do you )?want me to|should (?:i|we)\b|shall (?:i|we)\b|which (?:option|one) do you" \
   r"|your (?:call|decision|approval|pick)|can you approve|what do you think|(?:do )?you prefer|which do you" \
   r"|would you like me to|ok to \w+|can (?:i|we) (?!help\b)\w+"
-ask = re.compile(always + r"|\b(?:" + quest + r")[^.!?\n]{0,300}\?", re.I)  # bounded tail: an unbounded one rescans the line per candidate start
+ask = re.compile(always + r"|\b(?:" + quest + r")(?:[^.!?\n]|\.(?=\S)){0,300}\?", re.I)  # bounded tail: an unbounded one rescans the line per candidate start
 m = ask.search(t)
 if not m:
     print("noask"); sys.exit()

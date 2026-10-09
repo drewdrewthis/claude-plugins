@@ -9,8 +9,14 @@
 #           lists, status lists before/after a marked ask, "let me know if you have..."
 #   score   multi-block asks (second/third ask after a blank line), a marker without a
 #           recommendation, a question in the list header counted as an item
-#   strip   "?" in a URL, fenced code or inline code, or in a prose-question footer, is not
-#           an ask (allow); a real later ask holding a URL, or an ask beside code, is (deny)
+#   strip   "?" in a URL, fenced code or inline code is not an ask (allow), and each strip
+#           arm is pinned alone; inline code keeps its marker/rec text; an unmarked ask
+#           ending in a URL, angle-bracket URL, markdown link, parentheses, or "ok to <URL>",
+#           or beside code, is (deny); a status sentence ending in a URL with a query is (allow)
+#   later   the URL footer, fenced code footer and ternary tests pin the later-block rule
+#           together with the strip; a prose-question footer is not an ask, a real later
+#           ask (also one ending in a URL) is
+#   dots    an ask tail may cross a dot inside a token (config.yml, 0.3.0), not a sentence end
 #   other   non-reply tool or non-PreToolUse event carrying ask text, empty text ->
 #           empty output, exit 0; word-boundary allows (took to, American, google creds)
 #   open    invalid JSON, no jq, or no python3 on PATH -> fails open (empty stdout,
@@ -281,12 +287,61 @@ assert_allowed() { # text
   assert_allowed $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nPR: https://github.com/o/r/pull/5?diff=split'
 }
 
+@test "unmarked ask ending in a URL -> deny" {
+  assert_denied "Should I merge https://example.com/pull/8501?"
+}
+
+@test "unmarked ask ending in a parenthesised URL -> deny" {
+  assert_denied "Should I merge (https://example.com/pull/8501)?"
+}
+
+@test "unmarked ask ending in an angle-bracket URL -> deny" {
+  assert_denied "Should I merge <https://github.com/o/r/pull/5>?"
+}
+
+@test "unmarked ask ending in a markdown link -> deny" {
+  assert_denied "Should I merge [PR 5](https://github.com/o/r/pull/5)?"
+}
+
+@test "unmarked ask ending in a bare URL after can-you-approve -> deny" {
+  assert_denied "Can you approve https://github.com/o/r/pull/5?"
+}
+
+@test "second ask after a blank line ending in a URL -> deny" {
+  assert_denied $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nShould I also merge https://github.com/o/r/pull/9?'
+}
+
+@test "second ask list after a blank line ending in URLs -> deny" {
+  assert_denied $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nAnd these:\n- merge https://github.com/o/r/pull/9?\n- close https://github.com/o/r/pull/10?'
+}
+
+@test "ok-to ask whose object is a URL -> deny" {
+  assert_denied "Ok to https://example.com/pull/8501?"
+}
+
+@test "status sentence ending in a URL with a query -> empty" {
+  assert_allowed "Merged. See https://github.com/o/r/pull/5?diff=split."
+}
+
 @test "marked ask + fenced code with a ? in a URL -> empty" {
   assert_allowed $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\n```\ncurl \'https://api.x/y?a=1&b=2\'\n```'
 }
 
 @test "marked ask + inline code with a ternary ? -> empty" {
   assert_allowed $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nFix was `x = a ? b : c`.'
+}
+
+@test "marker and rec in inline code -> empty" {
+  assert_allowed 'Decisions for you: 1) merge 8501? `one-way-door`, I recommend merge.'
+  assert_allowed 'Should I drop the prod table? `one-way-door` - `rec: no`'
+}
+
+@test "fence arm alone: ask phrase in a fenced block -> empty" {
+  assert_allowed $'Ran:\n```\nshould we revert?\n```\ndone.'
+}
+
+@test "URL arm alone: ask phrase before a URL query ? -> empty" {
+  assert_allowed 'Merged; ok to ignore https://x.io/pull/5?diff=split for now.'
 }
 
 @test "ask phrase only inside inline code, no ask -> empty" {
@@ -303,6 +358,18 @@ assert_allowed() { # text
 
 @test "unmarked ask next to inline code -> deny" {
   assert_denied 'Should I run `rm -rf build`?'
+}
+
+@test "ask with a dotted file name -> deny" {
+  assert_denied "Should I delete config.yml?"
+}
+
+@test "ask with a version number -> deny" {
+  assert_denied "Should I bump the plugin to 0.3.0?"
+}
+
+@test "sentence end then a bare Why? -> empty" {
+  assert_allowed "I asked whether we should merge. It is done. Why?"
 }
 
 @test "long pathological text is denied within the 5s hook timeout" {
