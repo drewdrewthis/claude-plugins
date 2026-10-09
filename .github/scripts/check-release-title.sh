@@ -8,7 +8,7 @@
 #
 # Usage: PR_TITLE="fix(x): y" check-release-title.sh <release-please-config.json>
 #        changed file paths, one per line, on stdin.
-# Empty stdin exits 2: a real PR always changes at least one file.
+# Empty stdin exits 2: a zero-file PR fails on purpose (fail closed).
 set -euo pipefail
 
 usage() {

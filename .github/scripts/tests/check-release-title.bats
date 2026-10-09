@@ -67,7 +67,7 @@ run_check() { # <title> <config> <files...>
   [ "$status" -eq 2 ]
 }
 
-# These two read the live release-please-config.json on purpose, so a config edit
+# These three read the live release-please-config.json on purpose, so a config edit
 # that drops procedures or the fix type breaks them loudly.
 @test "real config: chore on procedures fails" {
   run_check "chore(procedures): x" "$REAL" plugins/procedures/a
@@ -79,16 +79,16 @@ run_check() { # <title> <config> <files...>
   [ "$status" -eq 0 ]
 }
 
+@test "perf on managed plugin passes" {
+  run_check "perf(procedures): x" "$REAL" plugins/procedures/a
+  [ "$status" -eq 0 ]
+}
+
 @test "empty stdin exits 2" {
   export PR_TITLE="fix(alpha): x"
   run bash -c 'printf "" | "$0" "$1"' "$SCRIPT" "$CFG"
   [ "$status" -eq 2 ]
   [[ "$output" == *"no changed files"* ]]
-}
-
-@test "perf on managed plugin passes" {
-  run_check "perf(procedures): x" "$REAL" plugins/procedures/a
-  [ "$status" -eq 0 ]
 }
 
 @test "feat with breaking bang passes" {

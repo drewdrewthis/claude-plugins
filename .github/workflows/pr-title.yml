@@ -58,7 +58,9 @@ jobs:
   release-title:
     # release-please PRs are opened by github-actions[bot] and touch plugin
     # files by design. Matching the author stops a branch name alone from
-    # skipping the check.
+    # skipping the check. Release PRs run no checks today (default GITHUB_TOKEN),
+    # so this skip is forward-looking. If https://github.com/drewdrewthis/claude-plugins/issues/204
+    # changes the release-please token, update this login to match its bot/user.
     if: ${{ !(startsWith(github.head_ref, 'release-please--') && github.event.pull_request.user.login == 'github-actions[bot]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -79,6 +81,7 @@ jobs:
         run: |
           # A failed fetch must fail the step, not pass with an empty list.
           # previous_filename catches files moved out of a plugin.
+          # The PR files API caps at 3000 files, far above this repo's PR sizes.
           files="$RUNNER_TEMP/changed-files"
           gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
             --jq '.[] | .filename, (.previous_filename // empty)' > "$files"
