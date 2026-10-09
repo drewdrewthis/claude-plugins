@@ -115,8 +115,8 @@ def _generic(s):
         for i, p in enumerate(parts))
 
 
-# A token glued after another can only match once the one before it is a marker,
-# so a long chain needs one pass per link and an uncapped loop is quadratic.
+# A glued token can need its neighbour to be a marker before it matches, so a
+# long chain needs one pass per link and an uncapped loop is quadratic.
 # The 8th pass is the confirming one, so text that needs more than 7 changing
 # passes collapses.
 _MAX_PASSES = 8
