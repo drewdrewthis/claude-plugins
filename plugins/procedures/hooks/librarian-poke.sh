@@ -355,6 +355,12 @@ lp_claim() {
 # denied because nobody is there to approve it. dontAsk plus this allowlist
 # behaves the same every time. Transcripts are untrusted input, so the list
 # is scoped to the agent's own commands rather than bypassPermissions:
+#   - --setting-sources user: only ~/.claude/settings.json (which enables
+#     this plugin) is read, never the project or local settings of whatever
+#     cwd the drain starts in. On a box where $HOME/.claude/settings.local.json
+#     allows Bash(export:*), a session with cwd $HOME would otherwise hand the
+#     agent `export X=... && <pinned call>`. --settings and managed settings
+#     still apply. lp_drain also starts claude with its cwd in the state dir.
 #   - --add-dir: reads of the state dir, this plugin, the transcripts, and each
 #     store root. Without it a read outside the cwd is denied.
 #   - Edit: the commit-gate tmp dir, the grooming queue, and per root only the
@@ -393,7 +399,8 @@ lp_access_args() {
     local sd="$1" pr r q q2 e rd k roots=()
     pr="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)" || return 0
     declare -p STORE_ROOTS >/dev/null 2>&1 && roots=(${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"})
-    printf '%s\n' --permission-mode dontAsk --add-dir "$sd" --add-dir "$pr" \
+    printf '%s\n' --setting-sources user --permission-mode dontAsk \
+        --add-dir "$sd" --add-dir "$pr" \
         --add-dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
     for r in ${roots[@]+"${roots[@]}"}; do printf '%s\n' --add-dir "$r"; done
     printf '%s\n' --allowedTools \
@@ -495,14 +502,20 @@ lp_drain() {
     roots="$(IFS=:; printf '%s' "${STORE_ROOTS[*]-}")"
     # The roots and state dir go in the prompt and env, so the agent never
     # has to list a parent dir that is outside its allowed reads.
-    # log-record.sh appends a mistake to $HOME/.claude/mistakes.jsonl when
-    # MISTAKES_JSONL is unset, which is outside every store root. Default it to
-    # the first root's mistakes.jsonl, the file the commit gate commits; the
-    # agent doc still passes MISTAKES_JSONL=<root>/mistakes.jsonl per call, and
-    # that inline value wins for any other root.
-    CODEX_STORE_ROOTS="$roots" MISTAKES_JSONL="${STORE_ROOTS[0]}/mistakes.jsonl" \
-        $LP_TIMEOUT $LP_NICE claude -p "${access[@]}" --agent procedures:librarian \
-        "Drain the transcript queue. State dir: $st. Store roots (CODEX_STORE_ROOTS): $roots." || rc=$?
+    # The drain runs in a subshell with its cwd in the state dir, so no
+    # project or local settings of the session's cwd ride along (lp_access_args
+    # also passes --setting-sources user), and without log-record.sh's path
+    # overrides: every allowed log-record.sh call pins CODEX_ROOT, and with it
+    # set the script derives each target, <root>/mistakes.jsonl included, and
+    # refuses an override that points anywhere else. An inherited
+    # MISTAKES_JSONL for one root would make every call for another refuse.
+    (
+        cd -- "$st" || exit 1
+        unset MISTAKES_JSONL DECISIONS_DIR SOLUTIONS_DIR FAILURE_MODES_DIR CODEX_RECORDS_DIR
+        export CODEX_STORE_ROOTS="$roots"
+        exec $LP_TIMEOUT $LP_NICE claude -p "${access[@]}" --agent procedures:librarian \
+            "Drain the transcript queue. State dir: $st. Store roots (CODEX_STORE_ROOTS): $roots."
+    ) || rc=$?
     lp_clean_tmp "$st"
     # Cursors still advance past a gate block: re-issuing would loop on a
     # persistent block, and the gate already queued its reason.

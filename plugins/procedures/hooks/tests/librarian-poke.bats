@@ -45,6 +45,8 @@ echo ran >> "$CLAUDE_LOG"
 printf '%s\n' "\$*" > "$STUB_BIN/last-claude-args"
 printf '%s\n' "\$@" > "$STUB_BIN/last-claude-argv"
 printf '%s\n' "\${MISTAKES_JSONL-UNSET}" > "$STUB_BIN/last-claude-mistakes"
+printf '%s\n' "\${DECISIONS_DIR-UNSET}" "\${SOLUTIONS_DIR-UNSET}" "\${FAILURE_MODES_DIR-UNSET}" "\${CODEX_RECORDS_DIR-UNSET}" > "$STUB_BIN/last-claude-overrides"
+pwd -P > "$STUB_BIN/last-claude-cwd"
 exit 0
 EOF
   chmod +x "$STUB_BIN/claude"
@@ -148,7 +150,7 @@ unread_line() { user_prompt; }
   [ "$status" -eq 0 ]
   marker_present
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
-  grep -q -- '-p --permission-mode dontAsk ' "$STUB_BIN/last-claude-args"
+  grep -q -- '-p --setting-sources user --permission-mode dontAsk ' "$STUB_BIN/last-claude-args"
   grep -q -- ' --agent procedures:librarian Drain the transcript queue. State dir: ' "$STUB_BIN/last-claude-args"
 }
 
@@ -246,13 +248,36 @@ _argv_section() {
   ! grep -q -- 'CLAUDE\|AGENTS\|\.claude/' "$STUB_BIN/allow"
 }
 
-@test "worker: MISTAKES_JSONL is exported to the first store root, never left to the ~/.claude default" {
+@test "worker: the drain env carries none of log-record.sh's path overrides" {
   A="$HOME/store-a"; B="$HOME/store-b"; mkdir -p "$A/records" "$B/records"
   export CODEX_STORE_ROOTS="$A:$B"
-  unset MISTAKES_JSONL
+  # Inherited from the session: each would move or refuse a pinned call.
+  export MISTAKES_JSONL="$A/mistakes.jsonl" DECISIONS_DIR="$HOME/.claude/agents" \
+    SOLUTIONS_DIR="$HOME/x" FAILURE_MODES_DIR="$HOME/y" CODEX_RECORDS_DIR="../z"
   LIBRARIAN_SYNC=1 run_poke
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_BIN/last-claude-mistakes")" = "$A/mistakes.jsonl" ]
+  [ "$(cat "$STUB_BIN/last-claude-mistakes")" = "UNSET" ]
+  [ "$(sort -u "$STUB_BIN/last-claude-overrides")" = "UNSET" ]
+}
+
+@test "worker: the drain reads user settings only, with its cwd in the state dir" {
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  argv="$STUB_BIN/last-claude-argv"
+  # --setting-sources user, as two argv words, before --agent.
+  n="$(grep -n -x -- '--setting-sources' "$argv" | cut -d: -f1)"
+  [ -n "$n" ]
+  [ "$(sed -n "$((n + 1))p" "$argv")" = "user" ]
+  [ "$n" -lt "$(grep -n -x -- '--agent' "$argv" | cut -d: -f1)" ]
+  [ "$(grep -c -x -- '--setting-sources' "$argv")" -eq 1 ]
+  ! grep -qx -- 'project\|local\|user,project\|user,project,local' "$argv"
+  # The cwd is the state dir (the Edit(<sd>/tmp/**) rule names it), not the
+  # session's cwd.
+  _argv_section "$argv" --allowedTools > "$STUB_BIN/allow"
+  SD="$(sed -n 's|^Edit(/\(.*\)/tmp/\*\*)$|\1|p' "$STUB_BIN/allow")"
+  [ -n "$SD" ]
+  [ "$(cat "$STUB_BIN/last-claude-cwd")" = "$(cd "$SD" && pwd -P)" ]
+  [ "$(cat "$STUB_BIN/last-claude-cwd")" != "$(pwd -P)" ]
 }
 
 @test "worker: no store roots resolved => drain skipped and logged, nothing issued, cursors kept" {

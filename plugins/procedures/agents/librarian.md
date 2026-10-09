@@ -67,9 +67,11 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 
    Under `claude -p` your Edit/Write access covers only `.md` files one level deep in
    `decisions/`, `solutions/`, `failure-modes/`, `policies/`, `standards/`, and
-   `procedures/**/*.md`; anything else is denied. The poke also sets
-   `MISTAKES_JSONL` to the first root's `mistakes.jsonl` as a fallback, but always
-   pass `MISTAKES_JSONL=<root>/mistakes.jsonl` for the root you are logging into.
+   `procedures/**/*.md`; anything else is denied. With `CODEX_ROOT` set,
+   `log-record.sh` writes only under that root (mistakes to `<root>/mistakes.jsonl`)
+   and refuses a `MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`,
+   `FAILURE_MODES_DIR` or `CODEX_RECORDS_DIR` that points anywhere else, so never
+   set those to anything but the root's own path.
 
    As you write, capture — per store root — the four **reason fields** the commit
    gate records in git history (step 6): **what** (the kinds and counts written,
