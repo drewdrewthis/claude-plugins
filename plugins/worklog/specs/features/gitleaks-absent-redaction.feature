@@ -145,3 +145,9 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Given a live key directly after a test key, a slack token, a webhook URL, or a short live key
     When the built-in rules run
     Then the raw key body is gone
+
+  # proves: hooks/tests/worklog-record.bats "a short keyword value before a new token shape is not left raw"
+  Scenario: A short keyword value before a new token shape is not left raw
+    Given a keyword and a short value glued to a gitlab or slack token
+    When the built-in rules run
+    Then the short value is gone

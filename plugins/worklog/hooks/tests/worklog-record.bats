@@ -2159,6 +2159,14 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   done
 }
 
+# The keyword rule must see a run before a new rule can split it at a marker.
+@test "a short keyword value before a new token shape is not left raw" {
+  out="$(builtin_out "password=hunter2.$(fake_gitlab)")"
+  [[ "$out" != *hunter2* ]] || { echo "raw: $out" >&2; return 1; }
+  out="$(builtin_out "token=abc.xo""xe-1-abcdefghij")"
+  [[ "$out" != *token=abc* ]] || { echo "raw: $out" >&2; return 1; }
+}
+
 # --- end to end with gitleaks absent ----------------------------------------
 
 @test "with gitleaks absent an npm token in the prompt is stored as its marker" {

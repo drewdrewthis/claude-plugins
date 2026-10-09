@@ -31,12 +31,12 @@ _PEM = re.compile(
 # start. Separate alternatives because lookbehinds are fixed-width.
 _B = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrtbf])|(?<=\\u[0-9A-Fa-f]{4}))"
 
-# The first block is main's original rules; it runs first, unchanged, so every
-# rule after it can only ADD redaction. Never widen or guard a rule in the first
-# block — add a later entry instead. Most specific first: sk-lw/sk-ant must be
-# consumed before the generic OpenAI `sk-` shape, which would otherwise swallow
-# them under the wrong name.
-_RULES = [
+# _RULES_MAIN is main's original rules; they and the keyword pass run first,
+# unchanged, and _RULES_ADD runs on that output, so the additions can only ADD
+# redaction. Never widen or guard a rule in _RULES_MAIN — add to _RULES_ADD
+# instead. Most specific first: sk-lw/sk-ant must be consumed before the generic
+# OpenAI `sk-` shape, which would otherwise swallow them under the wrong name.
+_RULES_MAIN = [
     ("private-key", _PEM),
     # Loose on purpose: the prefix is distinctive, so anything up to whitespace,
     # a quote or an angle bracket goes. A strict alphabet let a key with one
@@ -49,7 +49,9 @@ _RULES = [
     ("aws-access-key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")),
     ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
     ("stripe-key", re.compile(r"[sr]k_live_[0-9A-Za-z]{16,}")),
-    # --- additions: only ever add redaction ---
+]
+
+_RULES_ADD = [
     ("slack-token", re.compile(r"xoxe-[A-Za-z0-9-]{10,}|(?i:xapp-\d-[A-Za-z0-9]+-\d+-[A-Za-z0-9]+)")),
     ("slack-webhook", re.compile(
         r"(?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
@@ -75,6 +77,8 @@ _RULES = [
         _B + r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8,}|" + _B + r"glc_[A-Za-z0-9+/]{32,}={0,2}")),
 ]
 
+_RULES = _RULES_MAIN + _RULES_ADD
+
 # A keyword plus a separator plus a 16+ char value. The whole match is replaced,
 # keyword included: dropping the keyword also removes the context gitleaks'
 # generic rules key on. `auth` is not a keyword: it would match prose like
@@ -92,17 +96,28 @@ _GENERIC = re.compile(
 _MARKER = re.compile(r"(<redacted:[^<>\s]*>)")
 
 
-def builtin(s):
-    """Apply the named rules, then the keyword rule, to one string."""
-    if not s:
-        return s
-    for name, rx in _RULES:
-        s = rx.sub("<redacted:%s>" % name, s)
+def _generic(s):
     # split() with one capture group: odd indexes are the markers themselves.
     parts = _MARKER.split(s)
     return "".join(
         p if i % 2 else _GENERIC.sub("<redacted:generic-secret>", p)
         for i, p in enumerate(parts))
+
+
+def builtin(s):
+    """Apply main's rules and the keyword rule, then the added rules, to one string.
+
+    The added rules run last, on main's output, so they never split a
+    keyword-glued run before the keyword rule has seen it.
+    """
+    if not s:
+        return s
+    for name, rx in _RULES_MAIN:
+        s = rx.sub("<redacted:%s>" % name, s)
+    s = _generic(s)
+    for name, rx in _RULES_ADD:
+        s = rx.sub("<redacted:%s>" % name, s)
+    return _generic(s)
 
 
 def gitleaks_present():
