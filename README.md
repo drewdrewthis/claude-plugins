@@ -446,6 +446,8 @@ cd plugins/decide && bats hooks/tests
   not shipped here.
 - Referenced `~/.knowledge/modules/shared/records/**` principles/solutions and
   the `decide-whitepaper.md` methodology doc.
+- The `decision-ask-guard` hook needs `jq` and `python3` on `PATH`; without
+  them it fails open (allows the reply, one stderr line).
 
 ## docs/
 

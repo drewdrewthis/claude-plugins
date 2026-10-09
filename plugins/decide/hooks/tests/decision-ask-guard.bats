@@ -211,10 +211,6 @@ assert_allowed() { # text
   [ -z "$output" ]
 }
 
-@test "empty text -> empty, exit 0" {
-  assert_allowed ""
-}
-
 @test "deny reason points at the decide skill" {
   run_hook "$(reply_json "Should we merge 8501?")"
   [[ "$output" == *"/decide:decide"* ]]
@@ -247,6 +243,56 @@ assert_allowed() { # text
   [ "$rc" -eq 0 ]
   [ -z "$out" ]
   grep -q "python3 missing, failing open" "$err"
+}
+
+@test "second ask after a blank line: unmarked bullets -> deny" {
+  assert_denied $'Decisions for you:\n- drop table? one-way-door, recommend keep.\n\nAnd these:\n- merge 8501?\n- stop slot?'
+}
+
+@test "second ask after a blank line: prose question -> deny" {
+  assert_denied $'Decision for you: drop the prod table? one-way-door, I recommend keep.\n\nAlso, should I restart the technician and delete the branch?'
+}
+
+@test "third ask after blank lines -> deny" {
+  assert_denied $'Should I merge 8501? one-way-door, I recommend merge.\n\nShould I stop the devtool slot?\n\nShould I delete the worktree?'
+}
+
+@test "long pathological text is denied within the 5s hook timeout" {
+  payload="$(python3 -c 'import json; print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"mcp__plugin_discord_discord__reply","tool_input":{"chat_id":"1","text":"ok to a "*12000+"\n- Should I merge PR 5?"}}))')"
+  # python3 enforces the limit: GNU timeout is absent on stock macOS.
+  out="$(printf '%s' "$payload" | python3 -c 'import os,signal,subprocess,sys
+p = subprocess.Popen(["/bin/bash", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True)
+try:
+    sys.stdout.write(p.communicate(sys.stdin.read(), timeout=5)[0])
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)' "$HOOK")"
+  [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$out")" = deny ]
+}
+
+@test "python3 scorer fails -> fails open: exit 0, no stdout, stderr names it" {
+  err="$BATS_TEST_TMPDIR/err"
+  bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  ln -s "$(command -v jq)" "$bin/jq"
+  printf '#!/bin/sh\nexit 1\n' > "$bin/python3"
+  chmod +x "$bin/python3"
+  out="$(printf '%s' "$(reply_json "Should we merge 8501?")" | PATH="$bin" /bin/bash "$HOOK" 2>"$err")"
+  rc=$?
+  [ "$rc" -eq 0 ]
+  [ -z "$out" ]
+  grep -q "decision-ask-guard:.*failing open" "$err"
+}
+
+@test "took-to word, no ask -> empty" {
+  assert_allowed "I took to fixing the flake first; any questions?"
+}
+
+@test "American word, no ask -> empty" {
+  assert_allowed "Merged 8501. The American we hired starts Monday, right?"
+}
+
+@test "did not need your google creds -> empty" {
+  assert_allowed "I did not need your google creds after all."
 }
 
 @test "hooks.json is valid and its command resolves to the script" {
