@@ -28,9 +28,13 @@ _touch_ago() { touch -t "$(_stamp $(( $(date +%s) - $2 )))" "$1"; }
 # git >= 2.47 starts `git maintenance run --auto --detach` after every commit.
 # That background process locks files under .git/objects and races the
 # `rm -rf` of a fixture repo in teardown ("Directory not empty", seen on macOS).
-# Env config reaches every git call, including those inside scripts under test.
+# GIT_CONFIG_COUNT env config is NOT enough: git strips it from the
+# receive-pack child of a local push, which then spawns its own maintenance in
+# the bare remote. GIT_CONFIG_GLOBAL survives that hop (git >= 2.32; older git
+# ignores it, and is not covered: it is older than every CI runner). The file lives in
+# the per-test tmp dir so bats cleans it up and the real ~/.gitconfig is untouched.
 git_no_auto_maintenance() {
-  export GIT_CONFIG_COUNT=2
-  export GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false
-  export GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0
+  local cfg="${BATS_TEST_TMPDIR:?}/no-auto-maintenance.gitconfig"
+  printf '[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n[receive]\n\tautogc = false\n' > "$cfg"
+  export GIT_CONFIG_GLOBAL="$cfg"
 }
