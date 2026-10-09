@@ -69,8 +69,6 @@ _RULES_BASE = [
 
 _RULES_ADD = [
     ("slack-token", re.compile(r"xoxe-[A-Za-z0-9-]{10,}|(?i:xapp-\d-[A-Za-z0-9]+-\d+-[A-Za-z0-9]+)")),
-    # Open-ended twin of the base rule, which rejects a longer run; the base rule
-    # runs first, so a lone 20-character id keeps the base marker.
     ("slack-webhook", re.compile(
         r"(?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
     ("stripe-key", re.compile(_B + r"[sr]k_(?:live|test|prod)_[0-9A-Za-z]{10,}")),
