@@ -17,16 +17,14 @@ Two layers:
     caller reports it once per session (the built-in list is narrower than
     gitleaks' rule set).
 
-Known limit of the built-in layer: two tokens glued with no separator can leave
-a token body raw. An open-ended first body can take the first characters of the
-second token, so the second rule cannot match (ghp_ directly followed by ghp_
-leaves the second body raw). An end guard can reject the first match (two AWS
-key ids glued together both stay raw). The repeat closes the cases where one
-token matches once its neighbour is a marker (Shopify then npm_; an AWS key id
-then a Google key). gitleaks is not a full cover: it scans the built-in
-output, where its generic rule catches some leftovers and misses others. The
-glued ghp_ leftover has lost its prefix and stays raw, and the gitleaks AWS
-rule does not match two glued key ids.
+Limits of the built-in layer: once the rules settle, a run of 8 or more token
+characters directly after a marker is swept into <redacted:glued-secrets>, so a
+glued second token (ghp_ then ghp_, two AWS key ids) leaves no raw body. A tail
+shorter than 8 characters directly after a marker stays. A letter, digit or
+underscore glued directly in front of a start-guarded token (an uppercase letter
+or digit for an AWS key id) hides it from the start guard, because the guard keeps
+ordinary identifiers such as npm_config_registry unchanged. The sweep also removes ordinary text glued directly after a marker; that over-redaction is
+accepted. gitleaks scans the built-in output, so it adds no cover for these.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
@@ -68,6 +66,9 @@ _RULES_BASE = [
 
 _RULES_ADD = [
     ("slack-token", re.compile(r"xoxe-[A-Za-z0-9-]{10,}|(?i:xapp-\d-[A-Za-z0-9]+-\d+-[A-Za-z0-9]+)")),
+    # Open-ended twin of the base rule, which rejects a longer run; the base rule
+    # runs first, so a lone 20-character id keeps the base marker.
+    ("aws-access-key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16,}")),
     ("slack-webhook", re.compile(
         r"(?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
     ("stripe-key", re.compile(_B + r"[sr]k_(?:live|test|prod)_[0-9A-Za-z]{10,}")),
@@ -139,18 +140,30 @@ def _pass(s):
     return _generic(s)
 
 
+# A token glued after a marker can lose its prefix to the first body, so no rule
+# matches it. Once the rules settle, 8+ token characters straight after a marker
+# are such a leftover. `<` is not in the class, so marker-marker is left alone.
+_TAIL = re.compile(_MARKER.pattern + r"[\w+/=.~\-]{8,}")
+
+
 def builtin(s):
-    """Repeat _pass until the text is stable; fail closed past _MAX_PASSES."""
+    """Repeat _pass, then sweep tails, until stable; fail closed past _MAX_PASSES."""
     if not s:
         return s
-    for _ in range(_MAX_PASSES):
+    steps = 0
+    while True:
         out = _pass(s)
         if out == s:
-            return s
+            # Sweep only settled text, so chains keep their named markers.
+            out = _TAIL.sub(lambda m: m.group(1) + _GLUED, s)
+            if out == s:
+                return s
+        steps += 1
+        if steps >= _MAX_PASSES:
+            # Still changing after the cap, so some token may be raw: one marker
+            # for the whole string, never a partly redacted one.
+            return _GLUED
         s = out
-    # Still changing after the cap, so some token may be raw: one marker for the
-    # whole string, never a partly redacted one.
-    return _GLUED
 
 
 def gitleaks_present():
@@ -216,4 +229,5 @@ def redact_texts(texts):
     """Built-ins on each string + ONE gitleaks batch over all. -> (texts, failed)."""
     texts = [builtin(t) for t in texts]
     findings, failed = scan("\n".join(texts))
-    return [apply(t, findings) for t in texts], failed
+    # Sweep again: a gitleaks marker can be followed by a glued tail.
+    return [builtin(apply(t, findings)) for t in texts], failed
