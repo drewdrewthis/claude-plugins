@@ -249,13 +249,12 @@ wl_note() {
     ( gate_failopen worklog-record "$1" "$(wl_sid)" ) 2>/dev/null || true
 }
 
-# wl_note_once WHY — wl_note, unless this session already logged WHY.
+# wl_note_once WHY SID — wl_note, unless this session already logged WHY.
 # The fail-open log is the dedupe state, so no marker file can drift from it.
 # The closing quote on the session id keeps one sid from matching as a prefix
 # of another. A missing or unreadable log means "not noted yet".
 wl_note_once() {
-    local sid; sid="$(wl_sid)"
-    grep -qF -- "\"gate\":\"worklog-record\",\"why\":\"$1\",\"session_id\":\"$sid\"" \
+    grep -qF -- "\"gate\":\"worklog-record\",\"why\":\"$1\",\"session_id\":\"$2\"" \
         "$GATE_FAILOPEN_LOG" 2>/dev/null || wl_note "$1"
 }
 
@@ -1196,7 +1195,7 @@ wl_run() {
     # Recorded LAST, and only after the mechanical row is safely on disk: the
     # machine-settled half of the turn is the durable part, and losing it to a
     # model outage would lose the turn entirely. gate_failopen exits.
-    [ "$gl_absent" -eq 0 ] || wl_note_once gitleaks-absent
+    [ "$gl_absent" -eq 0 ] || wl_note_once gitleaks-absent "$sid"
     [ "$gl_failed" -eq 0 ] || gate_failopen worklog-record gitleaks-failed "$sid"
     [ "$judged" -eq 0 ] || gate_failopen worklog-record judgment-unavailable "$sid"
     exit 0

@@ -100,9 +100,15 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
 
   # proves: hooks/tests/worklog-record.bats "ordinary code text that resembles a short prefix comes back unchanged"
   Scenario: Code text that looks like a prefix is not redacted
-    Given npm_config_registry, hf_hub_download(repo_id), SG.fields, a short eyJ string, lin_api_version, dp.pt.x, glpat-short and hvs.short
+    Given npm_config_registry, hf_hub_download(repo_id), SG.fields, a short eyJ string, lin_api_version, dp.pt.x, glpat-short, hvs.short and a backslash before task_test_ConfigurationSettings
     When the built-in rules run
     Then each comes back unchanged
+
+  # proves: hooks/tests/worklog-record.bats "a stripe key right after a literal backslash-n still redacts"
+  Scenario: A key right after a JSON escape is still redacted
+    Given a stripe live key directly after a literal backslash and n
+    When the built-in rules run
+    Then the key is replaced by its marker and the backslash-n is kept
 
   # proves: hooks/tests/worklog-record.bats "with gitleaks absent an npm token in the prompt is stored as its marker"
   Scenario: An npm token in the prompt is stored redacted

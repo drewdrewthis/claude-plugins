@@ -7,10 +7,11 @@ becomes <redacted:NAME>.
 Two layers:
   * BUILT-IN rules — named regexes that need no binary and always run.
   * gitleaks — when usable (gitleaks_present), ONE invocation per batch
-    (never per string), whose findings' exact `Secret` is replaced. Its failure is reported to the caller,
-    never swallowed: the built-ins still ran, but the operator should see it.
-    Its ABSENCE is not a failure; the caller reports it once per session (the
-    built-in list is narrower than gitleaks' rule set).
+    (never per string), whose findings' exact `Secret` is replaced. Its
+    failure is reported to the caller, never swallowed: the built-ins still
+    ran, but the operator should see it. Its ABSENCE is not a failure; the
+    caller reports it once per session (the built-in list is narrower than
+    gitleaks' rule set).
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
@@ -25,8 +26,9 @@ _PEM = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
     re.S)
 
-# Start guard for short prefixes: not mid-identifier.
-_B = r"(?<![A-Za-z0-9_])"
+# Start guard for short prefixes: not mid-identifier. A JSON escape
+# (\n, \r, \t) directly before the prefix still counts as a start.
+_B = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrt]))"
 
 # Most specific first: sk-lw/sk-ant must be consumed before the generic OpenAI
 # `sk-` shape, which would otherwise swallow them under the wrong name.
@@ -40,15 +42,15 @@ _RULES = [
     ("openai-key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{32,}")),
     ("github-pat", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}")),
     ("slack-token", re.compile(
-        r"xox[abposre]-[A-Za-z0-9-]{10,}|xapp-\d-[A-Z0-9]+-\d+-[a-z0-9]+")),
+        r"xox[abposre]-[A-Za-z0-9-]{10,}|(?i:xapp-\d-[A-Za-z0-9]+-\d+-[A-Za-z0-9]+)")),
     ("slack-webhook", re.compile(
         r"(?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,}")),
     ("aws-access-key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")),
     ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
-    ("stripe-key", re.compile(_B + r"[sr]k_(?:live|test)_[0-9A-Za-z]{16,}")),
+    ("stripe-key", re.compile(_B + r"[sr]k_(?:live|test|prod)_[0-9A-Za-z]{10,}")),
     # Widths are gitleaks 8.30.1's minimums, open-ended so a longer token
-    # leaves no raw tail. Short prefixes (npm_, hf_, SG., dp.pt.) are
-    # start-guarded so ordinary identifiers are left alone.
+    # leaves no raw tail. Rules that start with _B are start-guarded so
+    # ordinary identifiers are left alone.
     ("npm-token", re.compile(_B + r"npm_[A-Za-z0-9]{36,}")),
     ("gitlab-pat", re.compile(_B + r"glpat-[\w.-]{20,}")),
     ("huggingface-token", re.compile(_B + r"hf_[A-Za-z]{34,}")),
@@ -100,8 +102,7 @@ def builtin(s):
 def gitleaks_present():
     """True when a usable (executable, on PATH) gitleaks exists.
 
-    The single definition of "usable": scan() and the caller's absent note
-    both share one definition.
+    Single definition of "usable", shared by scan() and the caller's absent note.
     """
     return bool(shutil.which("gitleaks"))
 

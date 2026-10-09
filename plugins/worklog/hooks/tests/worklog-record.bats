@@ -2079,12 +2079,13 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   [ -z "$bad" ] || { echo "wrong or missing marker for:$bad" >&2; return 1; }
 }
 
-# fake_hf is skipped: its alphabet is letters only, so hex digits would end it.
+# fake_hf's alphabet is letters only, so its suffix must be letters too.
 @test "a longer token of every listed shape leaves no raw tail" {
   bad=""
   for row in $BUILTIN_TABLE; do
-    [ "${row%%:*}" = fake_hf ] && continue
-    t="$("${row%%:*}")0a1b2c3d4e5f"
+    sfx=0a1b2c3d4e5f
+    [ "${row%%:*}" = fake_hf ] && sfx=kQmZwXyT
+    t="$("${row%%:*}")$sfx"
     [ "$(builtin_out "before $t after")" = "before <redacted:${row#*:}> after" ] || bad="$bad ${row%%:*}"
   done
   [ -z "$bad" ] || { echo "tail left for:$bad" >&2; return 1; }
@@ -2112,10 +2113,17 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   for s in npm_config_registry 'hf_hub_download(repo_id)' SG.fields \
            "ey""Jabcdefghijklmn.ey""Jabcdefghijklmn.abcdefghij" \
            lin_api_version dp.pt.x glpat-short hvs.short \
-           risk_test_handlesemptystringinput task_live_ConfigurationSettings; do
+           risk_test_handlesemptystringinput task_live_ConfigurationSettings \
+           '\task_test_ConfigurationSettings'; do
     [ "$(builtin_out "$s")" = "$s" ] || bad="$bad [$s]"
   done
   [ -z "$bad" ] || { echo "changed:$bad" >&2; return 1; }
+}
+
+# A JSON escape is a backslash + letter in the text, not a newline.
+@test "a stripe key right after a literal backslash-n still redacts" {
+  t="$(fake_key "sk_""live_" "$ALNUM" 24)"
+  [ "$(builtin_out "x\\n$t")" = 'x\n<redacted:stripe-key>' ]
 }
 
 # --- end to end with gitleaks absent ----------------------------------------
