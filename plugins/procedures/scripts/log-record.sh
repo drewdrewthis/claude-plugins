@@ -60,6 +60,32 @@ FAILURE_MODES_DIR="${FAILURE_MODES_DIR:-$ROOT/$RECORDS_DIRNAME/failure-modes}"
 
 die() { printf 'log-record: %s\n' "$1" >&2; exit 1; }
 
+# Path-forming arguments. The headless librarian may call this script with
+# open arguments drawn from untrusted transcripts, so every value that becomes
+# part of a file path is checked here, not by the caller: a slug is one safe
+# filename component (no `/`, no `..`), a date is exactly YYYY-MM-DD.
+_check_slug() {
+    case "$1" in
+        *..*) die "invalid --slug '$1': must not contain '..'" ;;
+    esac
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
+        || die "invalid --slug '$1': only [A-Za-z0-9._-] allowed"
+}
+_check_date() {
+    [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+        || die "invalid --date '$1': expected YYYY-MM-DD"
+}
+# _check_target <file> <dir> — defence in depth after the argument checks:
+# refuse unless <file>'s physical parent is exactly the physical <dir>, and
+# refuse to write through a symlink.
+_check_target() {
+    local want got
+    want="$(cd "$2" 2>/dev/null && pwd -P)" || die "cannot resolve records dir: $2"
+    got="$(cd "$(dirname -- "$1")" 2>/dev/null && pwd -P)" || die "cannot resolve output dir for: $1"
+    [ "$got" = "$want" ] || die "refusing to write outside $want: $1"
+    [ ! -L "$1" ] || die "refusing to write through a symlink: $1"
+}
+
 # ===========================================================================
 # mistake
 # ===========================================================================
@@ -166,12 +192,14 @@ cmd_decision() {
     done
     [ -n "$slug" ]    || die "decision requires --slug"
     [ -n "$date" ]    || date="$(date -u +%Y-%m-%d)"
+    _check_slug "$slug"; _check_date "$date"
     [ -n "$title" ]   || title="$slug"
     [ -n "$summary" ] || summary="$title"
 
     local id="dec.${date}-${slug}"
     local file="$DECISIONS_DIR/${date}-${slug}.md"
     mkdir -p "$DECISIONS_DIR"
+    _check_target "$file" "$DECISIONS_DIR"
 
     if [ -f "$file" ]; then
         if [ -z "$force" ]; then
@@ -260,6 +288,7 @@ cmd_solution() {
     done
     [ -n "$slug" ]    || die "solution requires --slug"
     [ -n "$date" ]    || date="$(date -u +%Y-%m-%d)"
+    _check_slug "$slug"; _check_date "$date"
     [ -n "$title" ]   || title="$slug"
     [ -n "$summary" ] || summary="$title"
     [ -n "$resolve_after" ] || resolve_after="$(date -u -d '+3 months' +%Y-%m-%d 2>/dev/null || date -u +%Y-%m-%d)"
@@ -267,6 +296,7 @@ cmd_solution() {
     local id="sol.${date}-${slug}"
     local file="$SOLUTIONS_DIR/${date}-${slug}.md"
     mkdir -p "$SOLUTIONS_DIR"
+    _check_target "$file" "$SOLUTIONS_DIR"
 
     if [ -f "$file" ]; then
         if [ -z "$force" ]; then
@@ -343,10 +373,12 @@ cmd_failure_mode() {
     [ -n "$slug" ] || die "failure-mode requires --slug"
     [ -n "$rule" ] || die "failure-mode requires --rule"
     [ -n "$date" ] || date="$(date -u +%Y-%m-%d)"
+    _check_slug "$slug"; _check_date "$date"
 
     local id="fm.${slug}"
     local file="$FAILURE_MODES_DIR/${slug}.md"
     mkdir -p "$FAILURE_MODES_DIR"
+    _check_target "$file" "$FAILURE_MODES_DIR"
 
     if [ -f "$file" ]; then
         if [ -z "$force" ]; then
