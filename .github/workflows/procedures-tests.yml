@@ -67,6 +67,17 @@ jobs:
           bats --count hooks/tests/*.bats scripts/lib/tests/*.bats
       - name: Run the procedures suites
         working-directory: plugins/procedures
+        # Newer git starts `git maintenance run --auto --detach` after every
+        # commit. That background process takes a lock under .git/objects and
+        # races the `rm -rf` in a suite's teardown ("Directory not empty", seen
+        # on macOS in commit-records.bats). The fixtures are throwaway repos,
+        # so auto maintenance is switched off for every git call in the suites.
+        env:
+          GIT_CONFIG_COUNT: 2
+          GIT_CONFIG_KEY_0: maintenance.auto
+          GIT_CONFIG_VALUE_0: "false"
+          GIT_CONFIG_KEY_1: gc.auto
+          GIT_CONFIG_VALUE_1: "0"
         # By glob, no file list: a new suite is picked up without editing this
         # file, and a forgotten one cannot be silently skipped.
         run: bats hooks/tests/*.bats scripts/lib/tests/*.bats
