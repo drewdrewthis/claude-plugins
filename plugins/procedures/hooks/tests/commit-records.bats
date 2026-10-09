@@ -6,9 +6,12 @@
 # with COMMIT_RECORDS_NO_PUSH=1 except AC15/AC21/AC22, which use a real bare remote.
 # Run: bats hooks/tests/commit-records.bats
 
+load helpers/common
+
 # setup — fresh tmp fixture: an isolated state dir plus a git root with a
 # committed anchor record ($ROOT). Runs before every test.
 setup() {
+  git_no_auto_maintenance
   GATE="$BATS_TEST_DIRNAME/../../scripts/commit-records.sh"
   FIX="$(mktemp -d)"
   export PROCEDURES_STATE_DIR="$FIX/state"

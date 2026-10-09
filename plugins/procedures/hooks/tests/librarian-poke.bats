@@ -12,6 +12,7 @@
 load helpers/common
 
 setup() {
+  git_no_auto_maintenance
   HOOKS="$BATS_TEST_DIRNAME/.."
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/lib-home.XXXXXX")"
   mkdir -p "$HOME/.claude"

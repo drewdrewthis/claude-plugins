@@ -107,7 +107,7 @@ Feature: The procedures bats suites are green, hermetic, and run in CI
     Then ubuntu-latest and macos-latest each run every suite found by glob
     And both conclude success with no "not ok"
 
-  # proves: the failing workflow run linked in the body of PR https://github.com/drewdrewthis/claude-plugins/pull/221 (a throwaway failing @test under hooks/tests/, reverted afterwards); no run URL is repeated here
+  # proves: the failing workflow run https://github.com/drewdrewthis/claude-plugins/actions/runs/38000581701 (a throwaway failing @test under hooks/tests/, reverted afterwards); both legs failed with `not ok 475 AC11 canary: this test fails on purpose`
   @integration
   Scenario: CI goes red when a suite fails
     Given a throwaway commit adds one failing @test under hooks/tests/
