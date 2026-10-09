@@ -25,7 +25,15 @@ setup() {
   FIX="$(mktemp -d "${BATS_TMPDIR:-/tmp}/qsg.XXXXXX")"
   PF="$FIX/payload.json"
   export QUERY_GUARD_STATE_DIR="$FIX/state"
-  # Same telemetry isolation as gates.bats: a fail-open or an off-switch
+  # Clear every ambient gate switch by prefix (compgen -v exists in bash 3.2) so
+  # a developer's shell cannot arm or release the guard behind the suite's back.
+  local v
+  for v in $(compgen -v PROCEDURES_ENABLE_) $(compgen -v CLAUDE_PLUGIN_OPTION_ENABLE_); do
+    unset "$v"
+  done
+  # PLUGIN ADAPTATION (#144): the guard is default-off here, so the suite arms it
+  export PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=true
+  # Same telemetry isolation as gates.bats: a fail-open or an armed_by
   # record must land in THIS run's files, never production logs. HOME is
   # redirected too — both libs default $HOME-relative paths.
   export HOME="$FIX/home"
@@ -276,13 +284,22 @@ PIPELINE_CALL="bash '$SCRIPTS/how-do-i.sh' --question 'goal and terms here as on
   denied "does not dispatch agents"
 }
 
-# ---------- degradation: fail-open and the off-switch ----------
+# ---------- degradation: fail-open and the unarmed resting state ----------
 
-@test "the off-switch releases the guard silently and records the escape" {
-  run_guard "$(reviewer_write)" "PROCEDURES_ENABLE_QUERY_SHAPE_GUARD=false"
+# The suite's only unarmed negative control: setup() arms the guard, so every
+# deny above proves the armed path. Here the variable is truly unset (env -u),
+# and the same payload that the armed call denies must pass silently with no
+# record, which shows the silence is the switch and not a payload that never bit.
+@test "an unarmed guard releases silently and records nothing; arming denies and records armed_by" {
+  run_guard "$(reviewer_write)" -u PROCEDURES_ENABLE_QUERY_SHAPE_GUARD
   allowed_silent
-  grep -q '"gate":"QUERY_SHAPE_GUARD"' "$GATE_ESCAPE_LOG" \
-    || { echo "released switch left no escape record"; false; }
+  [ ! -s "$GATE_ESCAPE_LOG" ] \
+    || { echo "unarmed guard recorded: $(cat "$GATE_ESCAPE_LOG")"; false; }
+
+  run_guard "$(reviewer_write)"
+  denied "procedure-evolver"
+  grep -q '"armed_by":"PROCEDURES_ENABLE_QUERY_SHAPE_GUARD"' "$GATE_ESCAPE_LOG" \
+    || { echo "armed guard left no armed_by record"; false; }
 }
 
 @test "a jq-less machine fails open, silently, exit 0" {

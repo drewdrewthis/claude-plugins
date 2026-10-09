@@ -26,7 +26,7 @@
 # assignment in hooks/lib/gate-failopen.sh) when the var is unset. That default is exactly what leaked 11+ rows of
 # hooks/tests/gates.bats's own runs into production telemetry — root-caused
 # 2026-08-03, see plans/REENTRY-issue210-gate-failopen.md and the regression
-# test in gates.bats ("root cause #210: this suite does not leak..."). EVERY
+# test in gates.bats ("root cause orchard-codex#210: this suite does not leak..."). EVERY
 # test below drives gates through the `drive()` helper, which pins BOTH
 # GATE_FAILOPEN_LOG and HOME to scratch paths on every single call — never
 # call a gate script directly without it.
@@ -68,13 +68,11 @@ setup() {
 }
 
 teardown() {
-  # ${VAR:?} exits the shell, which in a teardown would skip the rm -rf below
-  # AND leave a chmod-000 lib unrestored — bricking every gate on the box. It is
-  # safe here ONLY because unreadable_lib() sets both vars together or neither,
-  # so this can never fire. That invariant is what makes the assertion legal;
-  # do not weaken it to a :- default, which would silently restore a guess.
-  [ -n "${CHMODDED_LIB:-}" ] && chmod "${CHMODDED_MODE:?unreadable_lib must set both or neither}" "$CHMODDED_LIB" 2>/dev/null
-  rm -rf "$TURN_STATE_DIR" "$LOG_DIR" "$FAKE_HOME" 2>/dev/null || true
+  # unreadable_lib() leaves a chmod-000 file in a per-test COPY; rm -rf cannot
+  # descend into an unreadable directory entry on every platform, so restore
+  # owner access first.
+  [ -n "${UNREADABLE_COPY:-}" ] && chmod -R u+rwX "$UNREADABLE_COPY" 2>/dev/null
+  rm -rf "$TURN_STATE_DIR" "$LOG_DIR" "$FAKE_HOME" "${UNREADABLE_COPY:-}" 2>/dev/null || true
 }
 
 start_turn() { printf '{"session_id":"%s"}' "$SID" | env HOME="$FAKE_HOME" bash "$HOOKS/turn-state-reset.sh"; }
@@ -98,20 +96,24 @@ drive() {
 }
 
 # unreadable_lib <basename> — make hooks/lib/<basename> unsourceable for this
-# test only. Captures the real mode rather than assuming one: restoring a
-# guessed mode would leave a permission change in the git diff, and the guess
-# was wrong once already. teardown() puts it back.
-# Sets CHMODDED_LIB and CHMODDED_MODE together or neither — that ordering is
-# the whole point. Setting the path before the mode is captured leaves teardown
-# holding a lib to restore and no mode to restore it to, and on the stat-failure
-# path the chmod 000 has ALREADY run, so the lib stays unreadable.
-# `stat -c` is GNU-only; this repo writes the BSD fallback everywhere else.
+# test only, in a per-test COPY of the plugin; the checkout is never chmodded,
+# so a concurrent run, a watcher or a live session reading it cannot see an
+# unreadable lib, and a killed run cannot leave the real tree bricked.
+# skills/ is copied as a sibling because both gates resolve
+# ../skills/<name>/SKILL.md relative to hooks/ and fail open as
+# "skill-unresolvable" without it, which would pass for the wrong reason
+# (gate-escape.bats's "an unreadable escape lib leaves every gate ARMED" has
+# the same trap). HOOKS is repointed at the copy, so call this AFTER
+# start_turn/ran_skill: turn state lives in TURN_STATE_DIR, not under hooks/.
+# teardown() removes the copy.
 unreadable_lib() {
-  local lib="$HOOKS/lib/$1" mode
+  local lib
+  UNREADABLE_COPY="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gf-copy.XXXXXX")"
+  cp -R "$HOOKS" "$UNREADABLE_COPY/hooks"
+  cp -R "$REPO/skills" "$UNREADABLE_COPY/skills"
+  HOOKS="$UNREADABLE_COPY/hooks"
+  lib="$HOOKS/lib/$1"
   [ -f "$lib" ] || { echo "no such lib: $lib"; return 1; }
-  mode="$(stat -c '%a' "$lib" 2>/dev/null || stat -f '%Lp' "$lib" 2>/dev/null)"
-  [ -n "$mode" ] || { echo "cannot stat $lib"; return 1; }
-  CHMODDED_MODE="$mode"; CHMODDED_LIB="$lib"
   chmod 000 "$lib"
 }
 
@@ -252,15 +254,14 @@ unreadable_lib() {
 
 # Unarmed default-off gate on a degraded path (no start_turn => the reset hook
 # never ran): #144's resting state. Releases silently — no row, no denial.
-# These bypass drive() because setup() exports the arming switches and drive()
-# cannot unset them; HOME and GATE_FAILOPEN_LOG are still pinned. Each premise
-# guard re-runs the same call ARMED and demands a row, so the control cannot
-# pass vacuously because the degraded path was never reached.
+# The arm variables are unset in a subshell and the call goes through drive(),
+# so HOME and GATE_FAILOPEN_LOG are pinned by the same code as every other test.
+# Each premise guard re-runs the same call ARMED and demands a row, so the
+# control cannot pass vacuously because the degraded path was never reached.
 unarmed() { # <gate-script> <payload>
-  env -u PROCEDURES_ENABLE_HOW_DO_I_GATE -u PROCEDURES_ENABLE_AM_I_DONE_GATE \
-    -u CLAUDE_PLUGIN_OPTION_ENABLE_HOW_DO_I_GATE -u CLAUDE_PLUGIN_OPTION_ENABLE_AM_I_DONE_GATE \
-    HOME="$FAKE_HOME" CLAUDE_CODE_AGENT=technician GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
-    bash -c "echo '$2' | bash '$HOOKS/$1'"
+  ( unset PROCEDURES_ENABLE_HOW_DO_I_GATE PROCEDURES_ENABLE_AM_I_DONE_GATE \
+          CLAUDE_PLUGIN_OPTION_ENABLE_HOW_DO_I_GATE CLAUDE_PLUGIN_OPTION_ENABLE_AM_I_DONE_GATE
+    drive "$1" technician "$2" )
 }
 
 @test "negative control: an unarmed how-do-i-gate on a degraded path records nothing and does not deny" {
@@ -291,6 +292,7 @@ unarmed() { # <gate-script> <payload>
 # this preserves.
 
 @test "G5 bootstrap hole: am-i-done-gate fails safely when hooks/lib/gate-failopen.sh is itself unreadable" {
+  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
   unreadable_lib "gate-failopen.sh" || { echo "AC-4 not yet implemented: hooks/lib/gate-failopen.sh does not exist"; false; }
   run drive "am-i-done-gate.sh" technician "$STOP"
   [ "$status" -eq 0 ]
@@ -298,6 +300,7 @@ unarmed() { # <gate-script> <payload>
 }
 
 @test "G5 bootstrap hole: how-do-i-gate fails safely when hooks/lib/gate-failopen.sh is itself unreadable" {
+  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
   unreadable_lib "gate-failopen.sh" || { echo "AC-4 not yet implemented: hooks/lib/gate-failopen.sh does not exist"; false; }
   run drive "how-do-i-gate.sh" technician "$PAYLOAD_EDIT"
   [ "$status" -eq 0 ]
@@ -320,6 +323,7 @@ unarmed() { # <gate-script> <payload>
 # lib/turn-state.sh itself, so they must run BEFORE the chmod.
 
 @test "case 4b: how-do-i-gate records lib-unreadable:turn-state instead of releasing silently" {
+  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
   start_turn
   ran_skill how-do-i
   unreadable_lib turn-state.sh
@@ -333,6 +337,7 @@ unarmed() { # <gate-script> <payload>
 }
 
 @test "case 4b: how-do-i-gate records lib-unreadable:gate-audience instead of releasing silently" {
+  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
   start_turn
   ran_skill how-do-i
   unreadable_lib gate-audience.sh
@@ -346,6 +351,7 @@ unarmed() { # <gate-script> <payload>
 }
 
 @test "case 4b: how-do-i-gate records lib-unreadable:gate-allowlist instead of releasing silently" {
+  [ "$(id -u)" -eq 0 ] && skip "chmod 000 does not restrict root"
   start_turn
   ran_skill how-do-i
   unreadable_lib gate-allowlist.sh
