@@ -357,9 +357,20 @@ lp_claim() {
 # is scoped to the agent's own commands rather than bypassPermissions:
 #   - --add-dir: reads of the state dir, this plugin, the transcripts, and each
 #     store root. Without it a read outside the cwd is denied.
-#   - Edit: the commit-gate tmp dir, the grooming queue, and each root's
-#     records dir. A root's scripts/ and git-hooks/ stay unwritable because the
-#     commit gate runs them. .git is a protected path that dontAsk denies.
+#   - Edit: the commit-gate tmp dir, the grooming queue, and per root only the
+#     record .md files the librarian writes (agents/librarian.md step 4): one
+#     level of *.md in decisions/, solutions/, failure-modes/, policies/ and
+#     standards/, and procedures/**/*.md (PROCEDURE.md and its EVOLUTION.md).
+#     Everything else under a root is unwritable: its scripts/ and git-hooks/
+#     (the commit gate runs them), and every non-.md file, since dontAsk
+#     denies whatever no allow rule matches. .git is a protected path.
+#   - --disallowedTools: deny wins over allow, so these hold even if an allow
+#     rule above is widened later. Per records dir: any scripts/ dir at any
+#     depth (procedures ship executable helpers there), invariants/ and
+#     common-mistakes.md (a user CLAUDE.md can @-import them into every
+#     session), and the script and config extensions in LP_DENY_EXTS. A rule
+#     cannot say "not .md" (a [!x] bracket is not a negation in these rules),
+#     so other non-.md files rely on the allow list's default deny.
 #   - Bash: the state-dir lookup, and log-record.sh and commit-records.sh with
 #     each root's literal CODEX_ROOT= prefix; commit-records.sh also has its
 #     `--root '<root>'` pinned right after the script. A rule matches the
@@ -372,8 +383,12 @@ lp_claim() {
 #     other than $CODEX_ROOT (or a second --root).
 #   - No mkdir and no rm: Write creates the tmp dir's parents itself, and the
 #     poke removes <state-dir>/tmp/commit-* after the drain (lp_clean_tmp).
+# Record kinds the librarian writes one level deep, and extensions denied
+# under every records dir.
+LP_EDIT_KINDS="decisions solutions failure-modes policies standards"
+LP_DENY_EXTS="sh bash zsh py js mjs cjs ts rb pl json jsonl yml yaml toml"
 lp_access_args() {
-    local sd="$1" pr r q q2 e rd roots=()
+    local sd="$1" pr r q q2 e rd k roots=()
     pr="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)" || return 0
     declare -p STORE_ROOTS >/dev/null 2>&1 && roots=(${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"})
     printf '%s\n' --permission-mode dontAsk --add-dir "$sd" --add-dir "$pr" \
@@ -385,7 +400,8 @@ lp_access_args() {
     for r in ${roots[@]+"${roots[@]}"}; do
         rd="$(stores_records_dir "$r")"
         case "$rd" in /*) ;; *) rd="$r/$rd" ;; esac
-        printf '%s\n' "Edit(/$rd/**)"
+        for k in $LP_EDIT_KINDS; do printf '%s\n' "Edit(/$rd/$k/*.md)"; done
+        printf '%s\n' "Edit(/$rd/procedures/**/*.md)"
         for q in '' "'" '"'; do
             for e in "CODEX_ROOT=$q$r$q" "CODEX_ROOT=$q$r$q MISTAKES_JSONL=$q$r/mistakes.jsonl$q"; do
                 printf '%s\n' "Bash($e bash $pr/scripts/log-record.sh *)" \
@@ -396,6 +412,14 @@ lp_access_args() {
                 done
             done
         done
+    done
+    printf '%s\n' --disallowedTools
+    for r in ${roots[@]+"${roots[@]}"}; do
+        rd="$(stores_records_dir "$r")"
+        case "$rd" in /*) ;; *) rd="$r/$rd" ;; esac
+        printf '%s\n' "Edit(/$rd/**/scripts/**)" "Edit(/$rd/invariants/**)" \
+            "Edit(/$rd/common-mistakes.md)"
+        for k in $LP_DENY_EXTS; do printf '%s\n' "Edit(/$rd/**/*.$k)"; done
     done
 }
 
@@ -453,7 +477,13 @@ lp_drain() {
     roots="$(IFS=:; printf '%s' "${STORE_ROOTS[*]-}")"
     # The roots and state dir go in the prompt and env, so the agent never
     # has to list a parent dir that is outside its allowed reads.
-    CODEX_STORE_ROOTS="$roots" $LP_TIMEOUT $LP_NICE claude -p "${access[@]}" --agent procedures:librarian \
+    # log-record.sh appends a mistake to $HOME/.claude/mistakes.jsonl when
+    # MISTAKES_JSONL is unset, which is outside every store root. Default it to
+    # the first root's mistakes.jsonl, the file the commit gate commits; the
+    # agent doc still passes MISTAKES_JSONL=<root>/mistakes.jsonl per call, and
+    # that inline value wins for any other root.
+    CODEX_STORE_ROOTS="$roots" MISTAKES_JSONL="${STORE_ROOTS[0]}/mistakes.jsonl" \
+        $LP_TIMEOUT $LP_NICE claude -p "${access[@]}" --agent procedures:librarian \
         "Drain the transcript queue. State dir: $st. Store roots (CODEX_STORE_ROOTS): $roots." || rc=$?
     lp_clean_tmp "$st"
     # Cursors still advance past a gate block: re-issuing would loop on a

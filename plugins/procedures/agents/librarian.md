@@ -62,7 +62,14 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    |---|---|
    | mistake | `CODEX_ROOT=<root> MISTAKES_JSONL=<root>/mistakes.jsonl bash ${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh mistake --category ... --description ... --correction ... --severity ... --trigger ...` |
    | decision / solution | Same script, `decision`/`solution` subcommand, targeting `<root>`. `--slug` is one filename component (`[A-Za-z0-9._-]`, no `..`) and `--date` is `YYYY-MM-DD`; the script refuses anything else. It does not currently emit `description:` into the frontmatter block — add it by hand (Edit) right after minting: one neutral sentence per specs/RECORD_FRONTMATTER.md's `description` guidance, not a restatement of the kind or the filename. |
-   | procedure / evolution / rule-kind (invariant, policy, standard) | Hand-write directly from that store's template in `skills/update-records/templates/`, same as procedure-evolver's procedure route — full seven-key frontmatter (`id`, `kind`, `date`, `keywords`, `links`, `status`, `description`), `id` corpus-unique (grep the root before minting), `kind` matching the containing store directory. |
+   | procedure / evolution / rule-kind (policy, standard) | Hand-write directly from that store's template in `skills/update-records/templates/`, same as procedure-evolver's procedure route — full seven-key frontmatter (`id`, `kind`, `date`, `keywords`, `links`, `status`, `description`), `id` corpus-unique (grep the root before minting), `kind` matching the containing store directory. Procedures: only `.md` files (`PROCEDURE.md`, `EVOLUTION.md`), never a procedure's `scripts/`. |
+   | invariant, principle, `common-mistakes.md`, any script or non-`.md` file | Not yours to write: queue the proposed change in `grooming-queue.md`. The headless run denies these paths (invariants and `common-mistakes.md` can be `@`-imported into every session). |
+
+   Under `claude -p` your Edit/Write access covers only `.md` files one level deep in
+   `decisions/`, `solutions/`, `failure-modes/`, `policies/`, `standards/`, and
+   `procedures/**/*.md`; anything else is denied. The poke also sets
+   `MISTAKES_JSONL` to the first root's `mistakes.jsonl` as a fallback, but always
+   pass `MISTAKES_JSONL=<root>/mistakes.jsonl` for the root you are logging into.
 
    As you write, capture — per store root — the four **reason fields** the commit
    gate records in git history (step 6): **what** (the kinds and counts written,

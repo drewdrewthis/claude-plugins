@@ -44,6 +44,7 @@ setup() {
 echo ran >> "$CLAUDE_LOG"
 printf '%s\n' "\$*" > "$STUB_BIN/last-claude-args"
 printf '%s\n' "\$@" > "$STUB_BIN/last-claude-argv"
+printf '%s\n' "\${MISTAKES_JSONL-UNSET}" > "$STUB_BIN/last-claude-mistakes"
 exit 0
 EOF
   chmod +x "$STUB_BIN/claude"
@@ -161,10 +162,12 @@ unread_line() { user_prompt; }
   ! grep -qx -- 'auto' "$argv"
   ! grep -q -- 'bypassPermissions\|dangerously' "$argv"
   grep -qx -- 'dontAsk' "$argv"
-  # Reads: the root and the plugin are added dirs; writes: only the root's records dir.
+  # Reads: the root and the plugin are added dirs; writes: only record .md
+  # files in the root's records dir (see the narrowed-Edit test below).
   grep -qxF -- "$ROOT" "$argv"
   grep -qxF -- "$PR" "$argv"
-  grep -qxF -- "Edit(/$ROOT/records/**)" "$argv"
+  grep -qxF -- "Edit(/$ROOT/records/decisions/*.md)" "$argv"
+  ! grep -qxF -- "Edit(/$ROOT/records/**)" "$argv"
   ! grep -qxF -- "Edit(/$ROOT/**)" "$argv"
   # The quoting the agent doc uses for the commit gate matches a literal rule,
   # with --root pinned to the same root; no commit-gate rule leaves --root open.
@@ -180,6 +183,52 @@ unread_line() { user_prompt; }
   ! grep -q -- 'librarian-advance' "$argv"
   # The prompt names the roots.
   grep -q -- "Store roots (CODEX_STORE_ROOTS): $ROOT\." "$argv"
+}
+
+# _argv_section <argv-file> <flag> — the argv words after <flag> up to the
+# next word starting with "--".
+_argv_section() {
+  awk -v f="$2" '$0 == f { on = 1; next } on && /^--/ { on = 0 } on' "$1"
+}
+
+@test "worker: Edit allows only record .md kinds; scripts, invariants, common-mistakes, non-.md are denied" {
+  ROOT="$HOME/store"; mkdir -p "$ROOT/records"
+  export CODEX_STORE_ROOTS="$ROOT"
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  argv="$STUB_BIN/last-claude-argv"
+  RD="$ROOT/records"
+  _argv_section "$argv" --allowedTools > "$STUB_BIN/allow"
+  _argv_section "$argv" --disallowedTools > "$STUB_BIN/deny"
+  # Allowed: exactly the record kinds the librarian writes, .md only.
+  for k in decisions solutions failure-modes policies standards; do
+    grep -qxF -- "Edit(/$RD/$k/*.md)" "$STUB_BIN/allow"
+  done
+  grep -qxF -- "Edit(/$RD/procedures/**/*.md)" "$STUB_BIN/allow"
+  # Every Edit allow under the records dir ends in *.md, and none is the old
+  # catch-all or names invariants/ or common-mistakes.md.
+  [ -z "$(grep -F "Edit(/$RD/" "$STUB_BIN/allow" | grep -v '\*\.md)$')" ]
+  ! grep -qxF -- "Edit(/$RD/**)" "$STUB_BIN/allow"
+  ! grep -q -- 'invariants\|common-mistakes' "$STUB_BIN/allow"
+  # Denied (deny wins over allow), inside the --disallowedTools list.
+  grep -qxF -- "Edit(/$RD/**/scripts/**)" "$STUB_BIN/deny"
+  grep -qxF -- "Edit(/$RD/invariants/**)" "$STUB_BIN/deny"
+  grep -qxF -- "Edit(/$RD/common-mistakes.md)" "$STUB_BIN/deny"
+  for e in sh py js json jsonl yml yaml; do
+    grep -qxF -- "Edit(/$RD/**/*.$e)" "$STUB_BIN/deny"
+  done
+  # The deny list ends before --agent, so the prompt is not swallowed as a rule.
+  [ "$(grep -n -x -- '--disallowedTools' "$argv" | cut -d: -f1)" -lt "$(grep -n -x -- '--agent' "$argv" | cut -d: -f1)" ]
+  grep -qx -- 'procedures:librarian' "$argv"
+}
+
+@test "worker: MISTAKES_JSONL is exported to the first store root, never left to the ~/.claude default" {
+  A="$HOME/store-a"; B="$HOME/store-b"; mkdir -p "$A/records" "$B/records"
+  export CODEX_STORE_ROOTS="$A:$B"
+  unset MISTAKES_JSONL
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_BIN/last-claude-mistakes")" = "$A/mistakes.jsonl" ]
 }
 
 @test "worker: no store roots resolved => drain skipped and logged, nothing issued, cursors kept" {
