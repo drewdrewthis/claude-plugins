@@ -21,9 +21,9 @@ Known limit of the built-in layer: two tokens glued with no separator can leave
 a token body raw. An open-ended first body can take the first characters of the
 second token, so the second rule cannot match (ghp_ directly followed by ghp_
 leaves the second body raw). An end guard can reject the first match (two AWS
-key ids glued together both stay raw). The repeat closes only the case where
-the second token matches once the first one is a marker. gitleaks is the
-cover.
+key ids glued together both stay raw). The repeat closes the cases where one
+token matches once its neighbour is a marker (Shopify then npm_; an AWS key id
+then a Google key). gitleaks is the cover.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.

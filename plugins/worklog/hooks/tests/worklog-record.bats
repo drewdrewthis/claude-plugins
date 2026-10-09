@@ -2261,6 +2261,15 @@ if dt >= 10:
   done
 }
 
+# The end guard rejects the first id and the start guard rejects the second, so
+# both stay raw. The gitleaks layer is the cover.
+@test "known limit: two glued aws key ids both stay raw" {
+  in="$(fake_aws)$(fake_aws)"
+  out="$(builtin_out "$in")"
+  [ "$out" = "$in" ] || { echo "got: $out" >&2; return 1; }
+  [[ "$out" != *"<redacted:"* ]]
+}
+
 # --- end to end with gitleaks absent ----------------------------------------
 
 @test "with gitleaks absent an npm token in the prompt is stored as its marker" {

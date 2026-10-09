@@ -187,3 +187,9 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Given a token with an open-ended body directly followed by another token, including the same type twice
     When the built-in rules run
     Then the output holds one marker followed by the start of the second token
+
+  # proves: hooks/tests/worklog-record.bats "known limit: two glued aws key ids both stay raw"
+  Scenario: Two glued AWS key ids both stay raw
+    Given two AWS key ids glued with no separator
+    When the built-in rules run
+    Then the output equals the input and holds no marker
