@@ -38,6 +38,16 @@ setup() {
   LOG_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gf-log.XXXXXX")"
   export GATE_FAILOPEN_LOG="$LOG_DIR/gate-failopen.jsonl"
 
+  # Arm both gates. #144 made HOW_DO_I_GATE and AM_I_DONE_GATE default-off, and
+  # an unarmed gate releases silently on every degenerate path — no fail-open
+  # row, no denial — so this suite would be asserting against a gate that is
+  # not there. What this file tests is the ARMED gate's recording; the
+  # default-off release is pinned in gate-escape.bats ("a degraded gate with
+  # its switch off is an escape, not a blind fail-open"). Exported, so drive()'s
+  # `env` passes them through. Issue #208.
+  export PROCEDURES_ENABLE_HOW_DO_I_GATE=true
+  export PROCEDURES_ENABLE_AM_I_DONE_GATE=true
+
   # turn-activity.sh's transcript glob is hardcoded to "$HOME"/.claude/projects
   # and gate_failopen's own default log is $HOME-relative too — the exact
   # defect above. FAKE_HOME means no invocation in this file can touch the
