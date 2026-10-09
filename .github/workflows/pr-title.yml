@@ -54,7 +54,7 @@ jobs:
   # `lint` only checks the title is well-formed. A well-formed `chore:` title
   # that touches plugins/<name>/ still releases nothing, so installed boxes
   # never see the change. Lives here (not a new workflow) to inherit `edited`.
-  # The script suite runs in release-title-tests.yml, so an apt outage cannot block every PR title check.
+  # Script tests: release-title-tests.yml.
   release-title:
     # release-please own PRs are `chore(main): release ...` and touch plugin
     # files by design.

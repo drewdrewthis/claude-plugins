@@ -2,8 +2,8 @@ name: release-title-tests
 
 # The release-title guard has a bats suite under .github/scripts/tests. It runs
 # here, not in pr-title.yml, so an apt outage cannot block every PR title check.
-# Paths-filtered: only the guard script, its tests and this workflow can change
-# the suite's result.
+# Paths-filtered: only the guard script, its tests, this workflow and the live
+# release-please-config.json (the suite reads it) can change the suite's result.
 #
 # Runs on pull_request AND on push to the default branch, so main is tested
 # after merge, not only the PR branch.
@@ -12,12 +12,14 @@ on:
     paths:
       - ".github/scripts/**"
       - ".github/workflows/release-title-tests.yml"
+      - "release-please-config.json"
   push:
     branches:
       - main
     paths:
       - ".github/scripts/**"
       - ".github/workflows/release-title-tests.yml"
+      - "release-please-config.json"
 
 permissions:
   contents: read
