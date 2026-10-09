@@ -1,0 +1,47 @@
+name: release-title-tests
+
+# The release-title guard has a bats suite under .github/scripts/tests. It runs
+# here, not in pr-title.yml, so an apt outage cannot block every PR title check.
+# Paths-filtered: only the guard script, its tests and this workflow can change
+# the suite's result.
+#
+# Runs on pull_request AND on push to the default branch, so main is tested
+# after merge, not only the PR branch.
+on:
+  pull_request:
+    paths:
+      - ".github/scripts/**"
+      - ".github/workflows/release-title-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/scripts/**"
+      - ".github/workflows/release-title-tests.yml"
+
+permissions:
+  contents: read
+
+# github.event.pull_request.number is empty on a push, which would collapse
+# every push run into one group that cancels itself; fall back to the ref.
+concurrency:
+  group: release-title-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bats:
+    runs-on: ubuntu-latest
+    # The suite is seconds of work with no network calls. A ten-minute ceiling
+    # turns a hang into a failed check instead of a job that burns the runner.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The suite reads the checkout and shells out to nothing networked,
+          # so the default persisted token would sit in .git/config for the
+          # whole job with no step that needs it.
+          persist-credentials: false
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run the release-title suite
+        run: bats .github/scripts/tests

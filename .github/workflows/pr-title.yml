@@ -54,6 +54,7 @@ jobs:
   # `lint` only checks the title is well-formed. A well-formed `chore:` title
   # that touches plugins/<name>/ still releases nothing, so installed boxes
   # never see the change. Lives here (not a new workflow) to inherit `edited`.
+  # The script suite runs in release-title-tests.yml, so an apt outage cannot block every PR title check.
   release-title:
     # release-please own PRs are `chore(main): release ...` and touch plugin
     # files by design.
@@ -67,8 +68,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - run: sudo apt-get update && sudo apt-get install -y bats
-      - run: bats .github/scripts/tests
       - name: Check title releases every changed plugin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

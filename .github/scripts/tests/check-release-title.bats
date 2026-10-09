@@ -67,6 +67,8 @@ run_check() { # <title> <config> <files...>
   [ "$status" -eq 2 ]
 }
 
+# These two read the live release-please-config.json on purpose, so a config edit
+# that drops procedures or the fix type breaks them loudly.
 @test "real config: chore on procedures fails" {
   run_check "chore(procedures): x" "$REAL" plugins/procedures/a
   [ "$status" -eq 1 ]
