@@ -2167,6 +2167,89 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   [[ "$out" != *token=abc* ]] || { echo "raw: $out" >&2; return 1; }
 }
 
+# A hex-bodied token's rule runs late, so a token glued straight after it has
+# to be redacted too, not left raw behind the first marker.
+@test "a token glued after a hex-bodied token leaves no raw token body" {
+  aws="$(fake_key "AK""IA" "Q3XZ7RT5NB2KD8WP" 16)"
+  goog="$(fake_key "AI""za" "$ALNUM" 35)"
+  for row in "$(fake_shopify)$(fake_npm)|<redacted:shopify-token><redacted:npm-token>" \
+             "$(fake_do)$(fake_npm)|<redacted:digitalocean-token><redacted:npm-token>" \
+             "$(fake_do)$(fake_gitlab)|<redacted:digitalocean-token><redacted:gitlab-pat>" \
+             "$(fake_shopify)$(fake_hf)|<redacted:shopify-token><redacted:huggingface-token>" \
+             "$(fake_shopify)$(fake_shopify)|<redacted:shopify-token><redacted:shopify-token>" \
+             "$aws$goog|<redacted:aws-access-key><redacted:google-api-key>"; do
+    out="$(builtin_out "${row%|*}")"
+    [ "$out" = "${row#*|}" ] || { echo "got: $out want: ${row#*|}" >&2; return 1; }
+  done
+}
+
+# One python process walks every ordered pair and triple of fakes and fragments.
+@test "running the built-ins twice on any two or three glued tokens gives the same text as once" {
+  fakes=""
+  for row in $BUILTIN_TABLE; do fakes="$fakes $("${row%%:*}")"; done
+  fakes="$fakes $(fake_lw) $(fake_ant) $(fake_ghp) $(fake_slack) $(fake_aws)"
+  fakes="$fakes $(fake_key "sk-" "$ALNUM" 48) $(fake_key "AI""za" "$ALNUM" 35) $(fake_key "sk_""live_" "$ALNUM" 24)"
+  # shellcheck disable=SC2086
+  run python3 -c '
+import itertools, sys
+sys.path.insert(0, sys.argv[1])
+import redact
+parts = sys.argv[2:] + ["token=", "password: hunter2", "secret=", "hunter2", "word", "_", "-", "."]
+bad = []
+for n in (2, 3):
+    for combo in itertools.product(parts, repeat=n):
+        s = "".join(combo)
+        once = redact.builtin(s)
+        if redact.builtin(once) != once:
+            bad.append(s)
+if bad:
+    sys.stderr.write("%d unstable inputs; first 3 (fakes):\n" % len(bad))
+    for s in bad[:3]:
+        sys.stderr.write("  %s\n" % s)
+    sys.exit(1)
+' "$HOOKS/lib" $fakes
+  [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+}
+
+# A chain too long for 8 passes cannot be made stable, so it fails closed.
+@test "a chain of glued tokens that needs more than 8 passes fails closed to one marker" {
+  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 50)' "$(fake_grafana)" "$(fake_shopify)")"
+  out="$(builtin_out "$chain")"
+  [ "$out" = "<redacted:glued-secrets>" ] || { echo "got: ${out:0:200}" >&2; return 1; }
+}
+
+@test "a 200000 character chain of glued tokens returns within 10 seconds" {
+  run python3 -c '
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import redact
+pair = sys.argv[2] + sys.argv[3]
+s = pair * (200000 // len(pair) + 1)
+t = time.monotonic()
+redact.builtin(s)
+dt = time.monotonic() - t
+if dt >= 10:
+    sys.stderr.write("took %.1f seconds\n" % dt)
+    sys.exit(1)
+' "$HOOKS/lib" "$(fake_grafana)" "$(fake_shopify)"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+}
+
+# The first token's open-ended body takes the start of the next prefix, so the
+# second rule cannot match; the gitleaks layer is the cover for this. If a rule
+# change closes it, update this test.
+@test "known limit: a token directly after an open-ended body keeps its raw body" {
+  for row in "$(fake_npm)$(fake_key "sk_""test_" "$ALNUM" 24)|<redacted:npm-token>_test_" \
+             "$(fake_hf)$(fake_npm)|<redacted:huggingface-token>_" \
+             "$(fake_shopify)$(fake_do)|<redacted:shopify-token>op_v1_"; do
+    out="$(builtin_out "${row%|*}")"
+    want="${row#*|}"
+    [[ "$out" == "$want"* ]] || { echo "got: $out want prefix: $want" >&2; return 1; }
+    rest="${out//<redacted:/}"
+    [ "$(( ${#out} - ${#rest} ))" -eq 10 ] || { echo "more than one marker: $out" >&2; return 1; }
+  done
+}
+
 # --- end to end with gitleaks absent ----------------------------------------
 
 @test "with gitleaks absent an npm token in the prompt is stored as its marker" {

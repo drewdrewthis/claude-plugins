@@ -151,3 +151,33 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     Given a keyword and a short value glued to a gitlab or slack token
     When the built-in rules run
     Then the short value is gone
+
+  # proves: hooks/tests/worklog-record.bats "a token glued after a hex-bodied token leaves no raw token body"
+  Scenario: A token glued after a hex-bodied token leaves no raw token body
+    Given a shopify, digitalocean, or AWS key directly followed by another token
+    When the built-in rules run
+    Then the output is the two markers back to back
+
+  # proves: hooks/tests/worklog-record.bats "running the built-ins twice on any two or three glued tokens gives the same text as once"
+  Scenario: Running the built-in rules twice on glued tokens gives the same text as once
+    Given every ordered pair and triple of token shapes and keyword fragments
+    When the built-in rules run twice
+    Then the second pass changes nothing
+
+  # proves: hooks/tests/worklog-record.bats "a chain of glued tokens that needs more than 8 passes fails closed to one marker"
+  Scenario: A chain of glued tokens that needs more than 8 passes fails closed to one marker
+    Given a grafana token glued to a shopify token, repeated 50 times
+    When the built-in rules run
+    Then the output is exactly the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "a 200000 character chain of glued tokens returns within 10 seconds"
+  Scenario: A 200000 character chain of glued tokens returns within 10 seconds
+    Given a chain of glued tokens at least 200000 characters long
+    When the built-in rules run
+    Then the call returns within 10 seconds
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a token directly after an open-ended body keeps its raw body"
+  Scenario: A token directly after an open-ended body keeps its raw body
+    Given an npm, huggingface, or shopify token directly followed by another token
+    When the built-in rules run
+    Then the output holds one marker followed by the start of the second token
