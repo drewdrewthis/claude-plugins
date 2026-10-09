@@ -2538,15 +2538,16 @@ sys.stdout.write(texts[0])
 ' "$HOOKS/lib" "$1"
 }
 
-# The open-ended AWS run step must not hide a value from gitleaks. On main,
-# gitleaks (generic-api-key) redacted the whole value; a run replaced before
-# the scan left a short mixed-case piece raw, below the glued-text sweep size.
+# The key id run step must not hide a value from gitleaks: its generic rule
+# redacts the whole value, so no short mixed-case piece stays raw below the
+# glued-text sweep size.
 @test "with gitleaks, a short tail after a glued aws key id run is not left raw" {
   require_real_gitleaks
   tail_piece="aB3dE5g"
   value="pul-$(fake_aws)$(fake_asia)$tail_piece"
   run real_redact_texts "key = \"$value\""
   [ "$status" -eq 0 ]
+  [[ "$output" == *"<redacted:"* ]]
   [[ "$output" != *"$tail_piece"* ]]
 }
 
@@ -2556,5 +2557,6 @@ sys.stdout.write(texts[0])
   value="$(fake_key "sk_""live_" "aB3dE5gH7jK9mN1pQ3s" 19)$(fake_key "glp""at-" "$front_piece" 4)$(fake_key "AS""IA" "ZXCVBNMLKJHGFDSA765432QW" 20)"
   run real_redact_texts "$value"
   [ "$status" -eq 0 ]
+  [[ "$output" == *"<redacted:"* ]]
   [[ "$output" != *"$front_piece"* ]]
 }

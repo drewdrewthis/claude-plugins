@@ -3,7 +3,9 @@
 One built-in pass is: base rules, keyword pass, added rules, keyword pass. A
 changing pass, a key id run replacement or a tail sweep is one step. Steps
 repeat until the text stops changing; text still changing on the 8th step
-becomes <redacted:glued-secrets>.
+becomes <redacted:glued-secrets>. redact_texts runs two stages (_rules, then
+builtin), each with its own cap, so a body can take more steps than a lone
+builtin() call; both stages fail closed.
 
 ONE implementation, imported by every python heredoc in the hook (wl_slice,
 wl_entries), so the two sites cannot drift apart. A match
@@ -30,7 +32,7 @@ guard keeps ordinary identifiers such as npm_config_registry unchanged. The
 sweep also removes ordinary text glued directly after a marker, and an
 all-uppercase word of 20 or more characters that starts with AKIA or ASIA is
 redacted as a key id; that over-redaction is accepted. gitleaks scans the
-rules' output, so it adds no cover for these.
+rules' output, where its generic rule covers some of these and misses others.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
@@ -135,7 +137,9 @@ def _generic(s):
 # A glued token can need its neighbour to be a marker before it matches, so a
 # long chain needs one step per link and an uncapped loop is quadratic. Each
 # changing pass, key id run replacement or tail sweep is one step; text still
-# changing on the 8th step becomes <redacted:glued-secrets>.
+# changing on the 8th step becomes <redacted:glued-secrets>. redact_texts runs
+# two stages (_rules, then builtin), each with its own cap, so a body can take
+# more steps than a lone builtin() call; both stages fail closed.
 _MAX_PASSES = 8
 _GLUED = "<redacted:glued-secrets>"
 
@@ -201,8 +205,8 @@ def builtin(s):
 
 def _rules(s):
     """The rules alone, repeated until stable; fail closed past _MAX_PASSES."""
-    # gitleaks must see what it saw before the run and tail steps existed, so no
-    # finding is lost.
+    # gitleaks scans the rules' output only: a run or tail marker would split a
+    # value its rules need whole.
     for _ in range(_MAX_PASSES):
         out = _pass(s)
         if out == s:
@@ -274,9 +278,8 @@ def redact_texts(texts):
     """Rules, ONE gitleaks batch over all, full built-ins. -> (texts, failed)."""
     pre = [_rules(t) for t in texts]
     findings, failed = scan("\n".join(pre))
-    if not findings:
-        return [builtin(t) for t in pre], failed
-    # The result must be a builtin() fixed point: verified_quote runs builtin() on
-    # the model's quote and then needs an exact match in this body. A gitleaks
-    # marker with a glued tail would break that match.
+    # builtin() adds the key id run and tail steps. The result must be a
+    # builtin() fixed point: verified_quote runs builtin() on the model's quote
+    # and then needs an exact match in this body. A gitleaks marker with a glued
+    # tail would break that match.
     return [builtin(apply(t, findings)) for t in pre], failed
