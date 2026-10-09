@@ -1088,6 +1088,72 @@ _evil_fm() { _fm "$1" fm.placeholder; sed -i.bak "s|^id: .*|id: $2|" "$1"; rm -f
   [ "$(find "$ROOT/records/failure-modes" -name '*.md' | wc -l | tr -d ' ')" -eq 2 ]
 }
 
+# ---- memory-file names: never a rename target, a --paths entry, or staged ----
+@test "id slug: id dec.CLAUDE (any case) BLOCKS the rename to CLAUDE.md; the file stays put" {
+  local id
+  for id in dec.CLAUDE dec.claude dec.Agents dec.CLAUDE.local; do
+    rm -f "$QUEUE"
+    _evil_fm "$ROOT/records/decisions/mem.md" "$id"
+    local before; before=$(_commit_count)
+    _run_gate --root "$ROOT" --paths "records/decisions/mem.md" \
+      --what x --why w --source s --evidence e
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BLOCK [id-slug]"* ]]
+    [[ "$output" == *"auto-loads as instructions"* ]]
+    [ -f "$ROOT/records/decisions/mem.md" ]
+    [ "$(find "$ROOT/records/decisions" -type f | wc -l | tr -d ' ')" -eq 1 ]
+    [ "$(_commit_count)" -eq "$before" ]
+    grep -q "check: id-slug" "$QUEUE"
+    rm -f "$ROOT/records/decisions/mem.md"
+  done
+}
+
+@test "id slug: ids with a non-ASCII or dot/dash-edged slug BLOCK and the file stays put" {
+  local id
+  for id in 'fm.é' 'fm.ｆｕｌｌ' 'fm..' 'fm.-x' 'fm..x' 'fm.x.'; do
+    _evil_fm "$ROOT/records/failure-modes/odd.md" "$id"
+    _run_gate --root "$ROOT" --paths "records/failure-modes/odd.md" \
+      --what x --why w --source s --evidence e
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BLOCK [id-slug]"* ]]
+    [ -f "$ROOT/records/failure-modes/odd.md" ]
+    [ "$(find "$ROOT/records/failure-modes" -name '*.md' | wc -l | tr -d ' ')" -eq 2 ]
+  done
+}
+
+@test "memory file: a --paths entry named CLAUDE.md / agents.md / under .claude/ BLOCKS, nothing staged" {
+  local p
+  for p in records/decisions/CLAUDE.md records/decisions/claude.md \
+           records/procedures/x/AGENTS.md records/decisions/CLAUDE.local.md \
+           records/procedures/x/.claude/rules/r.md; do
+    rm -f "$QUEUE"
+    mkdir -p "$ROOT/$(dirname "$p")"
+    _fm "$ROOT/$p" fm.mem
+    local before; before=$(_commit_count)
+    _run_gate --root "$ROOT" --paths "$p" --what x --why w --source s --evidence e
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BLOCK [memory-file]"* ]]
+    [ -f "$ROOT/$p" ]
+    [ "$(_commit_count)" -eq "$before" ]
+    [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]
+    grep -q "check: memory-file" "$QUEUE"
+    rm -f "$ROOT/$p"
+  done
+}
+
+@test "memory file: a CLAUDE.md staged outside the call BLOCKS the commit" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  mkdir -p "$ROOT/records/x"; printf 'do evil\n' > "$ROOT/records/x/Claude.md"
+  git -C "$ROOT" add -- records/x/Claude.md
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [memory-file]"* ]]
+  [[ "$output" == *"records/x/Claude.md"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
 @test "id slug: a tracked record with a traversal id is not git-mv'd either" {
   _evil_fm "$ROOT/records/failure-modes/evil.md" 'fm./../../../pwn3'
   git -C "$ROOT" add -A; git -C "$ROOT" commit -qm evil

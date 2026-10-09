@@ -38,8 +38,10 @@
 #   1. pull --rebase (only when an upstream is configured)
 #   2. normalize frontmatter of the record paths (idempotent, in place); the
 #      rename to the id's slug BLOCKS, with the file unmoved, unless the slug
-#      is one [A-Za-z0-9._-] component without `..` and the target stays in
-#      the record's own directory
+#      passes stores_check_slug (one ASCII [A-Za-z0-9._-] component, no `..`,
+#      no dot/dash edge, not an auto-loaded memory name such as CLAUDE.md) and
+#      the target stays in the record's own directory. A --paths entry or a
+#      staged path that is an auto-loaded memory file BLOCKS (memory-file).
 #   3. validate — baseline: fence-block, size cap, check-sanitization.sh,
 #      check-sections.sh, whole-root duplicate-id scan, case-twin scan,
 #      lint-frontmatter.sh
@@ -419,15 +421,14 @@ _slug_of_id() {
 }
 
 # _check_id_slug <slug> <rel> — BLOCK unless <slug> is one safe filename
-# component: only [A-Za-z0-9._-], and no `..`. Same rule as log-record.sh's
-# --slug check. The slug comes from the record's frontmatter id, which the
-# headless librarian writes from untrusted transcripts.
+# component: stores_check_slug, the same rule as log-record.sh's --slug check
+# (ASCII [A-Za-z0-9._-] only, no `..`, not a dot or dash edge, and never an
+# auto-loaded memory name such as CLAUDE.md). The slug comes from the record's
+# frontmatter id, which the headless librarian writes from untrusted transcripts.
 _check_id_slug() {
-    case "$1" in
-        *..*) _abort id-slug "id slug '$1' contains '..'; file left in place: $2" ;;
-    esac
-    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
-        || _abort id-slug "id slug '$1' has characters outside [A-Za-z0-9._-]; file left in place: $2"
+    local why
+    why="$(stores_check_slug "$1")" \
+        || _abort id-slug "id slug '$1' $why; file left in place: $2"
 }
 
 # _check_same_dir <abs> <newabs> <rel> — BLOCK unless the rename target's
@@ -541,6 +542,19 @@ _rebuild_index() {
         _abort index "build-record-index failed: $(printf '%s' "$idx_out" | tr '\n' ' ')"
     fi
 }
+
+# ---- memory-file guard ----
+# A --paths entry whose basename Claude Code auto-loads as instructions
+# (CLAUDE.md, CLAUDE.local.md, AGENTS.md, case-insensitively) or that sits
+# under a .claude/ dir BLOCKS before anything is normalized or renamed: a later
+# session with its cwd in the store would read it as instructions. See
+# stores_is_memory_path. The id rename (normalize_and_collect) and the staged
+# set (before the commit) are checked against the same names.
+for _p in ${PATHS[@]+"${PATHS[@]}"}; do
+    stores_is_memory_path "$_p" \
+        && _abort memory-file "path names a file Claude Code auto-loads as instructions; nothing staged: $_p"
+done
+unset _p
 
 # ---- normalize-only mode (AC4 evidence) ----
 if [ -n "$NORMALIZE_ONLY" ]; then
@@ -861,6 +875,17 @@ _drop_lines() {
 
 JSONL_QUARANTINED=""
 [ -z "$JSONL" ] || _stage_jsonl
+# Staged memory-file guard: whatever is in the index commits, including a
+# path staged outside this call, so refuse the commit when any staged path is
+# an auto-loaded memory file (stores_is_memory_path). -z: without it git
+# C-quotes a non-ASCII path, and the trailing quote would hide the basename.
+_staged="$(git -C "$ROOT" diff --cached --name-only --no-renames -z 2>/dev/null | tr '\0' '\n' && printf x)" \
+    || _abort memory-file "cannot list the staged paths for $ROOT"
+while IFS= read -r _sp; do
+    [ -n "$_sp" ] && stores_is_memory_path "$_sp" \
+        && _abort memory-file "staged path names a file Claude Code auto-loads as instructions; not committing: $_sp"
+done <<< "${_staged%x}"
+unset _sp _staged
 if git -C "$ROOT" diff --cached --quiet; then
     printf '%s: nothing to commit\n' "$prog"
     exit 0

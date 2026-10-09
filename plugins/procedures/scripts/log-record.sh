@@ -63,15 +63,15 @@ die() { printf 'log-record: %s\n' "$1" >&2; exit 1; }
 # Path-forming arguments. The headless librarian may call this script with
 # open arguments drawn from untrusted transcripts, so every value that becomes
 # part of a file path is checked here, not by the caller: a slug is one safe
-# filename component (no `/`, no `..`), a date is exactly YYYY-MM-DD.
+# filename component (see stores_check_slug: ASCII only, no `/`, no `..`, and
+# never a name Claude Code auto-loads as instructions, such as CLAUDE.md), a
+# date is exactly YYYY-MM-DD.
 _check_slug() {
-    case "$1" in
-        *..*) die "invalid --slug '$1': must not contain '..'" ;;
-    esac
-    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
-        || die "invalid --slug '$1': only [A-Za-z0-9._-] allowed"
+    local why
+    why="$(stores_check_slug "$1")" || die "invalid --slug '$1': $why"
 }
 _check_date() {
+    local LC_ALL=C
     [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
         || die "invalid --date '$1': expected YYYY-MM-DD"
 }

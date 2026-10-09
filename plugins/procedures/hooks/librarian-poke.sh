@@ -370,7 +370,9 @@ lp_claim() {
 #     common-mistakes.md (a user CLAUDE.md can @-import them into every
 #     session), and the script and config extensions in LP_DENY_EXTS. A rule
 #     cannot say "not .md" (a [!x] bracket is not a negation in these rules),
-#     so other non-.md files rely on the allow list's default deny.
+#     so other non-.md files rely on the allow list's default deny. Per records
+#     dir and in the state dir: every filename Claude Code auto-loads as
+#     instructions (lp_memory_denies), which the *.md allow globs would match.
 #   - Bash: the state-dir lookup, and log-record.sh and commit-records.sh with
 #     each root's literal CODEX_ROOT= prefix; commit-records.sh also has its
 #     `--root '<root>'` pinned right after the script. A rule matches the
@@ -420,7 +422,23 @@ lp_access_args() {
         printf '%s\n' "Edit(/$rd/**/scripts/**)" "Edit(/$rd/invariants/**)" \
             "Edit(/$rd/common-mistakes.md)"
         for k in $LP_DENY_EXTS; do printf '%s\n' "Edit(/$rd/**/*.$k)"; done
+        lp_memory_denies "$rd"
     done
+    lp_memory_denies "$sd"
+}
+
+# lp_memory_denies <dir> — deny rules for every file Claude Code auto-loads as
+# instructions (stores.sh STORES_MEMORY_NAMES, and anything under a
+# STORES_MEMORY_DIR dir) at any depth under <dir>, including <dir> itself.
+# The decisions/*.md and procedures/**/*.md allow globs match CLAUDE.md, and a
+# session whose cwd is the store root, $HOME or that dir would load one.
+lp_memory_denies() {
+    local n
+    for n in ${STORES_MEMORY_NAMES:-CLAUDE.md CLAUDE.local.md AGENTS.md}; do
+        printf '%s\n' "Edit(/$1/$n)" "Edit(/$1/**/$n)"
+    done
+    n="${STORES_MEMORY_DIR:-.claude}"
+    printf '%s\n' "Edit(/$1/$n/**)" "Edit(/$1/**/$n/**)"
 }
 
 # lp_clean_tmp <state-dir> — remove the commit gate's metadata dirs

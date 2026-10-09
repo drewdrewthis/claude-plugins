@@ -222,6 +222,30 @@ _argv_section() {
   grep -qx -- 'procedures:librarian' "$argv"
 }
 
+@test "worker: every auto-loaded memory filename is denied under each records dir and the state dir" {
+  A="$HOME/store-a"; B="$HOME/store-b"; mkdir -p "$A/records" "$B/records"
+  export CODEX_STORE_ROOTS="$A:$B"
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  argv="$STUB_BIN/last-claude-argv"
+  _argv_section "$argv" --allowedTools > "$STUB_BIN/allow"
+  _argv_section "$argv" --disallowedTools > "$STUB_BIN/deny"
+  SD="$(sed -n 's|^Edit(/\(.*\)/tmp/\*\*)$|\1|p' "$STUB_BIN/allow")"
+  [ -n "$SD" ]
+  # The allow glob does match the name, so only the deny keeps it out.
+  grep -qxF -- "Edit(/$A/records/decisions/*.md)" "$STUB_BIN/allow"
+  for d in "$A/records" "$B/records" "$SD"; do
+    for n in CLAUDE.md CLAUDE.local.md AGENTS.md; do
+      grep -qxF -- "Edit(/$d/$n)" "$STUB_BIN/deny"
+      grep -qxF -- "Edit(/$d/**/$n)" "$STUB_BIN/deny"
+    done
+    grep -qxF -- "Edit(/$d/.claude/**)" "$STUB_BIN/deny"
+    grep -qxF -- "Edit(/$d/**/.claude/**)" "$STUB_BIN/deny"
+  done
+  # None of them leaked into the allow list.
+  ! grep -q -- 'CLAUDE\|AGENTS\|\.claude/' "$STUB_BIN/allow"
+}
+
 @test "worker: MISTAKES_JSONL is exported to the first store root, never left to the ~/.claude default" {
   A="$HOME/store-a"; B="$HOME/store-b"; mkdir -p "$A/records" "$B/records"
   export CODEX_STORE_ROOTS="$A:$B"

@@ -43,6 +43,32 @@ _extra() { [ "$1" = failure-mode ] && printf '%s\n' --rule r --skip-gate; true; 
   _no_stray
 }
 
+@test "decision / solution / failure-mode: a slug naming an auto-loaded memory file is refused, any case" {
+  local kind slug
+  for kind in decision solution failure-mode; do
+    for slug in CLAUDE claude agents AGENTS CLAUDE.local claude.LOCAL; do
+      run bash "$WRITER" "$kind" --slug "$slug" --date 2026-10-09 $(_extra "$kind")
+      [ "$status" -ne 0 ]
+      [[ "$output" == *"invalid --slug"* ]]
+      [[ "$output" == *"auto-loads as instructions"* ]]
+    done
+  done
+  [ ! -e "$CODEX_ROOT/records/failure-modes/CLAUDE.md" ]
+  _no_stray
+}
+
+@test "decision / solution / failure-mode: non-ASCII and dot/dash-edged slugs are refused (LC_ALL=C)" {
+  local kind slug
+  for kind in decision solution failure-mode; do
+    for slug in "é" "café" "ｆｕｌｌ" "." "-x" "--force" ".x" ".hidden" "x."; do
+      LC_ALL=en_US.UTF-8 run bash "$WRITER" "$kind" --slug "$slug" --date 2026-10-09 $(_extra "$kind")
+      [ "$status" -ne 0 ]
+      [[ "$output" == *"invalid --slug"* ]]
+    done
+  done
+  _no_stray
+}
+
 @test "decision / solution / failure-mode: a --date that is not YYYY-MM-DD is refused" {
   local kind date
   for kind in decision solution failure-mode; do
