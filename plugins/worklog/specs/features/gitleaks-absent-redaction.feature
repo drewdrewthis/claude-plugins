@@ -170,6 +170,12 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run
     Then the output is exactly the glued-secrets marker
 
+  # proves: hooks/tests/worklog-record.bats "a chain of glued tokens that settles within the cap is redacted token by token"
+  Scenario: A chain of glued tokens that settles within the cap is redacted token by token
+    Given a grafana token glued to a shopify token, repeated 3 times
+    When the built-in rules run
+    Then the output is the grafana and shopify markers, repeated 3 times
+
   # proves: hooks/tests/worklog-record.bats "a 200000 character chain of glued tokens returns within 10 seconds"
   Scenario: A 200000 character chain of glued tokens returns within 10 seconds
     Given a chain of glued tokens at least 200000 characters long
@@ -178,6 +184,6 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
 
   # proves: hooks/tests/worklog-record.bats "known limit: a token directly after an open-ended body keeps its raw body"
   Scenario: A token directly after an open-ended body keeps its raw body
-    Given an npm, huggingface, or shopify token directly followed by another token
+    Given a token with an open-ended body directly followed by another token, including the same type twice
     When the built-in rules run
     Then the output holds one marker followed by the start of the second token

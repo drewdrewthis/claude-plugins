@@ -2211,11 +2211,18 @@ if bad:
   [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
 }
 
-# A chain too long for 8 passes cannot be made stable, so it fails closed.
+# A chain still changing on the 8th pass fails closed.
 @test "a chain of glued tokens that needs more than 8 passes fails closed to one marker" {
   chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 50)' "$(fake_grafana)" "$(fake_shopify)")"
   out="$(builtin_out "$chain")"
   [ "$out" = "<redacted:glued-secrets>" ] || { echo "got: ${out:0:200}" >&2; return 1; }
+}
+
+@test "a chain of glued tokens that settles within the cap is redacted token by token" {
+  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 3)' "$(fake_grafana)" "$(fake_shopify)")"
+  out="$(builtin_out "$chain")"
+  want="$(python3 -c 'import sys; sys.stdout.write("<redacted:grafana-token><redacted:shopify-token>" * 3)')"
+  [ "$out" = "$want" ] || { echo "got: ${out:0:200}" >&2; return 1; }
 }
 
 @test "a 200000 character chain of glued tokens returns within 10 seconds" {
@@ -2235,12 +2242,14 @@ if dt >= 10:
   [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
 }
 
-# The first token's open-ended body takes the start of the next prefix, so the
-# second rule cannot match; the gitleaks layer is the cover for this. If a rule
-# change closes it, update this test.
+# When the first token's body is open-ended and its alphabet includes the next
+# token's prefix characters, the first rule takes the start of the second token
+# and the second body stays raw. This includes the same type twice. The gitleaks
+# layer is the cover. If a rule change closes it, update this test.
 @test "known limit: a token directly after an open-ended body keeps its raw body" {
   for row in "$(fake_npm)$(fake_key "sk_""test_" "$ALNUM" 24)|<redacted:npm-token>_test_" \
              "$(fake_hf)$(fake_npm)|<redacted:huggingface-token>_" \
+             "$(fake_ghp)$(fake_ghp)|<redacted:github-pat>_" \
              "$(fake_shopify)$(fake_do)|<redacted:shopify-token>op_v1_"; do
     out="$(builtin_out "${row%|*}")"
     want="${row#*|}"

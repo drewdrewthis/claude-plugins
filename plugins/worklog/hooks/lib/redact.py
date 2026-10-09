@@ -1,8 +1,8 @@
 """redact.py — secret redaction for worklog-record.sh. Stdlib only.
 
 One built-in pass is: base rules, keyword pass, added rules, keyword pass. The
-pass repeats until the text stops changing, at most 8 times; past that the whole
-string becomes <redacted:glued-secrets>.
+pass repeats until the text stops changing; text still changing on the 8th pass
+becomes <redacted:glued-secrets>.
 
 ONE implementation, imported by every python heredoc in the hook (wl_slice,
 wl_entries), so the two sites cannot drift apart. A match
@@ -18,9 +18,11 @@ Two layers:
     gitleaks' rule set).
 
 Known limit of the built-in layer: when two tokens are glued with no separator
-and the first token's open-ended body takes the start of the second token's
-prefix (an npm_ token directly followed by an sk_test_ key), the second rule
-cannot match and that body stays raw. gitleaks is the cover.
+and the first token's body is open-ended and its alphabet includes the
+characters of the second token's prefix, the first rule takes the start of the
+second token and the second body stays raw. This holds for most open-ended
+bodies and for the same token type twice (ghp_ directly followed by ghp_).
+gitleaks is the cover.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
@@ -114,8 +116,11 @@ def _generic(s):
 
 # A token glued after another can only match once the one before it is a marker,
 # so a long chain needs one pass per link and an uncapped loop is quadratic.
-# Real text settles in 2 to 4 passes.
+# The pair-and-triple sweep in the bats suite settles within 4 passes. The 8th
+# pass is the confirming one, so text that needs more than 7 changing passes
+# collapses.
 _MAX_PASSES = 8
+_GLUED = "<redacted:glued-secrets>"
 
 
 def _pass(s):
@@ -142,7 +147,7 @@ def builtin(s):
         s = out
     # Still changing after the cap, so some token may be raw: one marker for the
     # whole string, never a partly redacted one.
-    return "<redacted:glued-secrets>"
+    return _GLUED
 
 
 def gitleaks_present():
