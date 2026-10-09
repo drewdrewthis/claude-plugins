@@ -346,6 +346,50 @@ lp_claim() {
     return 0
 }
 
+# lp_access_args <state-dir> — print the drain's permission flags, one argv
+# word per line, for lp_drain to read into an array.
+# PLUGIN ADAPTATION: the vendored upstream launches with --permission-mode
+# auto. Headless, auto mode is not always available (it needs a supported
+# model and server-side availability; when it is missing the session starts
+# in Manual), and in Manual every Bash call and every read outside the cwd is
+# denied because nobody is there to approve it. dontAsk plus this allowlist
+# behaves the same every time. Transcripts are untrusted input, so the list
+# is scoped to the agent's own commands rather than bypassPermissions:
+#   - --add-dir: reads of the state dir, this plugin, the transcripts, and each
+#     store root. Without it a read outside the cwd is denied.
+#   - Edit: the commit-gate tmp dir, the grooming queue, and each root's
+#     records dir. A root's scripts/ and git-hooks/ stay unwritable because the
+#     commit gate runs them. .git is a protected path that dontAsk denies.
+#   - Bash: the state-dir lookup, mkdir under tmp/, and log-record.sh and
+#     commit-records.sh with each root's literal CODEX_ROOT= prefix. A rule
+#     matches the command text as written, so each quoting the agent doc uses
+#     gets its own rule. An allow rule does not match past an unknown variable
+#     assignment, and a wildcard in place of the root would also match
+#     `CODEX_ROOT=x <any program> ...`.
+lp_access_args() {
+    local sd="$1" pr r q e s rd roots=()
+    pr="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)" || return 0
+    declare -p STORE_ROOTS >/dev/null 2>&1 && roots=(${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"})
+    printf '%s\n' --permission-mode dontAsk --add-dir "$sd" --add-dir "$pr" \
+        --add-dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
+    for r in ${roots[@]+"${roots[@]}"}; do printf '%s\n' --add-dir "$r"; done
+    printf '%s\n' --allowedTools \
+        "Bash(bash -c 'source \"$pr/scripts/lib/stores.sh\" && procedures_state_dir')" \
+        "Bash(mkdir -p $sd/tmp/*)" "Edit(/$sd/tmp/**)" "Edit(/$sd/grooming-queue.md)"
+    for r in ${roots[@]+"${roots[@]}"}; do
+        rd="$(stores_records_dir "$r")"
+        case "$rd" in /*) ;; *) rd="$r/$rd" ;; esac
+        printf '%s\n' "Edit(/$rd/**)"
+        for q in '' "'" '"'; do
+            for e in "CODEX_ROOT=$q$r$q" "CODEX_ROOT=$q$r$q MISTAKES_JSONL=$q$r/mistakes.jsonl$q"; do
+                for s in log-record.sh commit-records.sh; do
+                    printf '%s\n' "Bash($e bash $pr/scripts/$s *)" "Bash($e bash \"$pr/scripts/$s\" *)"
+                done
+            done
+        done
+    done
+}
+
 # lp_drain — under the claim: issue this drain's batch, then run the librarian
 # only when the batch issued something. The poke, not the agent, runs
 # librarian-batch.sh, so the agent cannot re-issue itself a bigger batch; an
@@ -374,7 +418,14 @@ lp_drain() {
         || { lp_log "librarian-poke: cannot snapshot the manifest, drain skipped"; return 0; }
     lp_store_status | LC_ALL=C sort > "$st/store-status.before" 2>/dev/null || true
     date +%s > "$st/last-drain-start" 2>/dev/null || true
-    $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
+    local access=() word roots
+    # A read loop, not mapfile: macOS ships bash 3.2.
+    while IFS= read -r word; do access+=("$word"); done < <(lp_access_args "$st")
+    roots="$(IFS=:; printf '%s' "${STORE_ROOTS[*]-}")"
+    # The roots and state dir go in the prompt and env, so the agent never
+    # has to list a parent dir that is outside its allowed reads.
+    CODEX_STORE_ROOTS="$roots" $LP_TIMEOUT $LP_NICE claude -p "${access[@]}" --agent procedures:librarian \
+        "Drain the transcript queue. State dir: $st. Store roots (CODEX_STORE_ROOTS): $roots." || rc=$?
     # Cursors still advance past a gate block: re-issuing would loop on a
     # persistent block, and the gate already queued its reason.
     lp_note_store_writes "$st/store-status.before"

@@ -39,6 +39,7 @@ setup() {
 #!/usr/bin/env bash
 echo ran >> "$CLAUDE_LOG"
 printf '%s\n' "\$*" > "$STUB_BIN/last-claude-args"
+printf '%s\n' "\$@" > "$STUB_BIN/last-claude-argv"
 exit 0
 EOF
   chmod +x "$STUB_BIN/claude"
@@ -142,7 +143,33 @@ unread_line() { user_prompt; }
   [ "$status" -eq 0 ]
   marker_present
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
-  grep -q -- '-p --permission-mode auto --agent procedures:librarian Drain the transcript queue.' "$STUB_BIN/last-claude-args"
+  grep -q -- '-p --permission-mode dontAsk ' "$STUB_BIN/last-claude-args"
+  grep -q -- ' --agent procedures:librarian Drain the transcript queue. State dir: ' "$STUB_BIN/last-claude-args"
+}
+
+@test "worker: the drain is scoped to its own commands, per store root, never auto or bypass" {
+  ROOT="$HOME/store"; mkdir -p "$ROOT/records"
+  export CODEX_STORE_ROOTS="$ROOT"
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  argv="$STUB_BIN/last-claude-argv"
+  PR="$(cd "$HOOKS/.." && pwd)"
+  ! grep -qx -- 'auto' "$argv"
+  ! grep -q -- 'bypassPermissions\|dangerously' "$argv"
+  grep -qx -- 'dontAsk' "$argv"
+  # Reads: the root and the plugin are added dirs; writes: only the root's records dir.
+  grep -qxF -- "$ROOT" "$argv"
+  grep -qxF -- "$PR" "$argv"
+  grep -qxF -- "Edit(/$ROOT/records/**)" "$argv"
+  ! grep -qxF -- "Edit(/$ROOT/**)" "$argv"
+  # Both quotings the agent doc uses for the commit gate match a literal rule.
+  grep -qxF -- "Bash(CODEX_ROOT='$ROOT' bash \"$PR/scripts/commit-records.sh\" *)" "$argv"
+  grep -qxF -- "Bash(CODEX_ROOT=$ROOT MISTAKES_JSONL=$ROOT/mistakes.jsonl bash $PR/scripts/log-record.sh *)" "$argv"
+  # No rule leaves the root to a wildcard, and the agent cannot move cursors.
+  ! grep -q -- 'CODEX_ROOT=\*' "$argv"
+  ! grep -q -- 'librarian-advance' "$argv"
+  # The prompt names the roots.
+  grep -q -- "Store roots (CODEX_STORE_ROOTS): $ROOT\." "$argv"
 }
 
 @test "worker: a pre-seeded claim (concurrent holder) is never stolen — claude never invoked" {
