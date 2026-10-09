@@ -2213,15 +2213,17 @@ if bad:
 
 # A chain still changing on the 8th pass fails closed.
 @test "a chain of glued tokens that needs more than 8 passes fails closed to one marker" {
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 50)' "$(fake_grafana)" "$(fake_shopify)")"
+  # 7 pairs is the shortest chain still changing on the 8th pass.
+  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 7)' "$(fake_grafana)" "$(fake_shopify)")"
   out="$(builtin_out "$chain")"
   [ "$out" = "<redacted:glued-secrets>" ] || { echo "got: ${out:0:200}" >&2; return 1; }
 }
 
 @test "a chain of glued tokens that settles within the cap is redacted token by token" {
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 3)' "$(fake_grafana)" "$(fake_shopify)")"
+  # 6 pairs is the longest chain that settles within the cap.
+  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6)' "$(fake_grafana)" "$(fake_shopify)")"
   out="$(builtin_out "$chain")"
-  want="$(python3 -c 'import sys; sys.stdout.write("<redacted:grafana-token><redacted:shopify-token>" * 3)')"
+  want="$(python3 -c 'import sys; sys.stdout.write("<redacted:grafana-token><redacted:shopify-token>" * 6)')"
   [ "$out" = "$want" ] || { echo "got: ${out:0:200}" >&2; return 1; }
 }
 

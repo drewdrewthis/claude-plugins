@@ -20,8 +20,9 @@ Two layers:
 Known limit of the built-in layer: when two tokens are glued with no separator
 and the first token's body is open-ended and its alphabet includes the
 characters of the second token's prefix, the first rule takes the start of the
-second token and the second body stays raw. This holds for most open-ended
-bodies and for the same token type twice (ghp_ directly followed by ghp_).
+second token, stops before the end of the second token, and the second body
+stays raw. This holds for most open-ended bodies and for the same token type
+twice (ghp_ directly followed by ghp_).
 gitleaks is the cover.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
@@ -116,9 +117,8 @@ def _generic(s):
 
 # A token glued after another can only match once the one before it is a marker,
 # so a long chain needs one pass per link and an uncapped loop is quadratic.
-# The pair-and-triple sweep in the bats suite settles within 4 passes. The 8th
-# pass is the confirming one, so text that needs more than 7 changing passes
-# collapses.
+# The 8th pass is the confirming one, so text that needs more than 7 changing
+# passes collapses.
 _MAX_PASSES = 8
 _GLUED = "<redacted:glued-secrets>"
 

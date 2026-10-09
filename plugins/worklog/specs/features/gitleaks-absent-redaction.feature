@@ -166,15 +166,15 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
 
   # proves: hooks/tests/worklog-record.bats "a chain of glued tokens that needs more than 8 passes fails closed to one marker"
   Scenario: A chain of glued tokens that needs more than 8 passes fails closed to one marker
-    Given a grafana token glued to a shopify token, repeated 50 times
+    Given a grafana token glued to a shopify token, repeated 7 times
     When the built-in rules run
     Then the output is exactly the glued-secrets marker
 
   # proves: hooks/tests/worklog-record.bats "a chain of glued tokens that settles within the cap is redacted token by token"
   Scenario: A chain of glued tokens that settles within the cap is redacted token by token
-    Given a grafana token glued to a shopify token, repeated 3 times
+    Given a grafana token glued to a shopify token, repeated 6 times
     When the built-in rules run
-    Then the output is the grafana and shopify markers, repeated 3 times
+    Then the output is the grafana and shopify markers, repeated 6 times
 
   # proves: hooks/tests/worklog-record.bats "a 200000 character chain of glued tokens returns within 10 seconds"
   Scenario: A 200000 character chain of glued tokens returns within 10 seconds
