@@ -1417,7 +1417,7 @@ fake_ghp() { fake_key "gh""p_" "Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7k8" 36; }
 fake_slack() { printf '%s' "xo""xb-1234567890-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"; }
 fake_aws() { printf '%s' "AK""IA""Q3XZ7RT5NB2KD8WP"; }
 # An npm token. gitleaks 8.30.1 flags it (npm-access-token) AND the hook's
-# built-in rules now cover it (npm-token), so it is NOT a gitleaks-only fixture.
+# built-in rules cover it (npm-token), so it is NOT a gitleaks-only fixture.
 fake_npm() { fake_key "np""m_" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5" 36; }
 # A Pulumi token: gitleaks 8.30.1 flags it (pulumi-api-token) with no keyword
 # context, and no built-in rule matches it. The gitleaks-only fixture.
@@ -2159,7 +2159,7 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   done
 }
 
-# The keyword rule must see a run before a new rule can split it at a marker.
+# The keyword rule must see a run before an added rule can split it at a marker.
 @test "a short keyword value before a new token shape is not left raw" {
   out="$(builtin_out "password=hunter2.$(fake_gitlab)")"
   [[ "$out" != *hunter2* ]] || { echo "raw: $out" >&2; return 1; }

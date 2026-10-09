@@ -1,10 +1,10 @@
 # Coverage map for claude-plugins#211 — with gitleaks absent the worklog
-# redacted with the built-in rules only, and said nothing. Not executable: each
+# redacts with the built-in rules only and logs one note. Not executable: each
 # Scenario carries a "# proves:" comment naming the bats test that proves it.
 
 Feature: The worklog says when gitleaks is missing, and the built-ins cover the common shapes
   gitleaks is a second redaction layer on top of the built-in rules. When it is
-  not usable the hook still stores and judges the row, but it now writes one
+  not usable the hook still stores and judges the row, and writes one
   gitleaks-absent note per session to the fail-open log, and the built-in rules
   cover the common gitleaks-only token shapes so the gap is small.
 

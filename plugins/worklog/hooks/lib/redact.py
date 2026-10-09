@@ -1,4 +1,5 @@
 """redact.py — secret redaction for worklog-record.sh. Stdlib only.
+Built-in pass order: base rules, keyword pass, added rules, keyword pass.
 
 ONE implementation, imported by every python heredoc in the hook (wl_slice,
 wl_entries), so the two sites cannot drift apart. A match
@@ -31,7 +32,7 @@ _PEM = re.compile(
 # start. Separate alternatives because lookbehinds are fixed-width.
 _B = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrtbf])|(?<=\\u[0-9A-Fa-f]{4}))"
 
-# _RULES_MAIN is main's original rules; they and the keyword pass run first,
+# _RULES_MAIN holds the base rules; they and the keyword pass run first,
 # unchanged, and _RULES_ADD runs on that output, so the additions can only ADD
 # redaction. Never widen or guard a rule in _RULES_MAIN — add to _RULES_ADD
 # instead. Most specific first: sk-lw/sk-ant must be consumed before the generic
@@ -77,8 +78,6 @@ _RULES_ADD = [
         _B + r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8,}|" + _B + r"glc_[A-Za-z0-9+/]{32,}={0,2}")),
 ]
 
-_RULES = _RULES_MAIN + _RULES_ADD
-
 # A keyword plus a separator plus a 16+ char value. The whole match is replaced,
 # keyword included: dropping the keyword also removes the context gitleaks'
 # generic rules key on. `auth` is not a keyword: it would match prose like
@@ -97,6 +96,7 @@ _MARKER = re.compile(r"(<redacted:[^<>\s]*>)")
 
 
 def _generic(s):
+    """Apply the keyword rule to the text between <redacted:...> markers."""
     # split() with one capture group: odd indexes are the markers themselves.
     parts = _MARKER.split(s)
     return "".join(
@@ -105,10 +105,11 @@ def _generic(s):
 
 
 def builtin(s):
-    """Apply main's rules and the keyword rule, then the added rules, to one string.
+    """Apply the base rules and the keyword rule, then the added rules, to one string.
 
-    The added rules run last, on main's output, so they never split a
-    keyword-glued run before the keyword rule has seen it.
+    The added rules run last, on the base output, so they never split a
+    keyword-glued run before the keyword rule has seen it. The keyword pass
+    runs again to catch keyword context that only appears after an added rule.
     """
     if not s:
         return s
