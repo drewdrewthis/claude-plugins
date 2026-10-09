@@ -2167,10 +2167,10 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   [[ "$out" != *token=abc* ]] || { echo "raw: $out" >&2; return 1; }
 }
 
-# A hex-bodied token's rule runs late, so a token glued straight after it has
-# to be redacted too, not left raw behind the first marker.
-@test "a token glued after a hex-bodied token leaves no raw token body" {
-  aws="$(fake_key "AK""IA" "Q3XZ7RT5NB2KD8WP" 16)"
+# One glued token can match only once its neighbour is a marker, so the
+# built-ins repeat until both are markers.
+@test "a token glued after another token leaves no raw token body" {
+  aws="$(fake_aws)"
   goog="$(fake_key "AI""za" "$ALNUM" 35)"
   for row in "$(fake_shopify)$(fake_npm)|<redacted:shopify-token><redacted:npm-token>" \
              "$(fake_do)$(fake_npm)|<redacted:digitalocean-token><redacted:npm-token>" \
@@ -2234,9 +2234,10 @@ sys.path.insert(0, sys.argv[1])
 import redact
 pair = sys.argv[2] + sys.argv[3]
 s = pair * (200000 // len(pair) + 1)
-t = time.monotonic()
+# CPU time, so machine load does not fail the test.
+t = time.process_time()
 redact.builtin(s)
-dt = time.monotonic() - t
+dt = time.process_time() - t
 if dt >= 10:
     sys.stderr.write("took %.1f seconds\n" % dt)
     sys.exit(1)

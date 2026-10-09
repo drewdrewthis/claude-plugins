@@ -152,8 +152,8 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run
     Then the short value is gone
 
-  # proves: hooks/tests/worklog-record.bats "a token glued after a hex-bodied token leaves no raw token body"
-  Scenario: A token glued after a hex-bodied token leaves no raw token body
+  # proves: hooks/tests/worklog-record.bats "a token glued after another token leaves no raw token body"
+  Scenario: A token glued after another token leaves no raw token body
     Given a shopify, digitalocean, or AWS key directly followed by another token
     When the built-in rules run
     Then the output is the two markers back to back

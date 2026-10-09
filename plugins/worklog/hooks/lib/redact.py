@@ -127,7 +127,7 @@ _GLUED = "<redacted:glued-secrets>"
 
 
 def _pass(s):
-    """One built-in pass: base rules, keyword rule, added rules, keyword rule."""
+    """One built-in pass: base, keyword, added, keyword rules."""
     # The added rules run last, on the base output, so they never split a
     # keyword-glued run before the keyword rule has seen it. The keyword pass
     # runs again to catch keyword context that only appears after an added rule.
