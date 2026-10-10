@@ -38,3 +38,44 @@ git_no_auto_maintenance() {
   printf '[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n[receive]\n\tautogc = false\n' > "$cfg"
   export GIT_CONFIG_GLOBAL="$cfg"
 }
+
+# A system gitconfig (/etc/gitconfig, or GIT_CONFIG_SYSTEM) can change fixture
+# behaviour: measured, a system `push.default = nothing` fails three
+# commit-records tests. GIT_CONFIG_NOSYSTEM wins over GIT_CONFIG_SYSTEM and,
+# unlike GIT_CONFIG_SYSTEM=/dev/null, also works on git older than 2.32.
+git_fixture_env() {
+  git_no_auto_maintenance
+  export GIT_CONFIG_NOSYSTEM=1
+}
+
+# GNU stat -c vs BSD stat -f.
+_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+_inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
+
+# git_shim <intercept-snippet> — build a `git` shim and set GIT_SHIM_DIR; the
+# caller puts it first on PATH (PATH="$GIT_SHIM_DIR:$PATH"). Prints nothing.
+# The shim resolves the real git here, before PATH changes, then runs the
+# snippet inline and falls through to the real git. The snippet sees:
+#   $real     absolute path of the real git
+#   $dir      the -C directory ("." when no -C was given)
+#   ${args[@]} the arguments with a leading `-C <dir>` stripped
+# and may `exit` to swallow the call. One shared body keeps each test to just
+# the behaviour it fakes, so a respelled git call cannot slip past a copy.
+git_shim() {
+  local real; real="$(command -v git)"
+  GIT_SHIM_DIR="${BATS_TEST_TMPDIR:?}/git-shim"
+  mkdir -p "$GIT_SHIM_DIR"
+  {
+    printf '#!/usr/bin/env bash\nreal=%q\n' "$real"
+    cat <<'HEAD'
+args=("$@")
+dir=.
+if [ "${args[0]:-}" = "-C" ]; then dir="${args[1]}"; args=("${args[@]:2}"); fi
+HEAD
+    printf '%s\n' "$1"
+    cat <<'TAIL'
+exec "$real" "$@"
+TAIL
+  } > "$GIT_SHIM_DIR/git"
+  chmod +x "$GIT_SHIM_DIR/git"
+}
