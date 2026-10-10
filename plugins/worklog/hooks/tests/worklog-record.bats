@@ -3388,7 +3388,8 @@ old_clean_turn() {
 
 @test "gitleaks 8.21.2 keeps the raw pulumi token out of the stdin the model receives" {
   old_secret_turn
-  [ "$(grep -cF -- "$KEY" "$CLAUDE_STDIN_LOG" 2>/dev/null || true)" -eq 0 ]
+  # No model call (off Linux) leaves no log; that is zero occurrences.
+  n="$(grep -cF -- "$KEY" "$CLAUDE_STDIN_LOG" 2>/dev/null || true)"; [ "${n:-0}" -eq 0 ]
 }
 
 @test "gitleaks 8.21.2 on a secret turn logs gitleaks-failed once off Linux and never on Linux" {
