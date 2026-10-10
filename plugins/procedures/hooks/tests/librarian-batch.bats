@@ -11,6 +11,7 @@ load helpers/common
 
 setup() {
   SCRIPTS="$BATS_TEST_DIRNAME/../../scripts"
+  HOOK="$BATS_TEST_DIRNAME/../librarian-poke.sh"
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/lb-home.XXXXXX")"
   export PROCEDURES_STATE_DIR="$HOME/state"
   unset CLAUDE_CONFIG_DIR LIBRARIAN_BATCH_BYTES
@@ -281,8 +282,6 @@ _judge_enqueue() {
 # iteration once LIBRARIAN_RECHECK_SECS have passed (0 = every iteration, the
 # first included). Exit 75 aborts the batch; every other exit means proceed.
 
-HOOK="$BATS_TEST_DIRNAME/../librarian-poke.sh"
-
 # _check <name> <body> — a check script that records each call, then runs <body>.
 _check() {
   printf '#!/usr/bin/env bash\necho "$*" >> "%s/%s.calls"\n%s\n' "$HOME" "$1" "$2" > "$HOME/$1"
@@ -301,14 +300,7 @@ _pc() { LIBRARIAN_RECHECK_SECS="${RECHECK-0}" run bash "$SCRIPTS/librarian-batch
   [ "$(_issued b)" = "0 2" ]
 }
 
-@test "check exits 75: the batch exits 75" {
-  _transcript a 2 2; _transcript b 2 1
-  _check c75 'exit 75'
-  _pc "$HOME/c75"
-  [ "$status" -eq 75 ]
-}
-
-@test "check exits 75: no manifest, manifest.tmp or batch.txt.part is left" {
+@test "check exits 75: the batch exits 75, leaves no manifest or partial output, and prints a deferred line" {
   _transcript a 2 2; _transcript b 2 1
   _check c75 'exit 75'
   _pc "$HOME/c75"
@@ -316,12 +308,7 @@ _pc() { LIBRARIAN_RECHECK_SECS="${RECHECK-0}" run bash "$SCRIPTS/librarian-batch
   [ ! -e "$PROCEDURES_STATE_DIR/batch.manifest" ]
   [ ! -e "$PROCEDURES_STATE_DIR/batch.manifest.tmp" ]
   [ ! -e "$PROCEDURES_STATE_DIR/batch.txt.part" ]
-}
-
-@test "check exits 75: the batch prints a 'librarian-batch: deferred' line" {
-  _transcript a 2 2; _transcript b 2 1
-  _check c75 'exit 75'
-  _pc "$HOME/c75"
+  [ ! -s "$PROCEDURES_STATE_DIR/batch.txt" ]
   [[ "$output" == *"librarian-batch: deferred"* ]]
 }
 
@@ -334,22 +321,16 @@ _pc() { LIBRARIAN_RECHECK_SECS="${RECHECK-0}" run bash "$SCRIPTS/librarian-batch
   [ ! -e "$PROCEDURES_STATE_DIR/batch.manifest" ]
 }
 
-@test "check exits 1: the batch proceeds and issues both ranges" {
+@test "check exits 1 or 127: the batch proceeds and issues both ranges" {
   _transcript a 2 2; _transcript b 2 1
-  _check c1 'exit 1'
-  _pc "$HOME/c1"
-  [ "$status" -eq 0 ]
-  [ "$(_issued a)" = "0 2" ]
-  [ "$(_issued b)" = "0 2" ]
-}
-
-@test "check exits 127: the batch proceeds and issues both ranges" {
-  _transcript a 2 2; _transcript b 2 1
-  _check c127 'exit 127'
-  _pc "$HOME/c127"
-  [ "$status" -eq 0 ]
-  [ "$(_issued a)" = "0 2" ]
-  [ "$(_issued b)" = "0 2" ]
+  local rc
+  for rc in 1 127; do
+    _check "c$rc" "exit $rc"
+    _pc "$HOME/c$rc"
+    [ "$status" -eq 0 ]
+    [ "$(_issued a)" = "0 2" ]
+    [ "$(_issued b)" = "0 2" ]
+  done
 }
 
 @test "check path missing: the batch proceeds and issues both ranges" {
@@ -391,20 +372,14 @@ _pc() { LIBRARIAN_RECHECK_SECS="${RECHECK-0}" run bash "$SCRIPTS/librarian-batch
   [ "$(_calls c0)" -eq 0 ]
 }
 
-@test "a non-numeric interval falls back to 5s: no check in a fast batch, exit 0" {
+@test "a non-numeric interval falls back to 5s: no check in a fast batch, both ranges issued" {
   _transcript a 2 2; _transcript b 2 1
-  _check c0 'exit 75'
+  _check c0 'exit 0'
   RECHECK=nope _pc "$HOME/c0"
   [ "$status" -eq 0 ]
-  [ "$(_calls c0)" -eq 0 ]
-}
-
-@test "an empty interval falls back to 5s: no check in a fast batch, exit 0" {
-  _transcript a 2 2; _transcript b 2 1
-  _check c0 'exit 75'
-  RECHECK= _pc "$HOME/c0"
-  [ "$status" -eq 0 ]
-  [ "$(_calls c0)" -eq 0 ]
+  [ "$(_calls c0)" -eq 0 ]                       # a fallback of 0 would call it per iteration
+  [ "$(_issued a)" = "0 2" ]
+  [ "$(_issued b)" = "0 2" ]
 }
 
 @test "the check also runs for fully-read transcripts, not only unread ones" {
@@ -428,4 +403,18 @@ _pc() { LIBRARIAN_RECHECK_SECS="${RECHECK-0}" run bash "$SCRIPTS/librarian-batch
   [ "$(_calls wrap)" -eq 2 ]
   [ "$(_issued a)" = "0 2" ]
   [ "$(_issued b)" = "0 2" ]
+}
+
+@test "a batch that already filled its budget is not discarded by a late check" {
+  _transcript a 1 2; _transcript b 2 1       # a ends whole, so the loop reaches b
+  _check once 'n=$(wc -l < "'"$HOME"'/once.calls"); [ "$n" -gt 1 ] && exit 75; exit 0'
+  LIBRARIAN_BATCH_BYTES=100 RECHECK=0 _pc "$HOME/once"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$PROCEDURES_STATE_DIR/batch.manifest" | tr -d ' ')" -eq 1 ]
+}
+
+@test "--pressure-check with no value fails and names the missing path" {
+  run bash "$SCRIPTS/librarian-batch.sh" --pressure-check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"needs a path"* ]]
 }

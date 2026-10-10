@@ -3,9 +3,10 @@
 #
 # SINGLE RESPONSIBILITY: once per qualifying turn, wake the librarian agent to
 # drain whatever transcript backlog has built up. This hook decides WHEN to
-# poke (cooldown, load gate, and a mid-batch pressure re-check) and owns the per-transcript cursors (advanced
-# only after a clean wake); agents/librarian.md decides WHAT is worth
-# extracting, and is safe to poke more often than it has new work.
+# poke (cooldown, load gate, mid-batch pressure re-check) and owns the
+# per-transcript cursors (advanced only after a clean wake);
+# agents/librarian.md decides WHAT is worth extracting, and is safe to poke
+# more often than it has new work.
 #
 # DIVERGES FROM evolve-sweep.sh ON PURPOSE: no per-turn classifier call, no
 # digest of the final message, no asyncRewake wake-the-caller trick. The
@@ -83,6 +84,12 @@ lp_log() {
     printf '%s %s\n' "$(date -Is 2>/dev/null || true)" "${1:-}" >>"$logf" 2>/dev/null || true
 }
 
+# Quiet mode (set for the --load-ok re-entry): it runs every few seconds
+# mid-scan, and the spawn check of this same drain already logged any invalid
+# tunable or blind fail-open, so logging again would grow the log unbounded.
+LP_QUIET=0
+[ "${1:-}" = "--load-ok" ] && LP_QUIET=1
+
 # lp_num_or_default <name> <value> <default> <ere> — echo <value> when it
 # matches the (anchored) ERE, else log one line and echo <default>. The value
 # is passed in directly (not via ${!name}) so set -u never trips on an unset
@@ -94,7 +101,7 @@ lp_num_or_default() {
     if [[ "$val" =~ $re ]]; then
         printf '%s' "$val"
     else
-        lp_log "librarian-poke: invalid $name=$val, using $def"
+        [ "$LP_QUIET" = 1 ] || lp_log "librarian-poke: invalid $name=$val, using $def"
         printf '%s' "$def"
     fi
 }
@@ -113,9 +120,11 @@ LIBRARIAN_CLAIM_TTL_SECS="${LIBRARIAN_CLAIM_TTL_SECS:-$LP_TTL_DEFAULT}"
 case "$LIBRARIAN_CLAIM_TTL_SECS" in ''|*[!0-9]*|0) LIBRARIAN_CLAIM_TTL_SECS=$LP_TTL_DEFAULT ;; esac
 
 # LIBRARIAN_MIN_INTERVAL_SECS (default 1800, 0 disables) — minimum gap between
-# the STARTS of two drains that ran claude, because every wake is a fresh
-# session whose prompt is a cache write. A deferred poke loses nothing: the
-# cursors stay put, so the next drain issues the whole backlog in one batch.
+# the STARTS of two drains that ran claude, or whose scan was aborted mid-batch
+# by the pressure re-check (that back-off is disabled by 0 too), because every
+# wake is a fresh session whose prompt is a cache write. A deferred poke loses
+# nothing: the cursors stay put, so the next drain issues the whole backlog in
+# one batch.
 LIBRARIAN_MIN_INTERVAL_SECS="$(lp_num_or_default LIBRARIAN_MIN_INTERVAL_SECS "${LIBRARIAN_MIN_INTERVAL_SECS:-1800}" 1800 '^[0-9]+$')"
 
 LIBRARIAN_LOCK="${LIBRARIAN_LOCK:-$(lp_state_dir)/librarian.lock}"
@@ -187,13 +196,11 @@ lp_iowait_pct() {
 # unreadable (empty /proc read), so the gate RELEASES rather than blocks — an
 # unreadable /proc must never wedge the drain shut. Distinct message from
 # lp_log_defer (which records an intentional at-or-over-ceiling defer) so a
-# silently degraded gate is visible in the log. Silent under --load-ok: the
-# spawn check already logged it for this drain, and a line per mid-batch
-# re-check would grow the log without bound where /proc is absent (macOS).
-# Best-effort: an unwritable log never blocks the poke.
-LP_QUIET_FAILOPEN=0
+# silently degraded gate is visible in the log. Silent under LP_QUIET: a line
+# per mid-batch re-check would grow the log without bound where /proc is
+# absent (macOS). Best-effort: an unwritable log never blocks the poke.
 lp_log_failopen() {
-    [ "$LP_QUIET_FAILOPEN" = 1 ] && return 0
+    [ "$LP_QUIET" = 1 ] && return 0
     lp_log "librarian-poke: fail-open, ${1:-} unreadable — proceeding without that signal"
 }
 
@@ -263,7 +270,11 @@ lp_note_timeout() {
     return 1
 }
 
-# lp_cooled_down [quiet] — 0 when no drain started within
+# lp_stamp_drain — record now as the start of a drain, for lp_cooled_down.
+lp_stamp_drain() { date +%s > "$(lp_state_dir)/last-drain-start" 2>/dev/null || true; }
+
+# lp_cooled_down [quiet] — 0 when no drain that ran claude, or whose scan was
+# aborted mid-batch by the pressure re-check, started within
 # LIBRARIAN_MIN_INTERVAL_SECS, 1 otherwise (logged unless quiet: the gating
 # half checks every turn, and one log line per turn is noise). An absent or
 # unreadable stamp never blocks a drain.
@@ -474,6 +485,7 @@ lp_clean_tmp() {
 
 # EX_TEMPFAIL: the --load-ok exit that means "pressure, stop". Any other exit
 # from the check means proceed, so a broken check can never wedge the drain.
+# Must match DEFER_RC in scripts/librarian-batch.sh.
 LP_DEFER_RC=75
 
 # lp_drain — under the claim: issue this drain's batch, then run the librarian
@@ -498,8 +510,8 @@ lp_drain() {
     fi
     out="$($LP_NICE bash "$SCRIPT_DIR/../scripts/librarian-batch.sh" --pressure-check "$SELF" 2>&1)" || rc=$?
     if [ "$rc" -eq "$LP_DEFER_RC" ]; then
-        date +%s > "$(lp_state_dir)/last-drain-start" 2>/dev/null || true
-        lp_log "librarian-poke: batch deferred, pressure rose mid-scan; cursors not advanced, retry after cooldown"
+        lp_stamp_drain
+        lp_log "librarian-poke: batch deferred, pressure rose mid-scan; cursors not advanced, next drain waits for the cooldown"
         return 0
     fi
     if [ "$rc" -ne 0 ]; then
@@ -519,7 +531,7 @@ lp_drain() {
     cp "$manifest" "$issued" 2>/dev/null \
         || { lp_log "librarian-poke: cannot snapshot the manifest, drain skipped"; return 0; }
     lp_store_status | LC_ALL=C sort > "$st/store-status.before" 2>/dev/null || true
-    date +%s > "$st/last-drain-start" 2>/dev/null || true
+    lp_stamp_drain
     local access=() word roots
     # A read loop, not mapfile: macOS ships bash 3.2.
     while IFS= read -r word; do access+=("$word"); done < <(lp_access_args "$st")
@@ -591,9 +603,9 @@ lp_worker() {
 
 # --- pressure check re-entry --------------------------------------------
 # librarian-batch.sh calls back with --load-ok mid-scan. Before migration and
-# stdin: it must stay cheap, silent on fail-open, and never read the pipe.
+# stdin: the check runs every few seconds mid-scan, so it must not migrate
+# state or read the pipe.
 if [ "${1:-}" = "--load-ok" ]; then
-    LP_QUIET_FAILOPEN=1
     lp_load_ok && exit 0
     exit "$LP_DEFER_RC"
 fi

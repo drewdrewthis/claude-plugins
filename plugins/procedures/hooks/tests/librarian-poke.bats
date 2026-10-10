@@ -498,8 +498,7 @@ lp_gate_setup() {
   LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
   [ "$status" -eq 0 ]
   claude_never_ran
-  grep -q "librarian-poke: deferred, load=50.00 >= ceiling=8" \
-    "$HOME/.local/state/procedures/librarian/librarian-poke.log"
+  grep -q "librarian-poke: deferred, load=50.00 >= ceiling=8" "$(lp_log_file)"
 }
 
 @test "load gate: over the iowait ceiling (two fixtures swapped between samples) defers — claude never runs, defer logged" {
@@ -511,8 +510,7 @@ lp_gate_setup() {
   LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
   [ "$status" -eq 0 ]
   claude_never_ran
-  grep -q "librarian-poke: deferred, iowait=100% >= ceiling=30%" \
-    "$HOME/.local/state/procedures/librarian/librarian-poke.log"
+  grep -q "librarian-poke: deferred, iowait=100% >= ceiling=30%" "$(lp_log_file)"
 }
 
 @test "load gate: unreadable loadavg AND stat fail open — claude runs, both fail-opens logged" {
@@ -709,7 +707,8 @@ EOF
 # samples. The step script it installs appends a line to the sample counter
 # (so the counter's line count = checks that reached the iowait sample), then
 # does two things from the plan file ("<load> <iowait%>", one line per check;
-# line 1 = the spawn check, line 2 = the first batch re-check, ...):
+# line 1 = the spawn check, line 2 = the first batch re-check, ...; e.g.
+# lp_plan "1.00 9" "8.00 9" = calm at the spawn check, load 8.00 at re-check 1):
 #   - rewrites LP_STAT_FILE so THIS check's second sample shows the planned
 #     iowait (total delta 100, so iowait delta = the percentage);
 #   - rewrites LP_LOADAVG_FILE with the NEXT check's planned load.
@@ -760,18 +759,13 @@ samples()      { wc -l < "$LP_COUNTER" | tr -d ' '; }
 
 # ---- AC 1-3: the spawn gate defers at >= and still drains just under -------
 
-@test "spawn gate: load equal to the ceiling defers — claude never runs, exit 0" {
+@test "spawn gate: load equal to the ceiling defers — exit 0, claude never runs, one '>=' defer line, no last-drain-start" {
   unread_line
   lp_plan "8.00 9"
   wake; [ "$status" -eq 0 ]
   claude_never_ran
-}
-
-@test "spawn gate: load equal to the ceiling logs exactly one '>=' defer line" {
-  unread_line
-  lp_plan "8.00 9"
-  wake
   [ "$(lp_log_count 'deferred, load=8.00 >= ceiling=8')" -eq 1 ]
+  [ ! -e "$(lp_state)/last-drain-start" ]
 }
 
 @test "spawn gate: load far over the ceiling logs the '>=' defer line" {
@@ -781,38 +775,19 @@ samples()      { wc -l < "$LP_COUNTER" | tr -d ' '; }
   [ "$(lp_log_count 'deferred, load=50.00 >= ceiling=8')" -eq 1 ]
 }
 
-@test "spawn gate: a spawn-check defer writes no last-drain-start" {
-  unread_line
-  lp_plan "8.00 9"
-  wake
-  [ ! -e "$(lp_state)/last-drain-start" ]
-}
-
-@test "spawn gate: iowait equal to the ceiling defers — claude never runs, exit 0" {
+@test "spawn gate: iowait equal to the ceiling defers — exit 0, claude never runs, one '>=' defer line" {
   unread_line
   lp_plan "1.00 30"
   wake; [ "$status" -eq 0 ]
   claude_never_ran
-}
-
-@test "spawn gate: iowait equal to the ceiling logs exactly one '>=' defer line" {
-  unread_line
-  lp_plan "1.00 30"
-  wake
   [ "$(lp_log_count 'deferred, iowait=30% >= ceiling=30%')" -eq 1 ]
 }
 
-@test "spawn gate: just under both ceilings drains — claude runs once" {
+@test "spawn gate: just under both ceilings drains — claude runs once and the cursor reaches the line count" {
   unread_line
   lp_plan "7.99 29"
   wake; [ "$status" -eq 0 ]
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
-}
-
-@test "spawn gate: just under both ceilings advances the transcript cursor to its line count" {
-  unread_line
-  lp_plan "7.99 29"
-  wake
   [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
 }
 
@@ -838,6 +813,14 @@ samples()      { wc -l < "$LP_COUNTER" | tr -d ' '; }
   [ "$status" -eq 0 ]
 }
 
+@test "load-ok mode: an invalid ceiling falls back silently — exit 0, the log gains no line" {
+  lp_plan "1.00 9"
+  mkdir -p "$(lp_state)"; : > "$(lp_log_file)"
+  LIBRARIAN_LOAD_CEILING=bogus run bash "$HOOKS/librarian-poke.sh" --load-ok </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -s "$(lp_log_file)" ]
+}
+
 # ---- AC 4: pressure that rises during the batch defers the drain ------------
 
 # Two unread transcripts, RECHECK_SECS=0 (re-check at every iteration), calm at
@@ -850,37 +833,16 @@ lp_mid_batch_defer() {
   claude_never_ran                            # premise of every follow-on assertion
 }
 
-@test "mid-batch defer on load: exit 0, claude never starts" {
+@test "mid-batch defer on load: exit 0, nothing issued or advanced, claim released, logged as a defer not a failure" {
   lp_mid_batch_defer "1.00 9" "8.00 9"
   [ "$status" -eq 0 ]
-  claude_never_ran
-}
-
-@test "mid-batch defer on load: no manifest, manifest.tmp or batch.txt.part is left" {
-  lp_mid_batch_defer "1.00 9" "8.00 9"
   [ ! -e "$(lp_state)/batch.manifest" ]
   [ ! -e "$(lp_state)/batch.manifest.tmp" ]
   [ ! -e "$(lp_state)/batch.txt.part" ]
-}
-
-@test "mid-batch defer on load: no cursor file exists" {
-  lp_mid_batch_defer "1.00 9" "8.00 9"
   [ -z "$(ls "$(lp_state)/cursors" 2>/dev/null)" ]
-}
-
-@test "mid-batch defer on load: the claim dir is released" {
-  lp_mid_batch_defer "1.00 9" "8.00 9"
   [ ! -d "$LIBRARIAN_LOCK.d" ]
-}
-
-@test "mid-batch defer on load: logs one '>=' defer line and one 'batch deferred' line" {
-  lp_mid_batch_defer "1.00 9" "8.00 9"
   [ "$(lp_log_count 'deferred, load=8.00 >= ceiling=8')" -eq 1 ]
   [ "$(lp_log_count 'batch deferred')" -eq 1 ]
-}
-
-@test "mid-batch defer on load: is not logged as a batch failure" {
-  lp_mid_batch_defer "1.00 9" "8.00 9"
   [ "$(lp_log_count 'batch failed')" -eq 0 ]
 }
 
@@ -903,46 +865,29 @@ lp_mid_batch_defer() {
 
 # ---- AC 5: a deferred drain loses nothing -----------------------------------
 
-@test "after a mid-batch defer, the next calm drain issues one range per transcript from 0" {
+@test "after a mid-batch defer, the next calm drain issues one range per transcript from 0 and advances both cursors" {
   lp_mid_batch_defer "1.00 9" "8.00 9"
   lp_plan "1.00 9"
   wake
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
   [ "$(wc -l < "$(lp_state)/batch.manifest" | tr -d ' ')" -eq 2 ]
   [ "$(awk -F'\t' '$2 == 0' "$(lp_state)/batch.manifest" | wc -l | tr -d ' ')" -eq 2 ]
-}
-
-@test "after a mid-batch defer, the next calm drain advances both cursors to their line counts" {
-  lp_mid_batch_defer "1.00 9" "8.00 9"
-  lp_plan "1.00 9"
-  wake
   [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
   [ "$(cat "$(lp_state)/cursors/other.line")" = "2" ]
 }
 
 # ---- AC 6: a mid-batch defer backs off --------------------------------------
 
-@test "a mid-batch defer writes last-drain-start" {
+@test "a mid-batch defer writes last-drain-start; the next drain inside the cooldown runs no scan and logs one cooldown defer" {
   lp_mid_batch_defer "1.00 9" "8.00 9"
   [ -s "$(lp_state)/last-drain-start" ]
-}
-
-@test "after a mid-batch defer, the next drain inside the cooldown runs no re-check scan" {
-  lp_mid_batch_defer "1.00 9" "8.00 9"
+  local before; before="$(lp_log_count 'deferred, cooldown')"
   lp_plan "1.00 9"
   LIBRARIAN_MIN_INTERVAL_SECS=1800 LIBRARIAN_RECHECK_SECS=0 LIBRARIAN_NO_FLOCK=1 \
     run bash "$HOOKS/librarian-poke.sh" --worker
   [ "$status" -eq 0 ]
   claude_never_ran
   [ "$(samples)" -eq 1 ]                      # the spawn check only; the batch never ran
-}
-
-@test "after a mid-batch defer, the next drain inside the cooldown logs one cooldown defer" {
-  lp_mid_batch_defer "1.00 9" "8.00 9"
-  local before; before="$(lp_log_count 'deferred, cooldown')"
-  lp_plan "1.00 9"
-  LIBRARIAN_MIN_INTERVAL_SECS=1800 LIBRARIAN_RECHECK_SECS=0 LIBRARIAN_NO_FLOCK=1 \
-    run bash "$HOOKS/librarian-poke.sh" --worker
   [ "$(( $(lp_log_count 'deferred, cooldown') - before ))" -eq 1 ]
 }
 
@@ -964,67 +909,34 @@ STUB
   chmod +x "$STUB_BIN/claude"
 }
 
-@test "running drain: claude finishes and is never signalled when pressure rises mid-run" {
+@test "running drain: claude finishes unsignalled, cursors advance and no defer is logged when pressure rises mid-run" {
   unread_line
   lp_plan "1.00 9"
   lp_slow_claude
   wake
   [ -e "$MARK/finished" ]
   [ ! -e "$MARK/signalled" ]
-}
-
-@test "running drain: cursors still advance when pressure rises mid-run" {
-  unread_line
-  lp_plan "1.00 9"
-  lp_slow_claude
-  wake
   [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
-}
-
-@test "running drain: no defer line is logged when pressure rises mid-run" {
-  unread_line
-  lp_plan "1.00 9"
-  lp_slow_claude
-  wake
   [ "$(lp_log_count 'deferred')" -eq 0 ]
 }
 
 # ---- AC 8: unreadable pressure fails open, quietly --------------------------
 
-@test "load-ok mode: both pressure files absent exits 0" {
-  lp_no_pressure_files
-  run bash "$HOOKS/librarian-poke.sh" --load-ok </dev/null
-  [ "$status" -eq 0 ]
-}
-
-@test "load-ok mode: both pressure files absent adds no log line" {
+@test "load-ok mode: both pressure files absent exits 0 and adds no log line" {
   lp_no_pressure_files
   mkdir -p "$(lp_state)"; : > "$(lp_log_file)"
   run bash "$HOOKS/librarian-poke.sh" --load-ok </dev/null
+  [ "$status" -eq 0 ]
   [ ! -s "$(lp_log_file)" ]
 }
 
-@test "fail-open drain: with re-checks on and no pressure files, both ranges are issued" {
+@test "fail-open drain: with re-checks on and no pressure files, both ranges are issued, claude runs once, one fail-open line each" {
   unread_line
   lp_extra other 2 1
   lp_no_pressure_files
   LIBRARIAN_RECHECK_SECS=0 wake
   [ "$(wc -l < "$(lp_state)/batch.manifest" | tr -d ' ')" -eq 2 ]
-}
-
-@test "fail-open drain: with re-checks on and no pressure files, claude runs once" {
-  unread_line
-  lp_extra other 2 1
-  lp_no_pressure_files
-  LIBRARIAN_RECHECK_SECS=0 wake
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
-}
-
-@test "fail-open drain: re-checks add no fail-open lines beyond the spawn check's one each" {
-  unread_line
-  lp_extra other 2 1
-  lp_no_pressure_files
-  LIBRARIAN_RECHECK_SECS=0 wake
   [ "$(lp_log_count 'fail-open, loadavg unreadable')" -eq 1 ]
   [ "$(lp_log_count 'fail-open, iowait unreadable')" -eq 1 ]
 }
@@ -1061,24 +973,12 @@ lp_corpus_23() {
 
 # ---- AC 12: a failed batch is still a failure --------------------------------
 
-@test "failed batch: logs exactly one 'batch failed, drain skipped' line" {
+@test "failed batch: one 'batch failed, drain skipped' line, no defer line, no last-drain-start" {
   unread_line
   lp_plan "1.00 9"
   LIBRARIAN_BATCH_BYTES=nope wake
   [ "$(lp_log_count 'batch failed, drain skipped')" -eq 1 ]
-}
-
-@test "failed batch: logs no defer line" {
-  unread_line
-  lp_plan "1.00 9"
-  LIBRARIAN_BATCH_BYTES=nope wake
   [ "$(lp_log_count 'deferred')" -eq 0 ]
-}
-
-@test "failed batch: writes no last-drain-start" {
-  unread_line
-  lp_plan "1.00 9"
-  LIBRARIAN_BATCH_BYTES=nope wake
   [ ! -e "$(lp_state)/last-drain-start" ]
 }
 
@@ -1096,25 +996,18 @@ lp_priority_shims() {
   export PATH="$d:$PATH"
 }
 
-@test "idle priority: ionice -c3 wraps librarian-batch.sh exactly once" {
+@test "idle priority: ionice -c3 and nice -n19 each wrap librarian-batch.sh exactly once" {
   unread_line
   lp_plan "1.00 9"
   lp_priority_shims
   wake
   [ "$(grep -F -e librarian-batch.sh "$BATS_TEST_TMPDIR/ionice.rec" | grep -cF -e -c3)" -eq 1 ]
-}
-
-@test "idle priority: nice -n19 wraps librarian-batch.sh exactly once" {
-  unread_line
-  lp_plan "1.00 9"
-  lp_priority_shims
-  wake
   [ "$(grep -F -e librarian-batch.sh "$BATS_TEST_TMPDIR/nice.rec" | grep -cF -e -n19)" -eq 1 ]
 }
 
 # ---- AC 15: a bad re-check interval cannot stop the drain --------------------
 
-@test "bad re-check interval: a non-numeric value still drains once and advances both cursors" {
+@test "bad re-check interval: a non-numeric value still drains once, advances both cursors, and is no batch failure" {
   unread_line
   lp_extra other 2 1
   lp_plan "1.00 9"
@@ -1122,22 +1015,5 @@ lp_priority_shims() {
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
   [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
   [ "$(cat "$(lp_state)/cursors/other.line")" = "2" ]
-}
-
-@test "bad re-check interval: an empty value still drains once and advances both cursors" {
-  unread_line
-  lp_extra other 2 1
-  lp_plan "1.00 9"
-  LIBRARIAN_RECHECK_SECS= wake
-  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
-  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
-  [ "$(cat "$(lp_state)/cursors/other.line")" = "2" ]
-}
-
-@test "bad re-check interval: neither value is logged as a batch failure" {
-  unread_line
-  lp_plan "1.00 9"
-  LIBRARIAN_RECHECK_SECS=nope wake
-  LIBRARIAN_RECHECK_SECS= wake
   [ "$(lp_log_count 'batch failed')" -eq 0 ]
 }
