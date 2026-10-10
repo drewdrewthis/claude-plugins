@@ -1,8 +1,9 @@
 name: release-title-tests
 
-# The release-title guard has a bats suite under .github/scripts/tests. It runs
-# here, not in pr-title.yml, so an apt outage cannot block every PR title check.
-# Paths-filtered: only the guard script, its tests, this workflow and the live
+# The bats suite under .github/scripts/tests holds the release-title guard tests
+# and the manifest-repair tests (repair-release-manifests.sh). It runs here, not
+# in pr-title.yml, so an apt outage cannot block every PR title check.
+# Paths-filtered: only the scripts, their tests, this workflow and the live
 # release-please-config.json (the suite reads it) can change the suite's result.
 #
 # Runs on pull_request AND on push to the default branch, so main is tested

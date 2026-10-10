@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Fake `gh` for repair-release-manifests.bats. Serves canned REST responses from
+# $FAKE_GH_DIR and records every call. It fails loudly on any call shape the
+# contract does not name, or on --jq/-q/--template, so a drifting script cannot pass.
+#
+#   $FAKE_GH_DIR/pulls.json            body for the pulls list (may hold concatenated arrays)
+#   $FAKE_GH_DIR/compare/<ref>.json    body for compare/<base>...<ref>
+#   $FAKE_GH_DIR/contents/<ref>.json   body for contents/<path>?ref=<ref>
+#   $FAKE_GH_DIR/calls.log             one line per call, full argv, shell-quoted
+#   $FAKE_GH_DIR/put-<n>/{url,message,content,sha,branch}   one dir per PUT
+# FAKE_GH_FAIL: comma list of shapes that exit 1: pulls, compare, contents-base,
+# contents-head, put. A failing PUT prints an HTTP 409 message.
+set -u
+d="${FAKE_GH_DIR:?}"
+printf '%q ' "$@" >> "$d/calls.log"; printf '\n' >> "$d/calls.log"
+
+die() { echo "fake-gh: $*" >&2; exit 97; }
+fails() { case ",${FAKE_GH_FAIL:-}," in *",$1,"*) return 0;; esac; return 1; }
+
+[ "${1:-}" = api ] || die "only 'gh api' is allowed, got: $*"
+shift
+method=GET; paginate=0; url=""
+declare -A fields=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --jq|-q|--template|-t|--jq=*|--template=*) die "gh output filtering ($1) is not allowed; pipe to jq" ;;
+    --paginate) paginate=1 ;;
+    -X) method="$2"; shift ;;
+    -f) fields["${2%%=*}"]="${2#*=}"; shift ;;
+    -*) die "unknown flag $1" ;;
+    *) [ -z "$url" ] || die "two urls: $url and $1"; url="$1" ;;
+  esac
+  shift
+done
+
+repo="${GITHUB_REPOSITORY:?}"; base="${BASE_BRANCH:-main}"; mpath="${FAKE_GH_MANIFEST_PATH:?}"
+
+if [ "$method" = GET ] && [ "$url" = "repos/$repo/pulls?state=open&base=$base&per_page=100" ]; then
+  [ "$paginate" = 1 ] || die "pulls list must use --paginate"
+  fails pulls && { echo "gh: HTTP 500 (pulls)" >&2; exit 1; }
+  cat "$d/pulls.json"; exit 0
+fi
+[ "$paginate" = 0 ] || die "--paginate only allowed on the pulls list"
+
+if [ "$method" = GET ] && [[ "$url" == "repos/$repo/compare/$base..."* ]]; then
+  ref="${url#"repos/$repo/compare/$base..."}"
+  fails compare && { echo "gh: HTTP 500 (compare)" >&2; exit 1; }
+  [ -f "$d/compare/$ref.json" ] || die "no compare fixture for $ref"
+  cat "$d/compare/$ref.json"; exit 0
+fi
+
+if [ "$method" = GET ] && [[ "$url" == "repos/$repo/contents/$mpath?ref="* ]]; then
+  ref="${url#*\?ref=}"
+  case "$ref" in release-please--*) shape=contents-head ;; *) shape=contents-base ;; esac
+  fails "$shape" && { echo "gh: HTTP 500 ($shape)" >&2; exit 1; }
+  [ -f "$d/contents/$ref.json" ] || die "no contents fixture for ref $ref"
+  cat "$d/contents/$ref.json"; exit 0
+fi
+
+if [ "$method" = PUT ]; then
+  [ "$url" = "repos/$repo/contents/$mpath" ] || die "PUT to a path other than the manifest: $url"
+  for k in "${!fields[@]}"; do
+    case "$k" in message|content|sha|branch) ;; *) die "unexpected PUT field $k" ;; esac
+  done
+  [ -n "${fields[branch]:-}" ] || { : > "$d/put-without-branch"; die "PUT without a branch field would write to the default branch"; }
+  [ -n "${fields[sha]:-}" ] && [ -n "${fields[content]:-}" ] && [ -n "${fields[message]:-}" ] || die "PUT needs message, content, sha"
+  n=$(find "$d" -maxdepth 1 -name 'put-[0-9]*' | wc -l)
+  mkdir "$d/put-$((n + 1))"
+  p="$d/put-$((n + 1))"
+  printf '%s' "$url" > "$p/url"
+  for k in message content sha branch; do printf '%s' "${fields[$k]}" > "$p/$k"; done
+  fails put && { echo "gh: HTTP 409: is at <sha> but expected <sha>" >&2; exit 1; }
+  echo '{}'; exit 0
+fi
+
+die "unknown call shape: method=$method url=$url"
