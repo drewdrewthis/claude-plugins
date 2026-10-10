@@ -400,10 +400,8 @@ flag tracks the phase.
 
 Prose-only skill — no scripts or hooks of its own, so no bats suite. Vendored
 from `orchard-codex@develop-sweatshop` (`skills/ship`); own-file references
-rewritten to `${CLAUDE_PLUGIN_ROOT}`. `references/monitor.md` also diverges by
-owner direction (#186, marked `PLUGIN ADAPTATION` in the file): the
-readiness-check path, the C1–C9 un-draft gate, the quoted-verdict ready report,
-and the REST watcher fallback.
+rewritten to `${CLAUDE_PLUGIN_ROOT}`. On a re-sync, keep what
+`references/monitor.md` marks `PLUGIN ADAPTATION` (owner-directed, #186).
 
 **Host dependencies not shipped by this plugin** (present on an orchard-codex
 checkout; absent on a box whose `~/.claude` is not one, e.g. drew-sweatshop —
