@@ -244,14 +244,15 @@ LP_NICE=""
 command -v ionice >/dev/null 2>&1 && LP_NICE="ionice -c3"
 command -v nice   >/dev/null 2>&1 && LP_NICE="${LP_NICE:+$LP_NICE }nice -n19"
 
-# LP_TIMEOUT — a wall-clock cap on the drain. Under `ionice -c3` (idle I/O)
+# LP_TIMEOUT — a wall-clock cap on the batch scan and, separately, on the
+# drain (each gets the full cap). Under `ionice -c3` (idle I/O)
 # the drain can be starved indefinitely on a busy box while it still HOLDS the
 # single-writer lock, so every later poke finds the lock taken and no drain
 # ever runs again. Bounding the run at LIBRARIAN_MAX_RUNTIME_SEC (default 30m)
 # guarantees the lock is released: a starved drain is TERMed, KILLed 60s later
 # if it ignores that, and the next qualifying turn retries. Guarded on the
 # binary — `timeout` is absent on macOS/BSD, where it simply drops out of the
-# prefix (the drain then runs unbounded, exactly as it does today).
+# prefix (the scan and drain then run unbounded, exactly as they do today).
 LP_TIMEOUT=""
 command -v timeout >/dev/null 2>&1 && \
     LP_TIMEOUT="timeout --signal=TERM --kill-after=60 $LIBRARIAN_MAX_RUNTIME_SEC"
@@ -274,7 +275,8 @@ lp_note_timeout() {
 lp_stamp_drain() { date +%s > "$(lp_state_dir)/last-drain-start" 2>/dev/null || true; }
 
 # lp_cooled_down [quiet] — 0 when no drain that ran claude, or whose scan was
-# aborted mid-batch by the pressure re-check, started within
+# aborted mid-batch by the pressure re-check or killed by the runtime cap,
+# started within
 # LIBRARIAN_MIN_INTERVAL_SECS, 1 otherwise (logged unless quiet: the gating
 # half checks every turn, and one log line per turn is noise). An absent or
 # unreadable stamp never blocks a drain.
@@ -494,7 +496,9 @@ LP_DEFER_RC=75
 # empty manifest (or a failed batch, which leaves none) spends no tokens.
 # The batch re-checks pressure mid-scan (--pressure-check, rc 75 = EX_TEMPFAIL
 # in LP_DEFER_RC): then the cursors stay put and the cooldown stamp is written
-# so the next turns back off instead of repeating the scan.
+# so the next turns back off instead of repeating the scan. The scan is capped
+# by LP_TIMEOUT too: a killed scan (124/137) leaves the cursors, releases the
+# lock and stamps the cooldown the same way.
 # Exit 0 means the batch counts as read (agents/librarian.md step 7), so only
 # then are the cursors advanced; a crash or timeout leaves them, and the next
 # drain re-issues the same lines (at-least-once).
@@ -508,10 +512,15 @@ lp_drain() {
         lp_log "librarian-poke: no store roots resolved, drain skipped; lines kept for the next drain"
         return 0
     fi
-    out="$($LP_NICE bash "$SCRIPT_DIR/../scripts/librarian-batch.sh" --pressure-check "$SELF" 2>&1)" || rc=$?
+    out="$($LP_TIMEOUT $LP_NICE bash "$SCRIPT_DIR/../scripts/librarian-batch.sh" --pressure-check "$SELF" 2>&1)" || rc=$?
     if [ "$rc" -eq "$LP_DEFER_RC" ]; then
         lp_stamp_drain
         lp_log "librarian-poke: batch deferred, pressure rose mid-scan; cursors not advanced, next drain waits for the cooldown"
+        return 0
+    fi
+    if [ -n "$LP_TIMEOUT" ] && { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; }; then
+        lp_stamp_drain
+        lp_log "librarian-poke: batch scan exceeded ${LIBRARIAN_MAX_RUNTIME_SEC}s cap, killed; cursors not advanced, lock released, next drain waits for the cooldown"
         return 0
     fi
     if [ "$rc" -ne 0 ]; then

@@ -159,6 +159,18 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     Then the title starts with "fix(procedures):"
     And release-please owns plugin.json and the manifest
 
+  # proves: hooks/tests/librarian-poke.bats "scan cap: a batch scan killed by the runtime cap exits 0, claude never starts, nothing issued or advanced, claim released"; hooks/tests/librarian-poke.bats "scan cap: the log gains one 'batch scan exceeded' line naming the 1s cap and killed, and no failed or deferred line"; hooks/tests/librarian-poke.bats "scan cap: a killed scan writes last-drain-start; the next drain inside the cooldown runs no scan and logs one cooldown defer"
+  @integration
+  Scenario: A batch scan killed by the runtime cap is a quiet defer
+    Given a batch scan that outlives LIBRARIAN_MAX_RUNTIME_SEC of 1 and timeout on PATH
+    When a worker run drains
+    Then the worker exits 0 and claude never starts
+    And no cursor changes and no batch.manifest.issued is written
+    And the log has one line with "batch scan exceeded", "1s" and "killed"
+    And the log has no "batch failed" line and no "batch deferred" line
+    And last-drain-start is written, so the next drain inside the cooldown runs no scan and logs one cooldown defer
+    And the drain claim is released
+
   # --- AC Coverage Map ---
   # AC 1  Load at or over the ceiling defers at spawn ........ Scenario "Load at or over the ceiling defers at spawn"
   # AC 2  Iowait at the ceiling defers at spawn .............. Scenario "Iowait at the ceiling defers at spawn"
@@ -176,3 +188,4 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
   # AC 14 Docs match behaviour ............................... Scenario "Docs match behaviour"
   # AC 15 A bad re-check interval cannot stop the drain ...... Scenario "A bad re-check interval cannot stop the drain"
   # AC 16 The version bump is automated ...................... Scenario "The version bump is automated"
+  # AC 17 A killed batch scan is a quiet defer ............... Scenario "A batch scan killed by the runtime cap is a quiet defer"

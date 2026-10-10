@@ -23,6 +23,9 @@ setup() {
   export LIBRARIAN_LOCK="$TURN_STATE_DIR/librarian.lock"
   unset PROCEDURES_ENABLE_LIBRARIAN CLAUDE_CODE_ENTRYPOINT LIBRARIAN_SYNC LIBRARIAN_NO_FLOCK
   unset LIBRARIAN_MIN_INTERVAL_SECS LIBRARIAN_CLAIM_TTL_SECS LIBRARIAN_MAX_RUNTIME_SEC CODEX_STORE_ROOTS CODEX_ROOT
+  # Path-resolving variables: an inherited one would point the hook at the
+  # developer's real state dir or transcripts instead of this test's $HOME.
+  unset CLAUDE_CONFIG_DIR PROCEDURES_STATE_DIR KNOWLEDGE_HOME XDG_STATE_HOME XDG_CACHE_HOME
   # A drain with no store root is skipped (no write rules), so every test gets
   # one by default; a test that needs none unsets it.
   mkdir -p "$HOME/default-store/records"
@@ -1024,4 +1027,51 @@ bad_interval_drain() {
 @test "bad re-check interval: a non-numeric or empty value still drains once, advances both cursors, and is no batch failure" {
   bad_interval_drain nope
   bad_interval_drain ""
+}
+
+# ---- AC 17: a batch scan killed by the runtime cap is a quiet defer ---------
+
+# A wc shim that sleeps 5s (bounded, and only when SLOW_WC is set) makes the
+# scan outlive a 1s cap deterministically. Needs GNU/BSD `timeout` on PATH.
+lp_slow_scan() {
+  command -v timeout >/dev/null 2>&1 || skip "timeout not on PATH"
+  local real; real="$(command -v wc)"
+  mkdir -p "$STUB_BIN/shim"
+  cat > "$STUB_BIN/shim/wc" <<SHIM
+#!/usr/bin/env bash
+[ -n "\${SLOW_WC:-}" ] && sleep 5
+exec "$real" "\$@"
+SHIM
+  chmod +x "$STUB_BIN/shim/wc"
+  PATH="$STUB_BIN/shim:$PATH"
+  unread_line
+  SLOW_WC=1 LIBRARIAN_MAX_RUNTIME_SEC=1 wake
+}
+
+@test "scan cap: a batch scan killed by the runtime cap exits 0, claude never starts, nothing issued or advanced, claim released" {
+  lp_slow_scan
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  [ ! -e "$(lp_state)/batch.manifest" ]
+  [ ! -e "$(lp_state)/batch.manifest.issued" ]
+  [ -z "$(ls "$(lp_state)/cursors" 2>/dev/null)" ]
+  [ ! -d "$LIBRARIAN_LOCK.d" ]
+}
+
+@test "scan cap: the log gains one 'batch scan exceeded' line naming the 1s cap and killed, and no failed or deferred line" {
+  lp_slow_scan
+  [ "$(lp_log_count 'batch scan exceeded 1s.*killed')" -eq 1 ]
+  [ "$(lp_log_count 'batch failed')" -eq 0 ]
+  [ "$(lp_log_count 'batch deferred')" -eq 0 ]
+}
+
+@test "scan cap: a killed scan writes last-drain-start; the next drain inside the cooldown runs no scan and logs one cooldown defer" {
+  lp_slow_scan
+  [ -s "$(lp_state)/last-drain-start" ]
+  local before; before="$(lp_log_count 'deferred, cooldown')"
+  LIBRARIAN_MAX_RUNTIME_SEC=1 wake 1800
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  [ "$(lp_log_count 'batch scan exceeded')" -eq 1 ]
+  [ "$(( $(lp_log_count 'deferred, cooldown') - before ))" -eq 1 ]
 }
