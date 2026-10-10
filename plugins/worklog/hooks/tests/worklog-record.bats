@@ -2353,7 +2353,7 @@ _$(fake_do)"
 }
 
 # gitleaks 8.30.1 behaviour: no built-in rule covers Pulumi, so only the
-# gitleaks generic rule can catch the token, and it misses it mid-path.
+# gitleaks pulumi-api-token rule can catch the token, and it misses it mid-path.
 # Accepted limit, tracked in issue 219. The path-end control shows the token
 # shape is otherwise found, in a query string as well.
 @test "known limit: a pulumi token in the middle of a URL path is not found by gitleaks" {
