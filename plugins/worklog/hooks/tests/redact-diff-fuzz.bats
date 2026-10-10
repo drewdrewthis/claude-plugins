@@ -451,7 +451,7 @@ PY
 
 @test "the pinned sha appears once outside the changelogs and that is the helper" {
   # Split so this file does not hold the sha it counts.
-  local pin="14b595e6520d""d19771f56ee2c8c1740591571220"
+  local pin="84304ff2b409""d4fd308d3a91b557ea00ef825e20"
   # release-please writes commit links with full shas into CHANGELOG.md.
   run git grep -c --untracked -e "$pin" -- . ':(exclude)*CHANGELOG.md'
   printf '# %s\n' "$output" >&3

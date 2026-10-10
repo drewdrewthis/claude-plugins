@@ -38,7 +38,7 @@ import subprocess
 import sys
 import tempfile
 
-PINNED_SHA = "14b595e6520dd19771f56ee2c8c1740591571220"
+PINNED_SHA = "84304ff2b409d4fd308d3a91b557ea00ef825e20"
 LIB_PATH = "plugins/worklog/hooks/lib/redact.py"
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CANDIDATE_DIR = os.path.normpath(os.path.join(HERE, "..", "lib"))

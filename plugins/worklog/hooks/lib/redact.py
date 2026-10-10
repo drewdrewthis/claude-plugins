@@ -61,8 +61,9 @@ yandex-access-token (rubygems-api-token and twitter-bearer-token can be
 redacted in part). (4) Texts beyond the copy budget (the copy budget,
 _COPY_BUDGET, in bytes of original text per batch, smallest texts first) get no copies; for them a gitleaks-only
 token before punctuation stays raw. (5) Without gitleaks nothing changes:
-gitleaks-only shapes stay raw. (6) gitleaks older than 8.22.0 gives the hook no
-findings (https://github.com/drewdrewthis/claude-plugins/issues/245). (7) The
+gitleaks-only shapes stay raw. (6) gitleaks 8.19.0 and older cannot run the stdin
+call, so the scan fails and the row is stored unjudged (gitleaks-failed); the
+minimum version is 8.19.1 (https://github.com/drewdrewthis/claude-plugins/issues/245). (7) The
 copies make the one gitleaks run larger (about 0.5 to 0.9 MB more), so a batch that is
 close to the gitleaks time limit without them can pass it with them; the row is
 then stored unjudged (gitleaks-failed), never unredacted.
@@ -78,6 +79,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 
 _PEM = re.compile(
@@ -260,6 +262,27 @@ def gitleaks_present():
     return bool(shutil.which("gitleaks"))
 
 
+# gitleaks older than 8.22.0 reads "-" as a file name: it writes the report, with
+# the raw secret, to a file named "-" in the working directory. /dev/stdout
+# gives the report on stdout from 8.19.1 on.
+# https://github.com/drewdrewthis/claude-plugins/issues/245
+_REPORT_PATH = "/dev/stdout"
+
+
+def _report_path_usable():
+    """False when the report path is absent or a regular file.
+
+    With a writable /dev that has no stdout entry, gitleaks creates a regular
+    file there with the raw secret and prints nothing (measured on 8.21.2 and
+    8.30.1). lstat, not stat, so a closed stdout of this process does not trip
+    the guard.
+    """
+    try:
+        return not stat.S_ISREG(os.lstat(_REPORT_PATH).st_mode)
+    except OSError:
+        return False
+
+
 def scan(text):
     """One gitleaks run over `text`. Returns (findings, failed).
 
@@ -268,11 +291,13 @@ def scan(text):
     """
     if not gitleaks_present() or not text.strip():
         return [], False
+    if not _report_path_usable():
+        return [], True
     try:
         secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
         p = subprocess.run(
             ["gitleaks", "stdin", "--no-banner", "--exit-code", "0",
-             "--report-format", "json", "--report-path", "-", "--log-level", "error",
+             "--report-format", "json", "--report-path", _REPORT_PATH, "--log-level", "error",
              "--ignore-gitleaks-allow"],
             input=text.encode("utf-8", "replace"), capture_output=True, timeout=secs)
         if p.returncode != 0:

@@ -1450,7 +1450,7 @@ real_gitleaks() {
 # stubbed tests model a real finding on a shape no built-in covers.
 assert_gitleaks_only() {
   local gl; gl="$(real_gitleaks)"
-  run bash -c "printf 'key = \"%s\"\n' '$1' | '$gl' stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null | jq -r '.[].RuleID'"
+  run bash -c "printf 'key = \"%s\"\n' '$1' | '$gl' stdin --no-banner --exit-code 0 --report-format json --report-path /dev/stdout 2>/dev/null | jq -r '.[].RuleID'"
   [ "$output" = "$2" ]
   run python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.exit(0 if redact.builtin(sys.argv[2]) == sys.argv[2] else 1)" "$HOOKS/lib" "$1"
   [ "$status" -eq 0 ]
@@ -1683,7 +1683,7 @@ require_real_gitleaks() {
   KEY="$(fake_lw)"
   fixture_secret_prompt "$KEY"
   drive "$CLEAN"
-  grep -qxF -- "stdin --no-banner --exit-code 0 --report-format json --report-path - --log-level error --ignore-gitleaks-allow" "$GITLEAKS_CALL_LOG"
+  grep -qxF -- "stdin --no-banner --exit-code 0 --report-format json --report-path /dev/stdout --log-level error --ignore-gitleaks-allow" "$GITLEAKS_CALL_LOG"
 }
 
 @test "an unreadable redact lib writes no row" {
@@ -1722,7 +1722,7 @@ require_real_gitleaks() {
 # gitleaks_findings <file> — findings JSON the REAL gitleaks reports for a file.
 # --exit-code 0 so a finding is data here, not a failed command.
 gitleaks_findings() {
-  "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path - < "$1" 2>/dev/null
+  "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path /dev/stdout < "$1" 2>/dev/null | cat
 }
 
 @test "the worklog file from the sk-lw turn passes a real gitleaks scan" {
@@ -2120,7 +2120,7 @@ fake_doppler:doppler-token fake_atlassian:atlassian-token fake_grafana:grafana-t
   bad=""
   for row in $BUILTIN_TABLE; do
     t="$("${row%%:*}")"
-    n="$(printf 'key = "%s"\n' "$t" | "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null | jq 'length')"
+    n="$(printf 'key = "%s"\n' "$t" | "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path /dev/stdout 2>/dev/null | jq 'length')"
     [ "${n:-0}" -ge 1 ] || bad="$bad ${row%%:*}"
   done
   [ -z "$bad" ] || { echo "gitleaks did not flag:$bad" >&2; return 1; }
@@ -2880,7 +2880,7 @@ assert_glued_stored() {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
   sentence="set the access token var to $KEY then open https://app.example.com/$KEY/stacks/production to check"
-  printf '%s\n' "$sentence" | "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path - 2>/dev/null \
+  printf '%s\n' "$sentence" | "$(real_gitleaks)" stdin --no-banner --exit-code 0 --report-format json --report-path /dev/stdout 2>/dev/null \
     | jq -e 'map(.RuleID) | index("pulumi-api-token")' >/dev/null
   [ "$(builtin_out "$sentence")" = "$sentence" ]
   user_line "$U1" "$sentence" > "$TX"
@@ -3273,4 +3273,204 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
   text_line "$U0"$'\n'"$U2" "done" >> "$TX"
   drive "$CLEAN"
   [ "$(jq -c .end_uuid "$WORKLOG_JSONL")" = "null" ]
+}
+
+# ==========================================================================
+# 20. gitleaks older than 8.22.0 (claude-plugins#245)
+# ==========================================================================
+#
+# gitleaks before 8.22.0 reads a lone dash as the report path as a FILE NAME, not stdout:
+# it writes the raw findings to a file called `-` in the working directory and
+# prints nothing, which the hook read as "no findings". The hook now asks for
+# /dev/stdout and refuses to scan when that path is absent or a regular file.
+#
+# ⚠ THE OLD BINARY COMES FROM WORKLOG_TEST_OLD_GITLEAKS (a real 8.21.2). Never
+# put it on the suite's default PATH and never replace the box binary.
+
+# require_old_gitleaks — FAIL on CI when the 8.21.2 binary is not provided (a
+# skip there would turn the whole section into silent passes); skip locally.
+# Sets OLDBIN: a private directory holding only `gitleaks` -> that binary.
+require_old_gitleaks() {
+  local p="${WORKLOG_TEST_OLD_GITLEAKS:-}"
+  if [ -z "$p" ] || [ ! -f "$p" ] || [ ! -x "$p" ]; then
+    if [ -n "${CI:-}" ]; then
+      echo "WORKLOG_TEST_OLD_GITLEAKS must name an executable gitleaks 8.21.2 on CI" >&2
+      return 1
+    fi
+    skip "old gitleaks binary not provided"
+  fi
+  [ "$("$p" version)" = "8.21.2" ]
+  OLDBIN="$SCRATCH/oldbin"
+  mkdir -p "$OLDBIN"
+  ln -sf "$p" "$OLDBIN/gitleaks"
+}
+
+# confirmed_pulumi <gitleaks-binary> — a run-time generated fake Pulumi token
+# that THIS binary is confirmed to find in both texts the old-binary tests use.
+# gitleaks misses a small share of random tokens (entropy), so generate, check,
+# and retry a bounded number of times.
+confirmed_pulumi() {
+  local i t
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    t="pu""l-$(od -An -N20 -tx1 /dev/urandom | tr -d ' \n')"
+    if printf 'my token is %s please keep it\nleaked %s\n' "$t" "$t" \
+        | timeout 30 "$1" stdin --no-banner --exit-code 0 --report-format json --report-path /dev/stdout 2>/dev/null \
+        | jq -e 'length >= 2' >/dev/null; then
+      printf '%s' "$t"
+      return 0
+    fi
+  done
+  echo "no token found by $1 in 10 tries" >&2
+  return 1
+}
+
+# old_reply <key> — a model reply that repeats the raw key in its text.
+old_reply() {
+  jq -nc --arg u "$U1" --arg k "$1" --arg q "my token is <redacted:pulumi-api-token> please keep it" \
+    '{requests:[{text:("leaked " + $k),quote:$q,uuid:$u}],outcomes:[],mistakes:[]}'
+}
+
+# drive_old <workdir> <reply> — the hook with the OLD binary first on PATH and
+# <workdir> as its working directory.
+drive_old() {
+  ( cd "$1" && drive_with "PATH=$OLDBIN:$STUB:$PATH" -- "$2" )
+}
+
+# old_secret_turn — one turn with the confirmed token in prompt and reply, run
+# in a fresh empty working directory (WD).
+old_secret_turn() {
+  require_old_gitleaks
+  KEY="$(confirmed_pulumi "$OLDBIN/gitleaks")"
+  WD="$(mktemp -d "$SCRATCH/wd.XXXXXX")"
+  fixture_secret_prompt "$KEY"
+  drive_old "$WD" "$(old_reply "$KEY")"
+}
+
+# old_clean_turn — one turn with no secret, run in a fresh empty WD.
+old_clean_turn() {
+  require_old_gitleaks
+  WD="$(mktemp -d "$SCRATCH/wd.XXXXXX")"
+  fixture_full
+  drive_old "$WD" "$CLEAN"
+}
+
+@test "the old binary under test reports version 8.21.2" {
+  require_old_gitleaks
+  [ "$(PATH="$OLDBIN:$PATH" gitleaks version)" = "8.21.2" ]
+}
+
+@test "gitleaks 8.21.2 stores the pulumi marker in the worklog" {
+  old_secret_turn
+  grep -qF -- "<redacted:pulumi-api-token>" "$WORKLOG_JSONL"
+}
+
+@test "gitleaks 8.21.2 keeps the raw pulumi token out of the worklog" {
+  old_secret_turn
+  [ "$(grep -cF -- "$KEY" "$WORKLOG_JSONL" || true)" -eq 0 ]
+}
+
+@test "gitleaks 8.21.2 keeps the raw pulumi token out of the stdin the model receives" {
+  old_secret_turn
+  [ "$(grep -cF -- "$KEY" "$CLAUDE_STDIN_LOG" || true)" -eq 0 ]
+}
+
+@test "gitleaks 8.21.2 on a secret turn logs no gitleaks-failed" {
+  old_secret_turn
+  n="$(note_count gitleaks-failed)"; [ "${n:-0}" -eq 0 ]
+}
+
+@test "gitleaks 8.21.2 on a secret turn stores a judged row" {
+  old_secret_turn
+  [ "$(field '.requests|length')" -eq 1 ]
+}
+
+@test "gitleaks 8.21.2 on a secret turn leaves the working directory empty" {
+  old_secret_turn
+  [ -z "$(ls -A "$WD")" ]
+}
+
+@test "gitleaks 8.21.2 on a clean turn leaves the working directory empty" {
+  old_clean_turn
+  [ -z "$(ls -A "$WD")" ]
+}
+
+@test "gitleaks 8.21.2 on a clean turn stores a judged row" {
+  old_clean_turn
+  [ "$(field '.requests|length')" -eq 1 ]
+}
+
+@test "gitleaks 8.21.2 on a clean turn logs no gitleaks-failed" {
+  old_clean_turn
+  n="$(note_count gitleaks-failed)"; [ "${n:-0}" -eq 0 ]
+}
+
+# --- the /dev/stdout guard --------------------------------------------------
+
+# scan_with_path <report-path> — redact.scan() on a fake token with the report
+# path injected; prints the repr of the result.
+scan_with_path() {
+  PATH="$STUB:$PATH" python3 - "$HOOKS/lib" "$1" "$(fake_pulumi)" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+redact._REPORT_PATH = sys.argv[2]
+print(redact.scan("my token is " + sys.argv[3] + " please keep it"))
+PY
+}
+
+@test "a report path that is absent makes the scan report failure" {
+  run scan_with_path "$SCRATCH/no-such-report-path"
+  [ "$output" = "([], True)" ]
+}
+
+@test "a report path that is absent never runs gitleaks" {
+  scan_with_path "$SCRATCH/no-such-report-path" >/dev/null
+  [ ! -s "$GITLEAKS_CALL_LOG" ]
+}
+
+@test "a report path that is a regular file makes the scan report failure" {
+  printf 'known bytes\n' > "$SCRATCH/regular"
+  run scan_with_path "$SCRATCH/regular"
+  [ "$output" = "([], True)" ]
+}
+
+@test "a report path that is a regular file never runs gitleaks" {
+  printf 'known bytes\n' > "$SCRATCH/regular"
+  scan_with_path "$SCRATCH/regular" >/dev/null
+  [ ! -s "$GITLEAKS_CALL_LOG" ]
+}
+
+@test "a report path that is a regular file keeps its bytes" {
+  printf 'known bytes\n' > "$SCRATCH/regular"
+  scan_with_path "$SCRATCH/regular" >/dev/null
+  [ "$(cat "$SCRATCH/regular")" = "known bytes" ]
+}
+
+@test "the real /dev/stdout with the caller's stdout closed still returns the finding" {
+  require_real_gitleaks
+  PATH="$(dirname "$(real_gitleaks)"):$PATH" python3 - "$HOOKS/lib" "$(fake_pulumi)" "$SCRATCH/scan-out" >&- <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+found, failed = redact.scan("my token is " + sys.argv[2] + " please keep it")
+open(sys.argv[3], "w").write("%s %s" % (failed, [r for _, r in found]))
+PY
+  [ "$(cat "$SCRATCH/scan-out")" = "False ['pulumi-api-token']" ]
+}
+
+# --- no call site left ------------------------------------------------------
+
+# The patterns are built from pieces so this file does not match itself.
+@test "no call site under plugins/worklog passes the dash report path as an argv string" {
+  local pat="--report-path ""-"
+  run git -C "$HOOKS" grep -n --untracked -e "$pat" -- ':/plugins/worklog'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "no call site under plugins/worklog passes the dash report path as a python list" {
+  local pat='"--report-path", "''-"'
+  run git -C "$HOOKS" grep -n --untracked -e "$pat" -- ':/plugins/worklog'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
 }
