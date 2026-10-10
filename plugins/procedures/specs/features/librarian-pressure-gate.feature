@@ -19,7 +19,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
   that as a defer: no claude, no cursor move, one log line, and the cooldown
   stamp so the scan is not repeated every turn. The batch runs at idle priority.
 
-  # proves: hooks/tests/librarian-poke.bats "spawn gate: load equal to the ceiling defers — claude never runs, exit 0", "spawn gate: load equal to the ceiling logs exactly one '>=' defer line", "spawn gate: load far over the ceiling logs the '>=' defer line", "spawn gate: a spawn-check defer writes no last-drain-start", and the updated "load gate: over the load ceiling defers — claude never runs, defer logged"
+  # proves: hooks/tests/librarian-poke.bats "spawn gate: load equal to the ceiling defers — exit 0, claude never runs, one '>=' defer line, no last-drain-start", "spawn gate: load far over the ceiling logs the '>=' defer line", "load gate: over the load ceiling defers — claude never runs, defer logged"
   @integration
   Scenario: Load at or over the ceiling defers at spawn
     Given a transcript with unread lines and ceiling 8
@@ -28,7 +28,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And the log has exactly one line containing "deferred, load=8.00 >= ceiling=8" (or "load=50.00")
     And no last-drain-start is written
 
-  # proves: hooks/tests/librarian-poke.bats "spawn gate: iowait equal to the ceiling defers — claude never runs, exit 0", "spawn gate: iowait equal to the ceiling logs exactly one '>=' defer line", and the updated "load gate: over the iowait ceiling (two fixtures swapped between samples) defers — claude never runs, defer logged"
+  # proves: hooks/tests/librarian-poke.bats "spawn gate: iowait equal to the ceiling defers — exit 0, claude never runs, one '>=' defer line", "load gate: over the iowait ceiling (two fixtures swapped between samples) defers — claude never runs, defer logged"
   @integration
   Scenario: Iowait at the ceiling defers at spawn
     Given a transcript with unread lines and an iowait ceiling of 30%
@@ -36,7 +36,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     Then claude is not started and the exit code is 0
     And the log has exactly one line containing "deferred, iowait=30% >= ceiling=30%"
 
-  # proves: hooks/tests/librarian-poke.bats "spawn gate: just under both ceilings drains — claude runs once", "spawn gate: just under both ceilings advances the transcript cursor to its line count"
+  # proves: hooks/tests/librarian-poke.bats "spawn gate: just under both ceilings drains — claude runs once and the cursor reaches the line count"
   @integration
   Scenario: Just under both ceilings still drains
     Given one unread transcript
@@ -44,7 +44,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     Then claude is started exactly once
     And the transcript's cursor file holds its line count
 
-  # proves: hooks/tests/librarian-poke.bats "mid-batch defer on load: ..." (6 tests), "mid-batch defer on iowait: ...", "mid-batch defer at re-check 2: ...", plus the contract tests "load-ok mode: load at the ceiling exits 75 ...", "load-ok mode: iowait at the ceiling exits 75 ...", "load-ok mode: calm pressure exits 0"
+  # proves: hooks/tests/librarian-poke.bats "mid-batch defer on load: exit 0, nothing issued or advanced, claim released, logged as a defer not a failure", "mid-batch defer on iowait: claude never starts and the iowait defer is logged once", "mid-batch defer at re-check 2: no manifest, no cursor, claude never starts", "load-ok mode: load at the ceiling exits 75 and logs the defer line", "load-ok mode: iowait at the ceiling exits 75 and logs the defer line", "load-ok mode: calm pressure exits 0"
   @integration
   Scenario: Pressure that rises during the batch defers the drain
     Given LIBRARIAN_RECHECK_SECS=0 and two transcripts with unread lines
@@ -56,7 +56,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And the log has one "deferred, ... >= ceiling" line and one "batch deferred" line
     And the log has no "batch failed" line
 
-  # proves: hooks/tests/librarian-poke.bats "after a mid-batch defer, the next calm drain issues one range per transcript from 0", "after a mid-batch defer, the next calm drain advances both cursors to their line counts"
+  # proves: hooks/tests/librarian-poke.bats "after a mid-batch defer, the next calm drain issues one range per transcript from 0 and advances both cursors"
   @integration
   Scenario: A deferred drain loses nothing
     Given a drain that was deferred mid-batch
@@ -65,7 +65,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And batch.manifest has one range per transcript, each starting at 0
     And both cursor files hold their transcript's line count
 
-  # proves: hooks/tests/librarian-poke.bats "a mid-batch defer writes last-drain-start", "after a mid-batch defer, the next drain inside the cooldown runs no re-check scan", "after a mid-batch defer, the next drain inside the cooldown logs one cooldown defer"; the spawn-check half is "spawn gate: a spawn-check defer writes no last-drain-start"
+  # proves: hooks/tests/librarian-poke.bats "a mid-batch defer writes last-drain-start; the next drain inside the cooldown runs no scan and logs one cooldown defer", "spawn gate: load equal to the ceiling defers — exit 0, claude never runs, one '>=' defer line, no last-drain-start"
   @integration
   Scenario: A mid-batch defer backs off
     Given a drain that was deferred mid-batch
@@ -74,7 +74,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And the sample counter holds exactly 1 line, so the scan did not run
     And the log gains exactly one "deferred, cooldown" line
 
-  # proves: hooks/tests/librarian-poke.bats "running drain: claude finishes and is never signalled when pressure rises mid-run", "running drain: cursors still advance when pressure rises mid-run", "running drain: no defer line is logged when pressure rises mid-run"
+  # proves: hooks/tests/librarian-poke.bats "running drain: claude finishes unsignalled, cursors advance and no defer is logged when pressure rises mid-run"
   @integration
   Scenario: A running drain is never signalled by the gate
     Given a stub claude that traps TERM and INT, raises the load fixture to 50.00 and runs for 2 seconds
@@ -83,7 +83,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And the cursors hold the transcript line counts
     And the log has no "deferred" line
 
-  # proves: hooks/tests/librarian-poke.bats "load-ok mode: both pressure files absent exits 0", "load-ok mode: both pressure files absent adds no log line", "fail-open drain: with re-checks on and no pressure files, ..." (3 tests); hooks/tests/librarian-batch.bats "hook as the check with both pressure files absent: re-checks run per file and both ranges are issued"
+  # proves: hooks/tests/librarian-poke.bats "load-ok mode: both pressure files absent exits 0 and adds no log line", "load-ok mode: an invalid ceiling falls back silently — exit 0, the log gains no line", "fail-open drain: with re-checks on and no pressure files, both ranges are issued, claude runs once, one fail-open line each"; hooks/tests/librarian-batch.bats "hook as the check with both pressure files absent: re-checks run per file and both ranges are issued"
   @integration
   Scenario: Unreadable pressure during a re-check fails open, quietly
     Given both pressure files are absent
@@ -109,7 +109,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     Then it exits 0
     And both ranges are in batch.manifest
 
-  # proves: hooks/tests/librarian-batch.bats "check exits 75: ..." (4 tests), "check exits 1: ...", "check exits 127: ...", "check path missing: ...", "check that drains stdin and exits 0: ...", "interval 0: the check is invoked as '--load-ok'"
+  # proves: hooks/tests/librarian-batch.bats "check exits 75: the batch exits 75, leaves no manifest or partial output, and prints a deferred line", "check exits 75: a manifest from an earlier batch is gone, not left to be advanced", "check exits 1 or 127: the batch proceeds and issues both ranges", "check path missing: the batch proceeds and issues both ranges", "check that drains stdin and exits 0: the corpus list is untouched, both ranges issued", "interval 0: the check is invoked as '--load-ok'", "a batch that already filled its budget is not discarded by a late check", "--pressure-check with no value fails and names the missing path"
   @integration
   Scenario: Only exit 75 from the check is a defer
     Given LIBRARIAN_RECHECK_SECS=0 and two unread transcripts
@@ -120,7 +120,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     When the check reads all of stdin and exits 0
     Then both ranges are still in batch.manifest
 
-  # proves: hooks/tests/librarian-poke.bats "failed batch: logs exactly one 'batch failed, drain skipped' line", "failed batch: logs no defer line", "failed batch: writes no last-drain-start"
+  # proves: hooks/tests/librarian-poke.bats "failed batch: one 'batch failed, drain skipped' line, no defer line, no last-drain-start"
   @integration
   Scenario: A failed batch is still a failure
     Given LIBRARIAN_BATCH_BYTES=nope
@@ -128,7 +128,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     Then the log has exactly one "batch failed, drain skipped" line and no "deferred" line
     And no last-drain-start exists
 
-  # proves: hooks/tests/librarian-poke.bats "idle priority: ionice -c3 wraps librarian-batch.sh exactly once", "idle priority: nice -n19 wraps librarian-batch.sh exactly once"
+  # proves: hooks/tests/librarian-poke.bats "idle priority: ionice -c3 and nice -n19 each wrap librarian-batch.sh exactly once"
   @integration
   Scenario: The batch runs at idle priority
     Given ionice and nice shims first on PATH that record their arguments and then exec the command
@@ -143,7 +143,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     When the five grep checks run
     Then none returns a result that contradicts the behaviour above
 
-  # proves: hooks/tests/librarian-poke.bats "bad re-check interval: a non-numeric value still drains once and advances both cursors", "bad re-check interval: an empty value still drains once and advances both cursors", "bad re-check interval: neither value is logged as a batch failure"; hooks/tests/librarian-batch.bats "a non-numeric interval falls back to 5s: ...", "an empty interval falls back to 5s: ..."
+  # proves: hooks/tests/librarian-poke.bats "bad re-check interval: a non-numeric or empty value still drains once, advances both cursors, and is no batch failure"; hooks/tests/librarian-batch.bats "a non-numeric interval falls back to 5s: no check in a fast batch, both ranges issued"
   @integration
   Scenario: A bad re-check interval cannot stop the drain
     Given two unread transcripts and calm pressure

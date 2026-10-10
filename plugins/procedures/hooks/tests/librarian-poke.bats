@@ -1007,13 +1007,21 @@ lp_priority_shims() {
 
 # ---- AC 15: a bad re-check interval cannot stop the drain --------------------
 
-@test "bad re-check interval: a non-numeric value still drains once, advances both cursors, and is no batch failure" {
+# One drain from a clean slate (no state, no claude log, fresh transcripts) under
+# LIBRARIAN_RECHECK_SECS=$1, so a second call really drains again.
+bad_interval_drain() {
+  rm -rf "$(lp_state)" "$CLAUDE_LOG" "$PROJ"/*.jsonl
   unread_line
   lp_extra other 2 1
   lp_plan "1.00 9"
-  LIBRARIAN_RECHECK_SECS=nope wake
+  LIBRARIAN_RECHECK_SECS="$1" wake
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
   [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
   [ "$(cat "$(lp_state)/cursors/other.line")" = "2" ]
   [ "$(lp_log_count 'batch failed')" -eq 0 ]
+}
+
+@test "bad re-check interval: a non-numeric or empty value still drains once, advances both cursors, and is no batch failure" {
+  bad_interval_drain nope
+  bad_interval_drain ""
 }
