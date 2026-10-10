@@ -571,6 +571,30 @@ SHIM
   [ "$status" -eq 0 ]
 }
 
+@test "AC26: a failing git ls-files on an ignored .index aborts the commit instead of skipping the restage" {
+  # A failed ls-files must not read as "nothing tracked": a tracked index would go unstaged.
+  local real shimdir; real="$(command -v git)"; shimdir="$FIX/shim"; mkdir -p "$shimdir"
+  cat > "$shimdir/git" <<SHIM
+#!/usr/bin/env bash
+args=("\$@")
+if [ "\${args[0]:-}" = "-C" ]; then args=("\${args[@]:2}"); fi
+if [ "\${args[*]:-}" = "ls-files -- .index" ]; then
+  echo "fatal: ls-files broke" >&2
+  exit 128
+fi
+exec "$real" "\$@"
+SHIM
+  chmod +x "$shimdir/git"
+  printf '.index/\n' > "$ROOT/.gitignore"
+  git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index
+  local before; before="$(git -C "$ROOT" rev-parse HEAD)"
+  _fm "$ROOT/records/failure-modes/local.md" fm.local LOCAL
+  PATH="$shimdir:$PATH" _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"git ls-files failed for: .index"* ]]
+  [ "$(git -C "$ROOT" rev-parse HEAD)" = "$before" ]                           # nothing committed
+}
+
 @test "AC29: index files tracked before .index/ was gitignored still get the rebuilt index staged" {
   _fm "$ROOT/records/failure-modes/first.md" fm.first FIRST
   _run_gate --root "$ROOT" --paths "records/failure-modes/first.md" --what x --why w --source s --evidence e
