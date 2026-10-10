@@ -106,6 +106,69 @@ run_hook() {
 
 decision() { printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null; }
 context()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null; }
+reason()   { printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null; }
+
+# has <text> <literal>   -> 0 when the literal is in the text
+# lacks <text> <literal> -> 0 when it is not. Functions (not `!`) so a failure
+# trips bats errexit anywhere in a test.
+# lacks fails on empty text so a hook that prints nothing cannot pass a no-hatch test.
+has()   { printf '%s' "$1" | grep -qF -- "$2"; }
+lacks() { [ -n "$1" ] || return 1; ! printf '%s' "$1" | grep -qF -- "$2"; }
+
+# hook_env <cmd> [mode] [projdir] [bindir] [VAR=val ...]
+# Like run_hook, but picks the `just` stub dir and passes extra env. Always
+# unsets JUST_GLOBAL_JUSTFILE so only an explicit VAR=val sets it.
+hook_env() {
+  local cmd="$1" mode="${2:-}" proj="${3:-$JUSTDIR}" bin="${4:-$STUB}"
+  shift $(( $# < 4 ? $# : 4 ))
+  local -a envv=(
+    PATH="$bin:$PATH"
+    HOME="$FAKE_HOME"
+    CODEX_ROOT="$CODEX_ROOT"
+    CLAUDE_PROJECT_DIR="$proj"
+  )
+  [ -n "$mode" ] && envv+=( JUST_RECIPES_ENFORCE="$mode" )
+  [ $# -gt 0 ] && envv+=( "$@" )
+  payload "$cmd" | env -u JUST_RECIPES_ENFORCE -u JUST_GLOBAL_JUSTFILE "${envv[@]}" bash "$HOOK"
+}
+
+# hook_text <same args as hook_env> -> the nudge context, or the strict reason.
+hook_text() {
+  hook_env "$@" | jq -r '.hookSpecificOutput | (.additionalContext // .permissionDecisionReason // empty)' 2>/dev/null
+}
+
+# add_wrap <justfile> -> append a `wrap` recipe (the stub's summary prints "wrap").
+add_wrap() { printf '\n# run a command through the logger\nwrap +cmd:\n    @echo wrapped\n' >> "$1"; }
+
+# init_canned -> a `just` stub that answers from files, for output the line-based
+# stub cannot express (modules, broken files). Reads $CANNED_DIR/<src>.<mode>
+# where src is "global" when --justfile is passed, else "project"; mode is
+# "summary" or "list". Missing file -> exit 1, like a just that cannot read it.
+init_canned() {
+  CANNED="$SCRATCH/canned"; CBIN="$SCRATCH/cbin"
+  mkdir -p "$CANNED" "$CBIN"
+  cat > "$CBIN/just" <<'SH'
+#!/usr/bin/env bash
+src=project; mode=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --justfile) src=global; shift 2 ;;
+    -d|--working-directory) shift 2 ;;
+    --summary) mode=summary; shift ;;
+    --list|--list-submodules) mode=list; shift ;;
+    *) shift ;;
+  esac
+done
+f="$CANNED_DIR/$src.$mode"
+[ -f "$f" ] && { cat "$f"; exit 0; }
+exit 1
+SH
+  chmod +x "$CBIN/just"
+}
+# canned_put <src.mode> <text>
+canned_put() { printf '%s\n' "$2" > "$CANNED/$1"; }
+# canned_text <cmd> [mode] [projdir] -> hook_text through the canned stub
+canned_text() { hook_text "$1" "${2:-}" "${3:-$EMPTYDIR}" "$CBIN" CANNED_DIR="$CANNED"; }
 
 # --- modes ----------------------------------------------------------------
 
@@ -129,10 +192,10 @@ context()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // 
   [ "$(decision "$output")" = "deny" ]
 }
 
-@test "strict deny reason carries the escape-hatch guidance" {
-  run run_hook "wget http://x" strict
-  printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason' | grep -q "just --list"
-  printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason' | grep -q 'global::wrap'
+@test "strict deny reason carries the resolved escape hatch" {
+  add_wrap "$FAKE_HOME/.claude/just/justfile"
+  t="$(hook_text "wget http://x" strict)"
+  has "$t" "just --justfile $FAKE_HOME/.claude/just/justfile -d . wrap \"<your command>\""
 }
 
 # --- passthrough / fail-open ---------------------------------------------
@@ -499,4 +562,213 @@ SH
     CLAUDE_PROJECT_DIR="$OLDDIR" bash "$HOOK" > "$SCRATCH/old.json"
   grep -q '"permissionDecision": *"allow"' "$SCRATCH/old.json"
   grep -q "deploy" "$SCRATCH/old.json"
+}
+
+# --- escape hatch resolves at run time (#223) -----------------------------
+# The hook names a `wrap` form only when `just --summary` shows a recipe that
+# really is `wrap`. Nothing resolves -> it names no hatch and no global path.
+
+# no_global_refs <text> -> 0 when the text names no global-library path or form.
+# Fails on empty text.
+no_global_refs() { [ -n "$1" ] || return 1; ! printf '%s' "$1" | grep -qE -- '--justfile|\.claude/just/justfile|just --list'; }
+# no_hatch <text> -> 0 when the text names no hatch command. Fails on empty text.
+no_hatch() { lacks "$1" '<your command>' && lacks "$1" 'Escape hatch:'; }
+
+CMD='wget http://x'
+hatch_global() { printf 'just --justfile %s -d . wrap "<your command>"' "$(printf '%q' "$1")"; }
+
+@test "no hatch: no project justfile and no global file -> no global path, no wrap" {
+  rm -rf "$FAKE_HOME/.claude"
+  t="$(hook_text "$CMD" "" "$EMPTYDIR")"
+  no_global_refs "$t"
+  no_hatch "$t"
+  lacks "$t" "wrap"
+}
+
+@test "no hatch: strict with no global file -> the reason names no global path" {
+  rm -rf "$FAKE_HOME/.claude"
+  t="$(hook_text "$CMD" strict "$EMPTYDIR")"
+  no_global_refs "$t"
+}
+
+@test "no hatch: a dangling-symlink global file -> no global path, no wrap" {
+  rm "$FAKE_HOME/.claude/just/justfile"
+  ln -s "$SCRATCH/nope" "$FAKE_HOME/.claude/just/justfile"
+  t="$(hook_text "$CMD" "" "$EMPTYDIR")"
+  no_global_refs "$t"
+  no_hatch "$t"
+  lacks "$t" "wrap"
+}
+
+@test "global hatch: a global wrap recipe and an empty project dir -> the global form is named" {
+  add_wrap "$FAKE_HOME/.claude/just/justfile"
+  t="$(hook_text "$CMD" "" "$EMPTYDIR")"
+  has "$t" "$(hatch_global "$FAKE_HOME/.claude/just/justfile")"
+}
+
+@test "global hatch: JUST_GLOBAL_JUSTFILE with a space in the path -> that path is named, quoted" {
+  ALT="$SCRATCH/my lib"
+  mkdir -p "$ALT"
+  printf 'wrap +cmd:\n    @echo w\n' > "$ALT/justfile"
+  t="$(hook_text "$CMD" "" "$EMPTYDIR" "$STUB" JUST_GLOBAL_JUSTFILE="$ALT/justfile")"
+  has "$t" "$(hatch_global "$ALT/justfile")"
+}
+
+@test "global hatch: JUST_GLOBAL_JUSTFILE with a dollar and a quote in the path -> the %q form is named" {
+  ALT="$SCRATCH"'/we$ird"lib'
+  mkdir -p "$ALT"
+  printf 'wrap +cmd:\n    @echo w\n' > "$ALT/justfile"
+  t="$(hook_text "$CMD" "" "$EMPTYDIR" "$STUB" JUST_GLOBAL_JUSTFILE="$ALT/justfile")"
+  has "$t" "$(hatch_global "$ALT/justfile")"
+  has "$t" "just --justfile $(printf '%q' "$ALT/justfile") --list"
+  lacks "$t" "'just --justfile"
+  # literal pin, independent of printf %q: bash 5 and bash 3.2 both escape this way
+  has "$t" 'we\$ird\"lib/justfile -d . wrap'
+}
+
+@test "global hatch: a project justfile without wrap and a global with wrap -> the global form is named" {
+  add_wrap "$FAKE_HOME/.claude/just/justfile"
+  t="$(hook_text "$CMD")"
+  has "$t" "$(hatch_global "$FAKE_HOME/.claude/just/justfile")"
+}
+
+@test "project hatch: a project wrap recipe -> 'just wrap' is named" {
+  add_wrap "$JUSTDIR/justfile"
+  t="$(hook_text "$CMD")"
+  has "$t" 'just wrap "<your command>"'
+}
+
+@test "project hatch: project and global both have wrap -> the global form is not named" {
+  add_wrap "$JUSTDIR/justfile"
+  add_wrap "$FAKE_HOME/.claude/just/justfile"
+  t="$(hook_text "$CMD")"
+  lacks "$t" "--justfile"
+}
+
+@test "project hatch: a module recipe tools::wrap is never named" {
+  init_canned
+  canned_put project.summary "build tools::wrap"
+  canned_put project.list "$(printf 'Available recipes:\n    build\n    tools::wrap')"
+  t="$(canned_text "$CMD" "" "$JUSTDIR")"
+  no_hatch "$t"
+}
+
+@test "project hatch: a bare wrap beats a module tools::wrap" {
+  init_canned
+  canned_put project.summary "tools::wrap build wrap"
+  canned_put project.list "$(printf 'Available recipes:\n    build\n    wrap')"
+  t="$(canned_text "$CMD" "" "$JUSTDIR")"
+  has "$t" 'just wrap "<your command>"'
+}
+
+@test "near miss: global recipes wrap-report, unwrap and tools::rewrap -> no hatch" {
+  init_canned
+  canned_put global.summary "send wrap-report unwrap tools::rewrap"
+  t="$(canned_text "$CMD")"
+  no_hatch "$t"
+}
+
+@test "near miss: project recipes wrap-report, unwrap and tools::rewrap -> no hatch" {
+  init_canned
+  canned_put project.summary "build wrap-report unwrap tools::rewrap"
+  canned_put project.list "$(printf 'Available recipes:\n    build')"
+  t="$(canned_text "$CMD" "" "$JUSTDIR")"
+  no_hatch "$t"
+}
+
+@test "broken justfiles: every just probe fails -> no hatch" {
+  init_canned
+  t="$(canned_text "$CMD" "" "$JUSTDIR")"
+  no_hatch "$t"
+}
+
+@test "broken justfiles: every just probe fails -> the hook exits 0" {
+  init_canned
+  run hook_env "$CMD" "" "$JUSTDIR" "$CBIN" CANNED_DIR="$CANNED"
+  [ "$status" -eq 0 ]
+}
+
+@test "broken project justfile and a good global with wrap -> the global form is named" {
+  init_canned
+  canned_put global.summary "send wrap"
+  t="$(canned_text "$CMD" "" "$JUSTDIR")"
+  has "$t" "$(hatch_global "$FAKE_HOME/.claude/just/justfile")"
+}
+
+@test "project list works but project summary fails, global has wrap -> the global form is named" {
+  init_canned
+  canned_put project.list "$(printf 'Available recipes:\n    build')"
+  canned_put global.summary "send wrap"
+  t="$(canned_text "$CMD" "" "$JUSTDIR")"
+  has "$t" "$(hatch_global "$FAKE_HOME/.claude/just/justfile")"
+}
+
+@test "list hint: a resolving project justfile -> 'just --list' is named" {
+  t="$(hook_text "$CMD")"
+  has "$t" "just --list"
+}
+
+@test "list hint: only the global file resolves -> 'just --justfile <path> --list' is named" {
+  t="$(hook_text "$CMD" "" "$EMPTYDIR")"
+  has "$t" "just --justfile $FAKE_HOME/.claude/just/justfile --list"
+  lacks "$t" "'just --justfile"
+}
+
+@test "list hint: nothing resolves -> 'just --list' is not named" {
+  rm -rf "$FAKE_HOME/.claude"
+  t="$(hook_text "$CMD" "" "$EMPTYDIR")"
+  lacks "$t" "just --list"
+}
+
+@test "strict with no hatch -> deny, and the reason names JUST_RECIPES_ENFORCE=off" {
+  run hook_env "$CMD" strict
+  [ "$(decision "$output")" = "deny" ]
+  has "$(reason "$output")" "JUST_RECIPES_ENFORCE=off"
+}
+
+@test "strict with no hatch -> the reason names no hatch command" {
+  t="$(hook_text "$CMD" strict)"
+  no_hatch "$t"
+}
+
+# --- cost: probes per hook run (#223) --------------------------------------
+
+# count_stub -> a `just` that logs its args to $JLOG, then runs the normal stub.
+count_stub() {
+  JLOG="$SCRATCH/just-calls.log"
+  CNT="$SCRATCH/cnt"
+  mkdir -p "$CNT"
+  cat > "$CNT/just" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$JLOG"
+exec "$STUB/just" "\$@"
+SH
+  chmod +x "$CNT/just"
+}
+# calls [pattern] -> number of logged just invocations (matching pattern)
+calls() {
+  [ -f "$JLOG" ] || { echo 0; return; }
+  if [ -n "${1:-}" ]; then grep -c -- "$1" "$JLOG" || true; else wc -l < "$JLOG" | tr -d ' '; fi
+}
+
+@test "cost: a non-allowlisted command runs 1-4 just calls, of which 1-2 are --summary" {
+  count_stub
+  hook_env "$CMD" "" "$JUSTDIR" "$CNT" >/dev/null
+  [ "$(calls)" -ge 1 ]
+  [ "$(calls)" -le 4 ]
+  [ "$(calls --summary)" -ge 1 ]
+  [ "$(calls --summary)" -le 2 ]
+}
+
+@test "cost: no project justfile and a global file runs at most 4 just calls" {
+  count_stub
+  hook_env "$CMD" "" "$EMPTYDIR" "$CNT" >/dev/null
+  [ "$(calls)" -ge 1 ]
+  [ "$(calls)" -le 4 ]
+}
+
+@test "cost: an allowlisted command runs no just at all" {
+  count_stub
+  hook_env "ls -la" "" "$JUSTDIR" "$CNT" >/dev/null
+  [ "$(calls)" -eq 0 ]
 }

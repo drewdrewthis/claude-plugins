@@ -3,34 +3,24 @@
 # every repo, whether or not a project justfile resolves. Default is a NUDGE
 # (permissionDecision=allow + additionalContext); JUST_RECIPES_ENFORCE=strict
 # restores the old hard block; off/0 is a kill switch.
+# The advice text is built at run time: it names a `wrap` escape hatch (project
+# recipe `wrap`, else the global library's `wrap`; never a module form) and a
+# `just --list` command only when `just` shows they resolve, never a fixed path.
 # Defensive by design: ANY internal failure must result in exit 0 (allow).
 # Never use `set -e` here — a hook that exits nonzero on a bug denies all Bash.
 
-# Shared guidance text, reused verbatim by the strict deny reason and the nudge
-# additionalContext. Single-quoted heredoc so $HOME and the inner quotes stay
-# literal — jq JSON-escapes them at emit time.
-GUIDANCE=$(cat <<'TXT'
-Run 'just --list' to find a recipe. Escape hatch that always resolves: just --justfile "$HOME/.claude/just/justfile" -d . wrap "<your command>". Bare 'just wrap' needs one-time project wiring (mod global '~/.claude/just/justfile' + set fallback) and is then invoked as just global::wrap "<your command>". To add a recipe: see the just-recipes skill.
-TXT
-)
-
 deny() {
-  jq -nc --arg r "Raw bash is funneled through just here. $GUIDANCE" \
+  # $1: the full reason text, built at run time from what actually resolves.
+  jq -nc --arg r "$1" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}' 2>/dev/null
   exit 0
 }
 
 nudge() {
-  # $1: space-separated matched recipe name(s); empty for the generic nudge.
-  # Every non-allowlisted raw command is nudged, so "no recipe matched" is a
-  # backlog prompt (write one), not a reason to stay silent.
-  local msg
-  if [ -n "$1" ]; then
-    msg="A just recipe may cover this ($1). $GUIDANCE"
-  else
-    msg="No recipe covers this yet: add one (see the just-recipes skill) or run it under 'just wrap'. $GUIDANCE"
-  fi
-  jq -nc --arg c "$msg" \
+  # $1: the full additionalContext text. Every non-allowlisted raw command is
+  # nudged, so "no recipe matched" is a backlog prompt (write one), not a
+  # reason to stay silent.
+  jq -nc --arg c "$1" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",additionalContext:$c}}' 2>/dev/null
   exit 0
 }
@@ -147,6 +137,59 @@ EOF
   [ "$restore_f" -eq 0 ] && set +f
 
   printf '%s' "$matched" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ *$//;s/^ *//'
+}
+
+# True when a `just --summary` capture ($1, space-separated names) holds the
+# whole token `wrap`; wrap-report, unwrap and tools::rewrap do not count.
+has_wrap() {
+  case " $(printf '%s' "$1" | tr '\n\t' '  ') " in *" wrap "*) return 0 ;; esac
+  return 1
+}
+
+# Print the escape hatch command, or nothing. Project recipe exactly `wrap`
+# first, then the global library recipe exactly `wrap`. A module `<mod>::wrap`
+# is never named: a mounted module recipe runs in the module's directory, not
+# the caller's, unless it has [no-cd], so naming it would run the command in the
+# wrong place.
+#   $1 = project dir, $2 = 1 when the project justfile lists, $3 = global
+#   justfile path, $4 = that path shell-quoted (printf %q).
+resolve_hatch() {
+  local dir="$1" have_project="$2" gjf="$3" gq="$4" summary
+  if [ "$have_project" -eq 1 ]; then
+    summary=$(cd "$dir" 2>/dev/null && just --summary 2>/dev/null)
+    if has_wrap "$summary"; then
+      printf '%s' 'just wrap "<your command>"'
+      return 0
+    fi
+  fi
+  if [ -f "$gjf" ]; then
+    summary=$(just --justfile "$gjf" -d "$dir" --summary 2>/dev/null)
+    # `-d .` runs from the cwd, so only the library's top-level `wrap` fits.
+    has_wrap "$summary" && printf 'just --justfile %s -d . wrap "<your command>"' "$gq"
+  fi
+  return 0
+}
+
+# Strict-mode deny text. $1 = list hint, $2 = hatch (both may be empty).
+strict_reason() {
+  local list_hint="$1" hatch="$2" tail
+  if [ -n "$hatch" ]; then
+    tail="Escape hatch: $hatch."
+  else
+    tail="No wrap recipe resolves here: add a recipe (see the just-recipes skill), or ask the user to set JUST_RECIPES_ENFORCE=off."
+  fi
+  printf '%s' "Raw bash is funneled through just here.${list_hint:+ $list_hint} $tail"
+}
+
+# Nudge text. $1 = list hint, $2 = hatch, $3 = matched recipe names (any may be empty).
+nudge_text() {
+  local list_hint="$1" hatch="$2" matched="$3" hatch_sentence=""
+  [ -n "$hatch" ] && hatch_sentence="Escape hatch: $hatch."
+  if [ -n "$matched" ]; then
+    printf '%s' "A just recipe may cover this ($matched).${list_hint:+ $list_hint}${hatch_sentence:+ $hatch_sentence} To add a recipe: see the just-recipes skill."
+  else
+    printf '%s' "No recipe covers this yet: add one (see the just-recipes skill)${hatch:+, or run it under the escape hatch}.${list_hint:+ $list_hint}${hatch_sentence:+ $hatch_sentence}"
+  fi
 }
 
 # Allowlist check for one command segment.
@@ -270,18 +313,19 @@ if [ "$all_ok" -eq 1 ] && [ "$subshell" -eq 0 ]; then
   exit 0
 fi
 
-# Build the recipe listing. There is no longer a "project justfile must
-# resolve" gate: the nudge fires in every repo. Source order —
+# Build the recipe listing. The nudge fires in every repo; the listing source is
 #   1. the project justfile, listed WITH submodules when just supports the flag
 #      so a mounted `mod global` library shows up as global::<recipe>;
 #   2. otherwise the global library (JUST_GLOBAL_JUSTFILE, default
-#      ~/.claude/just/justfile), so a repo with no justfile of its own still
-#      sees the shared recipes;
+#      ~/.claude/just/justfile) when it lists, so a repo with no justfile of its
+#      own still sees the shared recipes;
 #   3. otherwise nothing — the command is still nudged, generically.
+# have_project and global_listed record which listing resolved, so the advice names only a real one.
 dir="${CLAUDE_PROJECT_DIR:-$PWD}"
 global_jf="${JUST_GLOBAL_JUSTFILE:-$HOME/.claude/just/justfile}"
 listing=""
 have_project=0
+global_listed=0
 
 l=$( cd "$dir" 2>/dev/null && just --list --list-submodules 2>/dev/null )
 if [ -n "$l" ]; then
@@ -294,7 +338,7 @@ fi
 
 if [ "$have_project" -eq 0 ] && [ -f "$global_jf" ]; then
   l=$( just --justfile "$global_jf" -d "$dir" --list 2>/dev/null )
-  [ -n "$l" ] && listing="$l"
+  if [ -n "$l" ]; then listing="$l"; global_listed=1; fi
 fi
 
 # Record every non-allowlisted command in the wrap.log backlog (nudge + strict;
@@ -304,9 +348,20 @@ log_col="$dir"
 [ "$have_project" -eq 1 ] || log_col="global"
 log_wrap "$log_col" "$cmd"
 
+# Advice parts, each empty when it does not apply (so no doubled spaces).
+global_q=$(printf '%q' "$global_jf")
+if [ "$have_project" -eq 1 ]; then
+  list_hint="Run 'just --list' to find a recipe."
+elif [ "$global_listed" -eq 1 ]; then
+  list_hint="Run: just --justfile $global_q --list (to find a recipe)."
+else
+  list_hint=""
+fi
+hatch=$(resolve_hatch "$dir" "$have_project" "$global_jf" "$global_q")
+
 # Strict mode: hard block regardless of whether a recipe matches.
 case "$mode" in
-  strict) deny ;;
+  strict) deny "$(strict_reason "$list_hint" "$hatch")" ;;
 esac
 
 # Nudge (default). A matched recipe is named; no match still nudges, pointing
@@ -324,4 +379,4 @@ matched=""
 if [ -n "$word" ] && [ -n "$listing" ]; then
   matched=$(match_recipes "$listing" "$word") || matched=""
 fi
-nudge "$matched"
+nudge "$(nudge_text "$list_hint" "$hatch" "$matched")"
