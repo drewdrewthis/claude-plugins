@@ -248,6 +248,21 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run
     Then the output equals the input
 
+  # proves: hooks/tests/worklog-record.bats "known limit: a pulumi token in the middle of a URL path is not found by gitleaks"
+  Scenario: A Pulumi token in the middle of a URL path is not found by gitleaks
+    Given a Pulumi token in the middle of a URL path
+    When the real gitleaks runs
+    Then the output equals the input
+    And the same token at the end of the URL path is redacted
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a body can settle where the same text as a quote hits the step cap"
+  Scenario: A body can settle where the same text as a quote hits the step cap
+    Given six grafana and shopify pairs followed by a glued ghp pair
+    When the text runs as a quote and as a body
+    Then the quote is exactly the glued-secrets marker
+    And the body is not the glued-secrets marker
+    And the body holds no raw token body
+
   # proves: hooks/tests/worklog-record.bats "six grafana shopify pairs then a glued ghp pair fail closed to one marker"
   Scenario: A settled chain plus a glued ghp pair fails closed
     Given six grafana and shopify pairs followed by a glued ghp pair

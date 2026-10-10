@@ -2343,6 +2343,39 @@ _$(fake_do)"
   [ "$(builtin_out "$input")" = "$input" ]
 }
 
+# gitleaks 8.30.1 behaviour: no built-in rule covers Pulumi, so only the
+# gitleaks generic rule can catch the token, and it misses it mid-path.
+# Accepted limit, tracked in issue 219. The path-end control shows the token
+# shape is otherwise found.
+@test "known limit: a pulumi token in the middle of a URL path is not found by gitleaks" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  input="open https://app.example.com/$KEY/stacks/production to check"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  [ "$(real_redact_texts "open https://app.example.com/$KEY")" = "open https://app.example.com/<redacted:pulumi-api-token>" ]
+}
+
+# The quote path runs redact.builtin once; the body path runs two stages, each
+# with its own step cap. The two differ for this chain, so a quote of this text
+# is dropped as not found in the body. It fails closed.
+@test "known limit: a body can settle where the same text as a quote hits the step cap" {
+  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6 + sys.argv[3] + sys.argv[4])' \
+    "$(fake_grafana)" "$(fake_shopify)" "$(fake_ghp)" "$(fake_ghp2)")"
+  [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
+  body="$(PATH="$(path_without_gitleaks)" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+texts, failed = redact.redact_texts([sys.argv[2]])
+sys.stdout.write(texts[0])
+' "$HOOKS/lib" "$chain")"
+  [ "$body" != "<redacted:glued-secrets>" ]
+  [[ "$body" == "<redacted:grafana-token><redacted:shopify-token>"* ]]
+  [[ "$body" != *"$chain"* ]]
+  [[ "$body" != *"$(fake_ghp | cut -c5-)"* ]]
+  [[ "$body" != *"$(fake_ghp2 | cut -c5-)"* ]]
+}
+
 @test "six grafana shopify pairs then a glued ghp pair fail closed to one marker" {
   chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6 + sys.argv[3] + sys.argv[4])' \
     "$(fake_grafana)" "$(fake_shopify)" "$(fake_ghp)" "$(fake_ghp2)")"
