@@ -2560,3 +2560,145 @@ sys.stdout.write(texts[0])
   [[ "$output" == *"<redacted:"* ]]
   [[ "$output" != *"$front_piece"* ]]
 }
+
+# ==========================================================================
+# 11. the judge call saves no transcript; a channel wrapper is not the quote
+# ==========================================================================
+# claude#41: the judge's own `claude -p` run left a session transcript behind
+# for the librarian to read as if it were a real session, and a Discord turn's
+# <channel ...> wrapper ate the 200-char candidate cap so the owner's words
+# never reached the model or the stored quote.
+
+@test "the judge call is made with --no-session-persistence" {
+  fixture_full
+  drive "$CLEAN"
+  tr '\0' '\n' < "$CLAUDE_ARGV_LOG" | grep -qx -- '--no-session-persistence'
+}
+
+# chan_text <text> [pad-len] — the real Discord wrapper around <text>; pad-len
+# sets the opening tag to exactly that many characters.
+chan_text() {
+  local head='<channel source="plugin:discord:discord" chat_id="1522000000000000000" message_id="1556000000000000000" user="drewdrewthis" user_id="805900000000000000"'
+  local tail='>' tag
+  if [ -n "${2:-}" ]; then
+    tag="$head pad=\"$(printf 'p%.0s' $(seq 1 $(( $2 - ${#head} - ${#tail} - 7 ))))\"$tail"
+  else
+    tag="$head ts=\"2026-10-06T10:22:41.310Z\"$tail"
+  fi
+  printf '%s\n%s\n</channel>' "$tag" "$1"
+}
+chan_line() { user_line "$1" "$(chan_text "$2" "${3:-}")"; }
+wl_reply() {  # <quote>
+  jq -nc --arg u "$U1" --arg q "$1" \
+    '{requests:[{text:"asked",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}'
+}
+long_text() { printf 'Q%s' "$(printf 'a%.0s' $(seq 1 "$(( $1 - 1 ))"))"; }
+
+@test "a wrapped 300-char message reaches the model starting at the owner's first character" {
+  chan_line "$U1" "$(long_text 300)" > "$TX"
+  drive "$(wl_reply "$(long_text 150)")"
+  grep -qF -- "$(printf 'user\tQaaa')" "$CLAUDE_STDIN_LOG"
+}
+
+@test "a wrapped 300-char message with a 150-char quote span stores a 120-char quote" {
+  chan_line "$U1" "$(long_text 300)" > "$TX"
+  drive "$(wl_reply "$(long_text 150)")"
+  [ "$(field '.requests[0].quote|length')" -eq 120 ]
+}
+
+@test "a stored quote from a wrapped message holds no channel tag" {
+  chan_line "$U1" "$(long_text 300)" > "$TX"
+  drive "$(wl_reply "$(long_text 150)")"
+  [ "$(field '.requests|length')" -eq 1 ]
+  local q; q="$(field '.requests[0].quote')"
+  [[ "$q" != *'<channel'* ]]
+}
+
+@test "a wrapped 60-char message stores exactly those 60 chars" {
+  chan_line "$U1" "$(long_text 60)" > "$TX"
+  drive "$(wl_reply "$(long_text 60)")"
+  [ "$(field '.requests[0].quote')" = "$(long_text 60)" ]
+}
+
+@test "a stored quote from a wrapped message holds no closing channel tag" {
+  chan_line "$U1" "$(long_text 60)" > "$TX"
+  drive "$(wl_reply "$(long_text 60)")"
+  [ "$(field '.requests|length')" -eq 1 ]
+  local q; q="$(field '.requests[0].quote')"
+  [[ "$q" != *'</channel>'* ]]
+}
+
+@test "a 256-char opening tag gives the same stored quote" {
+  chan_line "$U1" "$(long_text 60)" 256 > "$TX"
+  drive "$(wl_reply "$(long_text 60)")"
+  [ "$(field '.requests[0].quote')" = "$(long_text 60)" ]
+}
+
+@test "a secret inside the wrapped text is stored redacted" {
+  KEY="$(fake_ant)"
+  chan_line "$U1" "my token is $KEY please keep it" > "$TX"
+  drive "$(wl_reply "my token is <redacted:sk-ant> please keep it")"
+  [ "$(field '.requests[0].quote')" = "my token is <redacted:sk-ant> please keep it" ]
+}
+
+@test "no tag attribute reaches the stored row" {
+  chan_line "$U1" "$(long_text 60)" > "$TX"
+  drive "$(wl_reply "$(long_text 60)")"
+  [ "$(field '.requests|length')" -eq 1 ]
+  ! grep -qE 'chat_id=|user_id=' "$WORKLOG_JSONL"
+}
+
+@test "a wrapper with empty text gives no request entry" {
+  chan_line "$U1" "" > "$TX"
+  drive "$(wl_reply "x")"
+  [ "$(field '.requests|length')" -eq 0 ]
+}
+
+@test "a wrapper with empty text logs no error" {
+  chan_line "$U1" "" > "$TX"
+  drive "$(wl_reply "x")"
+  no_log
+}
+
+@test "a wrapper with empty text shows the model no tag attribute" {
+  chan_line "$U1" "" > "$TX"
+  drive "$(wl_reply "x")"
+  ! grep -qF -- 'chat_id=' "$CLAUDE_STDIN_LOG"
+}
+
+@test "a channel tag in the middle of the text is left unchanged" {
+  user_line "$U1" 'look at <channel source="x"> in the log' > "$TX"
+  drive "$(wl_reply 'look at <channel source="x"> in the log')"
+  [ "$(field '.requests[0].quote')" = 'look at <channel source="x"> in the log' ]
+}
+
+@test "a record of two wrapped text blocks shows the model both texts and no channel tag" {
+  jq -nc --arg u "$U1" --arg a "$(chan_text 'first message here')" --arg b "$(chan_text 'second message here')" \
+    '{type:"user",uuid:$u,message:{role:"user",content:[{type:"text",text:$a},{type:"text",text:$b}]}}' > "$TX"
+  drive "$(wl_reply 'first message here')"
+  grep -qF -- 'first message here' "$CLAUDE_STDIN_LOG"
+  grep -qF -- 'second message here' "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- '<channel' "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- '</channel>' "$CLAUDE_STDIN_LOG"
+}
+
+@test "an opening tag with no closing tag is still removed from the candidate body" {
+  user_line "$U1" "$(printf '<channel source="x" chat_id="1">\nhello there friend')" > "$TX"
+  drive "$(wl_reply 'hello there friend')"
+  grep -qF -- "$(printf 'user\thello there friend')" "$CLAUDE_STDIN_LOG"
+}
+
+@test "a plain user line stores the same quote as before" {
+  user_line "$U1" "do the thing please" > "$TX"
+  drive "$(wl_reply 'do the thing please')"
+  [ "$(field '.requests[0].quote')" = 'do the thing please' ]
+}
+
+# A whitespace-run regex around the closing tag was quadratic: 200,000 spaces took 120 s.
+@test "a wrapped body with a 200000-space run is unwrapped fast and the row is written" {
+  # Built inside jq: 200,000 chars exceed the shell's single-argument limit.
+  jq -nc --arg u "$U1" '{type:"user",uuid:$u,message:{role:"user",
+    content:("<channel source=\"x\">\nx" + (" " * 200000) + "y\n</channel>")}}' > "$TX"
+  drive "$(wl_reply "x")"
+  [ "$(field '.requests|length')" -eq 1 ]
+}

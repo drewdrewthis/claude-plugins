@@ -80,13 +80,14 @@ Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `/how-do-i
 
    If the mistake is a narrower FACE of a broader record in the registry, pass the broader record's `--pattern` and name the specific face with `--face "<face-name>"`.
 
-**Call the script** (it stamps `ts`, `project`, `session` if you omit them):
+**Call the script** (it stamps `ts` if you omit it; `session` comes from `--session`, or from `--source <session-id>:<first>-<last>` when that is given; the range is numbers only, and a new row sharing at least one line with a logged row of the same id is not appended: a `duplicate` note is printed and the exit is 0; adjacent ranges 10-14 and 15-20 are both appended; a span of 2000 lines or more is refused):
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" mistake \
   --category "<category>" --description "<description>" --correction "<correction>" \
   --severity "<severity>" --trigger "<trigger>" --skill "<skill-or-empty>" \
   --scenario-matched "<slug-or-null>" \
+  [--source "<session-id>:<first>-<last>"] \
   [--pattern "<row-id>"] [--face "<face>"] [--recurrence-of "<earliest-ts>"]
 ```
 

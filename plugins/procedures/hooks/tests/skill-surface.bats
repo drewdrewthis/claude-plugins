@@ -111,3 +111,19 @@ setup() {
   [ ! -d "$SKILLS/log" ]
   [ ! -d "$SKILLS/create-new" ]
 }
+
+# The librarian passes --source so log-record.sh can set the session and refuse
+# a second row for the same transcript lines (claude#41).
+@test "the librarian's mistake write row passes --source" {
+  grep -E '^\s*\| mistake \|' "$PLUGIN/agents/librarian.md" | grep -q -- '--source'
+}
+
+# A shell variable or a chained command makes the headless allowlist deny the
+# log-record call, so the brief must say to write the root out literally.
+@test "the librarian brief says to write the root literally in the log-record call" {
+  grep -q 'STARTS with `CODEX_ROOT=`' "$PLUGIN/agents/librarian.md"
+}
+
+@test "the update-records mistake template names --source" {
+  grep -q -- '\[--source "<session-id>:<first>-<last>"\]' "$SKILLS/update-records/SKILL.md"
+}

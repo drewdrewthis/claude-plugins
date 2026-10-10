@@ -221,3 +221,57 @@ EOF
   [ "$(_issued plain)" = "0 2" ]
   ! grep -q 'Drain the transcript queue' "$PROCEDURES_STATE_DIR/batch.txt" || false
 }
+
+# claude#41: the worklog judge's `claude -p` run leaves a transcript whose first
+# line is its enqueue record. Those are the judge's input, not a session.
+_judge_enqueue() {
+  printf '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-06T10:00:00Z","content":"CANDIDATES (uuid, where, kind, text):\\nu1\\tTHIS-TURN\\tuser\\tjudge-body-marker"}\n'
+}
+
+@test "a worklog judge transcript is never issued and gets no cursor" {
+  { _judge_enqueue
+    printf '{"type":"user","message":{"content":"judge-body-marker"}}\n'; } > "$PROJ/judge.jsonl"
+  _transcript plain 2 1
+  _batch
+  [ -z "$(_issued judge)" ]
+  [ ! -e "$PROCEDURES_STATE_DIR/cursors/judge.line" ]
+  [ "$(_issued plain)" = "0 2" ]
+}
+
+@test "a judge transcript's text is absent from the batch" {
+  { _judge_enqueue
+    printf '{"type":"user","message":{"content":"judge-body-marker"}}\n'; } > "$PROJ/judge.jsonl"
+  _transcript plain 2 1
+  _batch
+  ! grep -q 'judge-body-marker' "$PROCEDURES_STATE_DIR/batch.txt" || false
+}
+
+@test "a session transcript holding that text on a later line is still issued" {
+  { printf '{"type":"user","message":{"content":"real work"}}\n'
+    _judge_enqueue; } > "$PROJ/session.jsonl"
+  _batch
+  [ "$(_issued session)" = "0 2" ]
+}
+
+@test "an empty transcript file does not abort the batch" {
+  : > "$PROJ/empty.jsonl"
+  _transcript plain 2 1
+  _batch
+  [ "$(_issued plain)" = "0 2" ]
+}
+
+@test "a transcript whose first line does not parse does not abort the batch" {
+  { printf 'not json {{queue-operation\n'
+    printf '{"type":"user","message":{"content":"hi"}}\n'; } > "$PROJ/garbled.jsonl"
+  _transcript plain 2 1
+  _batch
+  [ "$(_issued plain)" = "0 2" ]
+}
+
+@test "the judge heading literal is the same in librarian-batch.sh and worklog-record.sh" {
+  local w="$BATS_TEST_DIRNAME/../../../worklog/hooks/worklog-record.sh"
+  [ -f "$w" ] || skip "worklog plugin dir absent: $w"
+  local h='CANDIDATES (uuid, where, kind, text):'
+  grep -qF "$h" "$SCRIPTS/librarian-batch.sh"
+  grep -qF "$h" "$w"
+}
