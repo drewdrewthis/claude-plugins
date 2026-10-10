@@ -52,7 +52,9 @@ comment (the word gitleaks, a colon, then allow) stood on the same line as the
 token, or stood on an earlier line or in an earlier text of the batch while the
 token was on the last line of all the scanned text with no newline after it:
 gitleaks then skipped the finding and the whole token stayed raw. A comment on
-a later line did not hide it. It was also redacted when another rule
+a later line did not hide it. This exception is not specific to Pulumi: it
+applies to every token shape that only gitleaks finds; a token that a
+built-in rule finds is still redacted. It was also redacted when another rule
 matched around it (for example a secret keyword such as "token" in front of
 it with a separator). These lists are measured, not complete; the "known
 limit:" tests pin a sample of them.
