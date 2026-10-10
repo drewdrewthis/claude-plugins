@@ -1130,11 +1130,11 @@ wl_run() {
 
     # --- judgment -------------------------------------------------------
     local raw="" entries="" judged=1
-    # --no-session-persistence: else each judge call saves a transcript the
-    # knowledge intake reads as if it were a session.
     # A failed slice pass means the candidates may hold a gitleaks-only secret:
     # skip the model entirely.
     if [ "$gl_failed" -eq 0 ] && command -v claude >/dev/null 2>&1; then
+        # --no-session-persistence below: else each judge call saves a transcript
+        # the knowledge intake reads as if it were a session.
         raw="$(wl_candidates "$cands" \
             | WORKLOG_DISABLE=1 wl_timeout "$WORKLOG_MODEL_TIMEOUT" \
               claude -p --model "$WORKLOG_MODEL" --output-format text \

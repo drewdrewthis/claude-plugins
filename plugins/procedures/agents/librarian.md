@@ -73,7 +73,20 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    `FAILURE_MODES_DIR` or `CODEX_RECORDS_DIR` that points anywhere else, so never
    set those to anything but the root's own path.
 
-   For `--source`, the uuid is the id in the batch's `=== <id> (<path>) ===` header and the range is the `[L<n>]` markers of the lines that show the mistake (never offsets inside the batch file); give one narrow range per mistake. A `duplicate` note on stderr means that mistake is already logged — it is not an error, and nothing was appended.
+   Every `log-record.sh` call (and the `commit-records.sh` call) is one Bash call that
+   STARTS with `CODEX_ROOT=` followed by the root path written out in full. Use no
+   shell variable for the root or the plugin path (`${CLAUDE_PLUGIN_ROOT}` above is the
+   plugin's resolved path: write it out as resolved), no leading `cd`, no `;`, `&&` or
+   pipe before or after it, and no trailing `echo`. The headless allowlist matches the
+   command text literally, so any other form is denied and the row is lost. Wrong:
+   `R=<root>; CODEX_ROOT=$R ... log-record.sh ...; echo rc=$?`. The exit status is
+   already in the tool result.
+
+   For `--source`, the uuid is the id in the batch's `=== <id> (<path>) ===` header and
+   the range is the `[L<n>]` markers of the lines that show the mistake (never offsets
+   inside the batch file); give one narrow range per mistake. A `duplicate` note on
+   stderr means that mistake is already logged — it is not an error, and nothing was
+   appended.
 
    As you write, capture — per store root — the four **reason fields** the commit
    gate records in git history (step 6): **what** (the kinds and counts written,

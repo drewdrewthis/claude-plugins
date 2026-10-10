@@ -378,3 +378,12 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
   [ "$status" -eq 0 ]
   [ "$(_rows)" -eq 2 ]
 }
+
+@test "a failed write is reported as a write failure, not a lock timeout" {
+  _src_env
+  mkdir "$MISTAKES_JSONL"                   # unwritable target: the append itself fails
+  _m
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"row not appended"* ]]
+  [[ "$output" != *"lock"* ]]
+}

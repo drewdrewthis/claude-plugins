@@ -51,10 +51,6 @@ mkdir -p "$CURSORS"
 : > "$OUT"
 : > "$MANIFEST.tmp"
 
-# _is_librarian <transcript> — 0 when it is a `claude -p --agent
-# procedures:librarian` session. Claude Code writes that as the first line:
-# {"type":"agent-setting","agentSetting":"procedures:librarian",...}. Only the
-# first line is read, and jq runs only when it looks like an agent-setting.
 # _first_line <file> — print the first line; fails when the file has none. The
 # `-n` guard keeps a last line that has no trailing newline.
 _first_line() {
@@ -63,21 +59,21 @@ _first_line() {
     printf '%s' "$first"
 }
 
+# _is_librarian <first-line> — 0 when it is a `claude -p --agent
+# procedures:librarian` session. Claude Code writes that as the first line:
+# {"type":"agent-setting","agentSetting":"procedures:librarian",...}. jq runs
+# only when the line looks like an agent-setting.
 _is_librarian() {
-    local first
-    first="$(_first_line "$1")" || return 1
-    case "$first" in *'"agent-setting"'*) ;; *) return 1 ;; esac
-    [ "$(printf '%s\n' "$first" | jq -r 'select(.type == "agent-setting") | .agentSetting' 2>/dev/null)" = "procedures:librarian" ]
+    case "$1" in *'"agent-setting"'*) ;; *) return 1 ;; esac
+    [ "$(printf '%s\n' "$1" | jq -r 'select(.type == "agent-setting") | .agentSetting' 2>/dev/null)" = "procedures:librarian" ]
 }
 
-# _is_judge <transcript> — 0 when it is a worklog judge `claude -p` run, whose
+# _is_judge <first-line> — 0 when it is a worklog judge `claude -p` run, whose
 # first line is the enqueue record of its CANDIDATES prompt. That text is the
-# judge's input, not a session. Same first-line, jq-only-on-a-hit shape as above.
+# judge's input, not a session. Same jq-only-on-a-hit shape as above.
 _is_judge() {
-    local first
-    first="$(_first_line "$1")" || return 1
-    case "$first" in *'"queue-operation"'*'CANDIDATES (uuid, where, kind, text):'*) ;; *) return 1 ;; esac
-    printf '%s\n' "$first" | jq -e 'select(.type == "queue-operation" and .operation == "enqueue")
+    case "$1" in *'"queue-operation"'*'CANDIDATES (uuid, where, kind, text):'*) ;; *) return 1 ;; esac
+    printf '%s\n' "$1" | jq -e 'select(.type == "queue-operation" and .operation == "enqueue")
         | .content | strings | startswith("CANDIDATES (uuid, where, kind, text):")' >/dev/null 2>&1
 }
 
@@ -112,8 +108,9 @@ used=0
 while IFS=$'\t' read -r _ f; do
     [ "$used" -lt "$BUDGET" ] || break
     slug="$(basename "$f" .jsonl)"
-    _is_librarian "$f" && continue           # the librarian's own drains: never issued, no cursor
-    _is_judge "$f" && continue               # the worklog judge's runs: same
+    first="$(_first_line "$f")" || first=""
+    _is_librarian "$first" && continue       # the librarian's own drains: never issued, no cursor
+    _is_judge "$first" && continue           # the worklog judge's runs: same
     total="$(wc -l < "$f" 2>/dev/null | tr -d ' ')" || continue   # vanished/unreadable since find
     [ -n "$total" ] || continue
     cur=0

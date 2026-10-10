@@ -223,8 +223,10 @@ cmd_mistake() {
 
     mkdir -p "$(dirname "$MISTAKES_JSONL")"
     [ ! -L "$MISTAKES_JSONL" ] || die "refusing to append through a symlink: $MISTAKES_JSONL"
-    mistakes_locked "$(mistakes_lock_path "$(dirname "$MISTAKES_JSONL")")" _append_row "$row" "$source" \
-        || die "could not take the mistakes.jsonl lock; row not appended"
+    local rc=0
+    mistakes_locked "$(mistakes_lock_path "$(dirname "$MISTAKES_JSONL")")" _append_row "$row" "$source" || rc=$?
+    # 75 is the lock helper's timeout; any other failure is the write itself.
+    [ "$rc" -eq 0 ] || { [ "$rc" -eq 75 ] && die "could not take the mistakes.jsonl lock; row not appended"; die "row not appended"; }
 }
 
 # _source_overlap <source> — print the ts of the first row, in this file or any
@@ -233,20 +235,25 @@ cmd_mistake() {
 # file is noted on stderr and skipped (fail open: it must not block logging).
 # A row with no ts prints "?" so it still counts as a hit.
 _source_overlap() {
-    local f files=("$MISTAKES_JSONL")
-    for f in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do files+=("$f/mistakes.jsonl"); done
+    local f hit files=("$MISTAKES_JSONL")
+    for f in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do
+        [ "$f/mistakes.jsonl" -ef "$MISTAKES_JSONL" ] || files+=("$f/mistakes.jsonl")
+    done
     for f in "${files[@]}"; do
         [ -f "$f" ] || continue
-        jq -Rr --arg src "$1" '
+        # jq emits only the first hit itself (no `head`, so a closed pipe cannot
+        # masquerade as a read failure): any non-zero exit is a real one.
+        hit="$(jq -nRr --arg src "$1" '
             def parse: capture("^(?<id>.+):(?<a>[0-9]+)-(?<b>[0-9]+)$")
                 | .a |= tonumber | .b |= tonumber;
             ($src | parse) as $n
-            | fromjson? | select(type == "object" and (.source | type) == "string")
+            | first(inputs | fromjson? | select(type == "object" and (.source | type) == "string")
             | ((.source | parse?) // empty) as $o
             | select($o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
-            | (.ts | if type == "string" and . != "" then . else "?" end)' "$f" \
-            || { [ "$?" -eq 141 ] || printf 'log-record: note: could not read %s; duplicate check skipped for it\n' "$f" >&2; }
-    done | head -n1
+            | (.ts | if type == "string" and . != "" then . else "?" end))' "$f")" \
+            || { printf 'log-record: note: could not read %s; duplicate check skipped for it\n' "$f" >&2; continue; }
+        [ -z "$hit" ] || { printf '%s\n' "$hit"; return 0; }
+    done
 }
 
 # _append_row <row> [<source>] — append one row, first ending an unterminated
@@ -256,8 +263,7 @@ _source_overlap() {
 # parallel identical calls cannot both pass it.
 _append_row() {
     local seen=""
-    # `|| true`: head closing the pipe early must not read as "no match".
-    [ -z "${2:-}" ] || seen="$(_source_overlap "$2" || true)"
+    [ -z "${2:-}" ] || seen="$(_source_overlap "$2")"
     if [ -n "$seen" ]; then
         printf 'log-record: duplicate: source %s lines %s already logged (row ts %s); nothing appended\n' \
             "${2%:*}" "${2##*:}" "$seen" >&2
