@@ -275,6 +275,7 @@ _judge_enqueue() {
   local h='CANDIDATES (uuid, where, kind, text):'
   grep -qF "$h" "$SCRIPTS/librarian-batch.sh"
   grep -qF "$h" "$w"
+}
 
 # ---------- --pressure-check: abort the batch under pressure (#166) ----------
 #
