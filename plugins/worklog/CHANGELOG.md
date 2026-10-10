@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/drewdrewthis/claude-plugins/compare/worklog-v0.2.4...worklog-v0.2.5) (2026-10-10)
+
+
+### Tests
+
+* **worklog:** compute the redact fuzz reference, no hand-moved pin ([#252](https://github.com/drewdrewthis/claude-plugins/issues/252)) ([dad189e](https://github.com/drewdrewthis/claude-plugins/commit/dad189e2a13b6278f2f4ccc170cbae89b98ef7f2))
+
 ## [0.2.4](https://github.com/drewdrewthis/claude-plugins/compare/worklog-v0.2.3...worklog-v0.2.4) (2026-10-10)
 
 
