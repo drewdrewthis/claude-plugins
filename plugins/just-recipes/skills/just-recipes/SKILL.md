@@ -12,13 +12,16 @@ description: Use when running project commands/tasks in any repo, when the user 
   - `strict` = **deny.** Every non-allowlisted command is blocked — use a recipe, or the wrap command the hook names (if any).
   - `off` / `0` = silent.
 - Passes untouched: `just ...` (every segment of a chain), and the read-only verbs `cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`. Everything else is raw execution, command substitution (`$(...)`, backticks) included.
-- Escape hatch: a `wrap` recipe runs the command under timeout/output-cap guardrails and logs it. The hook names the wrap command only when a wrap recipe resolves; when it names none, no wrap recipe is installed. `wrap` and `wrap-report` come from the optional global library at `~/.claude/just/justfile`, present only if your machine provides it (`JUST_GLOBAL_JUSTFILE` overrides the path).
+- Escape hatch: a `wrap` recipe runs the command under timeout/output-cap guardrails and logs it. The hook names the wrap command only when a wrap recipe resolves; when it names none, no usable wrap recipe resolved. `wrap` and `wrap-report` come from the optional global library at `~/.claude/just/justfile`, present only if your machine provides it (`JUST_GLOBAL_JUSTFILE` overrides the path).
+- No wrap named: in nudge mode the command already ran, so add a recipe for next time. In strict mode, add a recipe to the project justfile and run that; if you cannot, stop and ask the user.
 - Optional project wiring, if your machine provides the global library — add to the project justfile to expose its recipes as `global::<recipe>`:
 
   ```just
   mod global '~/.claude/just/justfile'
   set fallback
   ```
+
+  ⚠ A module recipe such as `global::wrap` runs in the library's directory, not yours, unless it carries `[no-cd]`; the hook never names that form.
 
 ## Habit loop
 

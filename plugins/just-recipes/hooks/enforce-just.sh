@@ -3,7 +3,8 @@
 # every repo, whether or not a project justfile resolves. Default is a NUDGE
 # (permissionDecision=allow + additionalContext); JUST_RECIPES_ENFORCE=strict
 # restores the old hard block; off/0 is a kill switch.
-# The advice text is built at run time: it names a `wrap` escape hatch and a
+# The advice text is built at run time: it names a `wrap` escape hatch (project
+# recipe `wrap`, else the global library's `wrap`; never a module form) and a
 # `just --list` command only when `just` shows they resolve, never a fixed path.
 # Defensive by design: ANY internal failure must result in exit 0 (allow).
 # Never use `set -e` here — a hook that exits nonzero on a bug denies all Bash.
@@ -138,43 +139,57 @@ EOF
   printf '%s' "$matched" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ *$//;s/^ *//'
 }
 
-# First token of a `just --summary` capture ($1) that is exactly `wrap`, else the
-# first `<module>::wrap`. Whole-token `case` matching (never substring) so
-# wrap-report, unwrap and tools::rewrap do not count. Prints nothing if none.
-find_wrap() {
-  local w modwrap="" restore_f=0
-  case $- in *f*) restore_f=1 ;; esac
-  set -f   # unquoted split below must not glob against files in cwd
-  for w in $1; do
-    case "$w" in
-      wrap) modwrap="wrap"; break ;;
-      *::wrap) [ -n "$modwrap" ] || modwrap="$w" ;;
-    esac
-  done
-  [ "$restore_f" -eq 0 ] && set +f
-  printf '%s' "$modwrap"
+# True when a `just --summary` capture ($1, space-separated names) holds the
+# whole token `wrap`; wrap-report, unwrap and tools::rewrap do not count.
+has_wrap() {
+  case " $(printf '%s' "$1" | tr '\n\t' '  ') " in *" wrap "*) return 0 ;; esac
+  return 1
 }
 
-# Resolve the escape hatch into $hatch (empty when none). Project first, then the
-# global library. A broken project justfile (have_project=0) skips the project probe.
+# Print the escape hatch command, or nothing. Project recipe exactly `wrap`
+# first, then the global library recipe exactly `wrap`. A module `<mod>::wrap`
+# is never named: a mounted module recipe runs in the module's directory, not
+# the caller's, unless it has [no-cd], so naming it would run the command in the
+# wrong place.
+#   $1 = project dir, $2 = 1 when the project justfile lists, $3 = global
+#   justfile path, $4 = that path shell-quoted (printf %q).
 resolve_hatch() {
-  local summary token
-  hatch=""
+  local dir="$1" have_project="$2" gjf="$3" gq="$4" summary
   if [ "$have_project" -eq 1 ]; then
     summary=$(cd "$dir" 2>/dev/null && just --summary 2>/dev/null)
-    token=$(find_wrap "$summary")
-    if [ -n "$token" ]; then
-      hatch="just $token \"<your command>\""
+    if has_wrap "$summary"; then
+      printf '%s' 'just wrap "<your command>"'
       return 0
     fi
   fi
-  if [ -f "$global_jf" ]; then
-    summary=$(just --justfile "$global_jf" -d "$dir" --summary 2>/dev/null)
-    token=$(find_wrap "$summary")
-    # Only a bare `wrap`: `-d .` runs from the cwd, where no module prefix applies.
-    [ "$token" = "wrap" ] && hatch="just --justfile \"$global_jf\" -d . wrap \"<your command>\""
+  if [ -f "$gjf" ]; then
+    summary=$(just --justfile "$gjf" -d "$dir" --summary 2>/dev/null)
+    # `-d .` runs from the cwd, so only the library's top-level `wrap` fits.
+    has_wrap "$summary" && printf 'just --justfile %s -d . wrap "<your command>"' "$gq"
   fi
   return 0
+}
+
+# Strict-mode deny text. $1 = list hint, $2 = hatch (both may be empty).
+strict_reason() {
+  local list_hint="$1" hatch="$2" tail
+  if [ -n "$hatch" ]; then
+    tail="Escape hatch: $hatch."
+  else
+    tail="No wrap recipe resolves here: add a recipe (see the just-recipes skill), or ask the user to set JUST_RECIPES_ENFORCE=off."
+  fi
+  printf '%s' "Raw bash is funneled through just here.${list_hint:+ $list_hint} $tail"
+}
+
+# Nudge text. $1 = list hint, $2 = hatch, $3 = matched recipe names (any may be empty).
+nudge_text() {
+  local list_hint="$1" hatch="$2" matched="$3" hatch_sentence=""
+  [ -n "$hatch" ] && hatch_sentence="Escape hatch: $hatch."
+  if [ -n "$matched" ]; then
+    printf '%s' "A just recipe may cover this ($matched).${list_hint:+ $list_hint}${hatch_sentence:+ $hatch_sentence} To add a recipe: see the just-recipes skill."
+  else
+    printf '%s' "No recipe covers this yet: add one (see the just-recipes skill)${hatch:+, or run it under the escape hatch}.${list_hint:+ $list_hint}${hatch_sentence:+ $hatch_sentence}"
+  fi
 }
 
 # Allowlist check for one command segment.
@@ -334,25 +349,19 @@ log_col="$dir"
 log_wrap "$log_col" "$cmd"
 
 # Advice parts, each empty when it does not apply (so no doubled spaces).
+global_q=$(printf '%q' "$global_jf")
 if [ "$have_project" -eq 1 ]; then
   list_hint="Run 'just --list' to find a recipe."
 elif [ "$global_listed" -eq 1 ]; then
-  list_hint="Run 'just --justfile \"$global_jf\" --list' to find a recipe."
+  list_hint="Run 'just --justfile $global_q --list' to find a recipe."
 else
   list_hint=""
 fi
-hatch=""
-resolve_hatch
-hatch_sentence=""
-[ -n "$hatch" ] && hatch_sentence="Escape hatch: $hatch."
+hatch=$(resolve_hatch "$dir" "$have_project" "$global_jf" "$global_q")
 
 # Strict mode: hard block regardless of whether a recipe matches.
 case "$mode" in
-  strict)
-    if [ -z "$hatch_sentence" ]; then
-      hatch_sentence="No wrap recipe resolves here: add a recipe (see the just-recipes skill), or set JUST_RECIPES_ENFORCE=off."
-    fi
-    deny "Raw bash is funneled through just here.${list_hint:+ $list_hint} $hatch_sentence" ;;
+  strict) deny "$(strict_reason "$list_hint" "$hatch")" ;;
 esac
 
 # Nudge (default). A matched recipe is named; no match still nudges, pointing
@@ -370,9 +379,4 @@ matched=""
 if [ -n "$word" ] && [ -n "$listing" ]; then
   matched=$(match_recipes "$listing" "$word") || matched=""
 fi
-if [ -n "$matched" ]; then
-  msg="A just recipe may cover this ($matched).${list_hint:+ $list_hint}${hatch_sentence:+ $hatch_sentence} To add a recipe: see the just-recipes skill."
-else
-  msg="No recipe covers this yet: add one (see the just-recipes skill)${hatch:+, or run it under the escape hatch}.${list_hint:+ $list_hint}${hatch_sentence:+ $hatch_sentence}"
-fi
-nudge "$msg"
+nudge "$(nudge_text "$list_hint" "$hatch" "$matched")"

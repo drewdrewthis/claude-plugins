@@ -111,8 +111,9 @@ reason()   { printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecisionRea
 # has <text> <literal>   -> 0 when the literal is in the text
 # lacks <text> <literal> -> 0 when it is not. Functions (not `!`) so a failure
 # trips bats errexit anywhere in a test.
+# lacks fails on empty text so a hook that prints nothing cannot pass a no-hatch test.
 has()   { printf '%s' "$1" | grep -qF -- "$2"; }
-lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
+lacks() { [ -n "$1" ] || return 1; ! printf '%s' "$1" | grep -qF -- "$2"; }
 
 # hook_env <cmd> [mode] [projdir] [bindir] [VAR=val ...]
 # Like run_hook, but picks the `just` stub dir and passes extra env. Always
@@ -138,7 +139,6 @@ hook_text() {
 
 # add_wrap <justfile> -> append a `wrap` recipe (the stub's summary prints "wrap").
 add_wrap() { printf '\n# run a command through the logger\nwrap +cmd:\n    @echo wrapped\n' >> "$1"; }
-
 
 # init_canned -> a `just` stub that answers from files, for output the line-based
 # stub cannot express (modules, broken files). Reads $CANNED_DIR/<src>.<mode>
@@ -195,7 +195,7 @@ canned_text() { hook_text "$1" "${2:-}" "${3:-$EMPTYDIR}" "$CBIN" CANNED_DIR="$C
 @test "strict deny reason carries the resolved escape hatch" {
   add_wrap "$FAKE_HOME/.claude/just/justfile"
   t="$(hook_text "wget http://x" strict)"
-  has "$t" "just --justfile \"$FAKE_HOME/.claude/just/justfile\" -d . wrap \"<your command>\""
+  has "$t" "just --justfile $FAKE_HOME/.claude/just/justfile -d . wrap \"<your command>\""
 }
 
 # --- passthrough / fail-open ---------------------------------------------
@@ -569,20 +569,19 @@ SH
 # really is `wrap`. Nothing resolves -> it names no hatch and no global path.
 
 # no_global_refs <text> -> 0 when the text names no global-library path or form.
-no_global_refs() { ! printf '%s' "$1" | grep -qE -- '--justfile|\.claude/just/justfile|just --list'; }
+# Fails on empty text.
+no_global_refs() { [ -n "$1" ] || return 1; ! printf '%s' "$1" | grep -qE -- '--justfile|\.claude/just/justfile|just --list'; }
+# no_hatch <text> -> 0 when the text names no hatch command. Fails on empty text.
+no_hatch() { lacks "$1" '<your command>' && lacks "$1" 'Escape hatch:'; }
 
 CMD='wget http://x'
-HATCH_GLOBAL() { printf 'just --justfile "%s" -d . wrap "<your command>"' "$1"; }
+hatch_global() { printf 'just --justfile %s -d . wrap "<your command>"' "$(printf '%q' "$1")"; }
 
-@test "no hatch: no project justfile and no global file -> the nudge names no global path" {
+@test "no hatch: no project justfile and no global file -> no global path, no wrap" {
   rm -rf "$FAKE_HOME/.claude"
   t="$(hook_text "$CMD" "" "$EMPTYDIR")"
   no_global_refs "$t"
-}
-
-@test "no hatch: no project justfile and no global file -> the nudge names no wrap" {
-  rm -rf "$FAKE_HOME/.claude"
-  t="$(hook_text "$CMD" "" "$EMPTYDIR")"
+  no_hatch "$t"
   lacks "$t" "wrap"
 }
 
@@ -592,24 +591,19 @@ HATCH_GLOBAL() { printf 'just --justfile "%s" -d . wrap "<your command>"' "$1"; 
   no_global_refs "$t"
 }
 
-@test "no hatch: a dangling-symlink global file -> the nudge names no global path" {
+@test "no hatch: a dangling-symlink global file -> no global path, no wrap" {
   rm "$FAKE_HOME/.claude/just/justfile"
   ln -s "$SCRATCH/nope" "$FAKE_HOME/.claude/just/justfile"
   t="$(hook_text "$CMD" "" "$EMPTYDIR")"
   no_global_refs "$t"
-}
-
-@test "no hatch: a dangling-symlink global file -> the nudge names no wrap" {
-  rm "$FAKE_HOME/.claude/just/justfile"
-  ln -s "$SCRATCH/nope" "$FAKE_HOME/.claude/just/justfile"
-  t="$(hook_text "$CMD" "" "$EMPTYDIR")"
+  no_hatch "$t"
   lacks "$t" "wrap"
 }
 
 @test "global hatch: a global wrap recipe and an empty project dir -> the global form is named" {
   add_wrap "$FAKE_HOME/.claude/just/justfile"
   t="$(hook_text "$CMD" "" "$EMPTYDIR")"
-  has "$t" "$(HATCH_GLOBAL "$FAKE_HOME/.claude/just/justfile")"
+  has "$t" "$(hatch_global "$FAKE_HOME/.claude/just/justfile")"
 }
 
 @test "global hatch: JUST_GLOBAL_JUSTFILE with a space in the path -> that path is named, quoted" {
@@ -617,13 +611,22 @@ HATCH_GLOBAL() { printf 'just --justfile "%s" -d . wrap "<your command>"' "$1"; 
   mkdir -p "$ALT"
   printf 'wrap +cmd:\n    @echo w\n' > "$ALT/justfile"
   t="$(hook_text "$CMD" "" "$EMPTYDIR" "$STUB" JUST_GLOBAL_JUSTFILE="$ALT/justfile")"
-  has "$t" "$(HATCH_GLOBAL "$ALT/justfile")"
+  has "$t" "$(hatch_global "$ALT/justfile")"
+}
+
+@test "global hatch: JUST_GLOBAL_JUSTFILE with a dollar and a quote in the path -> the %q form is named" {
+  ALT="$SCRATCH"'/we$ird"lib'
+  mkdir -p "$ALT"
+  printf 'wrap +cmd:\n    @echo w\n' > "$ALT/justfile"
+  t="$(hook_text "$CMD" "" "$EMPTYDIR" "$STUB" JUST_GLOBAL_JUSTFILE="$ALT/justfile")"
+  has "$t" "$(hatch_global "$ALT/justfile")"
+  has "$t" "--justfile $(printf '%q' "$ALT/justfile") --list"
 }
 
 @test "global hatch: a project justfile without wrap and a global with wrap -> the global form is named" {
   add_wrap "$FAKE_HOME/.claude/just/justfile"
   t="$(hook_text "$CMD")"
-  has "$t" "$(HATCH_GLOBAL "$FAKE_HOME/.claude/just/justfile")"
+  has "$t" "$(hatch_global "$FAKE_HOME/.claude/just/justfile")"
 }
 
 @test "project hatch: a project wrap recipe -> 'just wrap' is named" {
@@ -639,12 +642,12 @@ HATCH_GLOBAL() { printf 'just --justfile "%s" -d . wrap "<your command>"' "$1"; 
   lacks "$t" "--justfile"
 }
 
-@test "project hatch: a module recipe tools::wrap -> 'just tools::wrap' is named" {
+@test "project hatch: a module recipe tools::wrap is never named" {
   init_canned
   canned_put project.summary "build tools::wrap"
   canned_put project.list "$(printf 'Available recipes:\n    build\n    tools::wrap')"
   t="$(canned_text "$CMD" "" "$JUSTDIR")"
-  has "$t" 'just tools::wrap "<your command>"'
+  no_hatch "$t"
 }
 
 @test "project hatch: a bare wrap beats a module tools::wrap" {
@@ -655,25 +658,25 @@ HATCH_GLOBAL() { printf 'just --justfile "%s" -d . wrap "<your command>"' "$1"; 
   has "$t" 'just wrap "<your command>"'
 }
 
-@test "near miss: global recipes wrap-report, unwrap and tools::rewrap -> no wrap form" {
+@test "near miss: global recipes wrap-report, unwrap and tools::rewrap -> no hatch" {
   init_canned
   canned_put global.summary "send wrap-report unwrap tools::rewrap"
   t="$(canned_text "$CMD")"
-  lacks "$t" 'wrap "'
+  no_hatch "$t"
 }
 
-@test "near miss: project recipes wrap-report, unwrap and tools::rewrap -> no wrap form" {
+@test "near miss: project recipes wrap-report, unwrap and tools::rewrap -> no hatch" {
   init_canned
   canned_put project.summary "build wrap-report unwrap tools::rewrap"
   canned_put project.list "$(printf 'Available recipes:\n    build')"
   t="$(canned_text "$CMD" "" "$JUSTDIR")"
-  lacks "$t" 'wrap "'
+  no_hatch "$t"
 }
 
-@test "broken justfiles: every just probe fails -> no wrap form" {
+@test "broken justfiles: every just probe fails -> no hatch" {
   init_canned
   t="$(canned_text "$CMD" "" "$JUSTDIR")"
-  lacks "$t" 'wrap "'
+  no_hatch "$t"
 }
 
 @test "broken justfiles: every just probe fails -> the hook exits 0" {
@@ -686,7 +689,15 @@ HATCH_GLOBAL() { printf 'just --justfile "%s" -d . wrap "<your command>"' "$1"; 
   init_canned
   canned_put global.summary "send wrap"
   t="$(canned_text "$CMD" "" "$JUSTDIR")"
-  has "$t" "$(HATCH_GLOBAL "$FAKE_HOME/.claude/just/justfile")"
+  has "$t" "$(hatch_global "$FAKE_HOME/.claude/just/justfile")"
+}
+
+@test "project list works but project summary fails, global has wrap -> the global form is named" {
+  init_canned
+  canned_put project.list "$(printf 'Available recipes:\n    build')"
+  canned_put global.summary "send wrap"
+  t="$(canned_text "$CMD" "" "$JUSTDIR")"
+  has "$t" "$(hatch_global "$FAKE_HOME/.claude/just/justfile")"
 }
 
 @test "list hint: a resolving project justfile -> 'just --list' is named" {
@@ -696,7 +707,7 @@ HATCH_GLOBAL() { printf 'just --justfile "%s" -d . wrap "<your command>"' "$1"; 
 
 @test "list hint: only the global file resolves -> 'just --justfile <path> --list' is named" {
   t="$(hook_text "$CMD" "" "$EMPTYDIR")"
-  has "$t" "just --justfile \"$FAKE_HOME/.claude/just/justfile\" --list"
+  has "$t" "just --justfile $FAKE_HOME/.claude/just/justfile --list"
 }
 
 @test "list hint: nothing resolves -> 'just --list' is not named" {
@@ -705,19 +716,15 @@ HATCH_GLOBAL() { printf 'just --justfile "%s" -d . wrap "<your command>"' "$1"; 
   lacks "$t" "just --list"
 }
 
-@test "strict with no hatch -> deny" {
+@test "strict with no hatch -> deny, and the reason names JUST_RECIPES_ENFORCE=off" {
   run hook_env "$CMD" strict
   [ "$(decision "$output")" = "deny" ]
-}
-
-@test "strict with no hatch -> the reason names JUST_RECIPES_ENFORCE=off" {
-  run hook_env "$CMD" strict
   has "$(reason "$output")" "JUST_RECIPES_ENFORCE=off"
 }
 
-@test "strict with no hatch -> the reason names no wrap command" {
+@test "strict with no hatch -> the reason names no hatch command" {
   t="$(hook_text "$CMD" strict)"
-  lacks "$t" 'wrap "<your command>"'
+  no_hatch "$t"
 }
 
 # --- cost: probes per hook run (#223) --------------------------------------
@@ -740,16 +747,20 @@ calls() {
   if [ -n "${1:-}" ]; then grep -c -- "$1" "$JLOG" || true; else wc -l < "$JLOG" | tr -d ' '; fi
 }
 
-@test "cost: a non-allowlisted command runs at most 4 just invocations" {
+@test "cost: a non-allowlisted command runs 1-4 just calls, of which 1-2 are --summary" {
   count_stub
   hook_env "$CMD" "" "$JUSTDIR" "$CNT" >/dev/null
+  [ "$(calls)" -ge 1 ]
   [ "$(calls)" -le 4 ]
+  [ "$(calls --summary)" -ge 1 ]
+  [ "$(calls --summary)" -le 2 ]
 }
 
-@test "cost: a non-allowlisted command runs at most 2 just --summary" {
+@test "cost: no project justfile and a global file runs at most 4 just calls" {
   count_stub
-  hook_env "$CMD" "" "$JUSTDIR" "$CNT" >/dev/null
-  [ "$(calls --summary)" -le 2 ]
+  hook_env "$CMD" "" "$EMPTYDIR" "$CNT" >/dev/null
+  [ "$(calls)" -ge 1 ]
+  [ "$(calls)" -le 4 ]
 }
 
 @test "cost: an allowlisted command runs no just at all" {
