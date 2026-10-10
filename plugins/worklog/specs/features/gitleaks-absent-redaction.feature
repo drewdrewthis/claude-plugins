@@ -257,12 +257,16 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     And the same AWS key id with nothing glued in front is redacted
     And a Shopify token preceded by x is redacted and holds no raw body
 
-  # proves: hooks/tests/worklog-record.bats "known limit: a pulumi token is found by gitleaks only before whitespace, a quote, a backtick, a semicolon or the end of the text"
-  Scenario: A Pulumi token is found by gitleaks only before whitespace, a quote, a backtick, a semicolon or the end of the text
+  # proves: hooks/tests/worklog-record.bats "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front"
+  Scenario: A Pulumi token stays raw when punctuation follows it or a word character is glued in front
     Given a Pulumi token in the middle of a URL path
     And a Pulumi token followed by a period
     And a Pulumi token followed by a comma
     And a Pulumi token followed by an ampersand in a query string
+    And a Pulumi token preceded by x
+    And a Pulumi token in round brackets
+    And a Pulumi token followed by a colon
+    And a Pulumi token in a query string after key=
     When the real gitleaks runs
     Then each output equals its input
     And the same token at the end of the URL path is redacted
@@ -270,6 +274,8 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     And the same token followed by a space is redacted
     And the same token in double quotes is redacted
     And a text holding the token twice has both copies redacted
+    And the same token followed by a literal backslash and n is redacted
+    And the same token after PULUMI_ACCESS_TOKEN= is redacted as a generic secret
 
   # proves: hooks/tests/worklog-record.bats "known limit: a body can settle where the same text as a quote hits the step cap"
   Scenario: A body can settle where the same text as a quote hits the step cap

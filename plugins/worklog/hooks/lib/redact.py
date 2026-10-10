@@ -40,10 +40,12 @@ limit leaves the WHOLE usable token raw. With gitleaks present it still holds
 for some shapes (npm, AWS key id); gitleaks finds others (Shopify). It is
 looked at again when the differential fuzz from issue #218 exists. Also
 accepted for now: gitleaks 8.30.1 finds a Pulumi token only when whitespace,
-a quote, a backtick, a semicolon or the end of the text directly follows it,
-and no built-in rule covers Pulumi, so in any other position (before a
-period, a comma, "/", "&") the whole usable token stays raw. The fix is
-issue #238 (https://github.com/drewdrewthis/claude-plugins/issues/238).
+a quote, a backtick, a semicolon, a literal "\\n" or "\\r" escape or the end
+of the text directly follows it and no letter, digit or underscore is glued in
+front of it. No built-in rule covers Pulumi, so in any other position (before
+a period, a comma, "/", "&", or after "x") the whole usable token stays raw.
+The fix is issue #238
+(https://github.com/drewdrewthis/claude-plugins/issues/238).
 Because the two stages above have separate step caps, a body can settle where
 the same text as a quote hits the cap; the quote is then dropped or matches
 only as the bare glued-secrets marker. No raw text either way.

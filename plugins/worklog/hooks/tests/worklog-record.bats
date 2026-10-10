@@ -2366,12 +2366,13 @@ _$(fake_do)"
   done
 }
 
-# gitleaks 8.30.1 behaviour: no built-in rule covers Pulumi, so with no keyword
-# in front of it, only the gitleaks pulumi-api-token rule can catch the token,
-# and it finds it only when whitespace, a quote, a backtick, a semicolon or
-# the end of the text follows. Any other next character leaves it raw.
-# Accepted for now in issue 219. The fix is issue 238.
-@test "known limit: a pulumi token is found by gitleaks only before whitespace, a quote, a backtick, a semicolon or the end of the text" {
+# gitleaks 8.30.1 finds a Pulumi token only when whitespace, a quote, a
+# backtick, a semicolon, a literal \n or \r escape or the end of the text
+# follows it and no word character is glued in front. No built-in rule covers
+# Pulumi, so in every other position the whole token stays raw, unless a
+# secret keyword stands in front of it. Accepted for now in issue 219.
+# The fix is issue 238.
+@test "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
   input="open https://app.example.com/$KEY/stacks/production to check"
@@ -2382,11 +2383,21 @@ _$(fake_do)"
   [ "$(real_redact_texts "$input")" = "$input" ]
   input="see https://app.example.com/x?t=$KEY&a=1 ok"
   [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see x$KEY now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see ($KEY) now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see $KEY: bad"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see https://app.example.com/x?key=$KEY&a=1 ok"
+  [ "$(real_redact_texts "$input")" = "$input" ]
   [ "$(real_redact_texts "open https://app.example.com/$KEY")" = "open https://app.example.com/<redacted:pulumi-api-token>" ]
   [ "$(real_redact_texts "open https://app.example.com/x?t=$KEY")" = "open https://app.example.com/x?t=<redacted:pulumi-api-token>" ]
   [ "$(real_redact_texts "see $KEY now")" = "see <redacted:pulumi-api-token> now" ]
   [ "$(real_redact_texts "say \"$KEY\" now")" = "say \"<redacted:pulumi-api-token>\" now" ]
   [ "$(real_redact_texts "see $KEY. and again $KEY now")" = "see <redacted:pulumi-api-token>. and again <redacted:pulumi-api-token> now" ]
+  [ "$(real_redact_texts 'see '"$KEY"'\nmore')" = 'see <redacted:pulumi-api-token>\nmore' ]
+  [ "$(real_redact_texts "PULUMI_ACCESS_TOKEN=$KEY")" = "PULUMI_ACCESS_<redacted:generic-secret>" ]
 }
 
 # The quote path runs redact.builtin once; the body path runs two stages, each
