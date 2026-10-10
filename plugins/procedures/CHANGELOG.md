@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.7](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.6...procedures-v0.17.7) (2026-10-10)
+
+
+### Bug Fixes
+
+* **procedures:** librarian gate defers at the ceiling and re-checks pressure mid-scan ([#233](https://github.com/drewdrewthis/claude-plugins/issues/233)) ([8296dc4](https://github.com/drewdrewthis/claude-plugins/commit/8296dc4446ff3d039f21b55105e8ed299697827a))
+
 ## [0.17.6](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.5...procedures-v0.17.6) (2026-10-10)
 
 
