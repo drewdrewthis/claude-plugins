@@ -2560,3 +2560,114 @@ sys.stdout.write(texts[0])
   [[ "$output" == *"<redacted:"* ]]
   [[ "$output" != *"$front_piece"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# UUID-CHECK: the ask/end uuid check against the transcript (issue #218)
+#
+# The check lists every uuid in the transcript and asks whether the slicer's
+# ask_uuid / end_uuid is in that list. Two properties are pinned here:
+#   - a VALID uuid survives however long the list is (no pipe race), and
+#   - the list is the only judge: a slicer uuid the list does not hold is
+#     written null, whatever the other records look like (same match rule).
+# ---------------------------------------------------------------------------
+
+# fill_records <count> <uuid-expr> — append <count> small non-prompt records.
+# Written by python3 in one pass: a jq call per record would take minutes. The
+# type is one the slicer ignores, so the slice is unchanged by the bulk.
+fill_records() {
+  python3 - "$1" "$2" >> "$TX" <<'PY'
+import sys
+n, mode = int(sys.argv[1]), sys.argv[2]
+for i in range(n):
+    u = '"%08x-0000-4000-8000-%012x"' % (i, i) if mode == "uuid" else '0'
+    sys.stdout.write('{"type":"progress","uuid":%s}\n' % u)
+PY
+}
+
+# glued_line <record> — the record, a BARE carriage return, then a filler
+# record, on ONE physical line. The slicer reads in text mode, where a bare \r
+# ends a line, so it sees both records. `jq -R` splits on \n only, gets one
+# line it cannot parse, and lists neither. That is how a uuid the slicer
+# reports can be absent from the uuid list.
+glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
+
+@test "UUID-CHECK: a valid ask_uuid survives a 1 MB uuid list" {
+  # The asked prompt is the FIRST uuid in the file, so a matcher that stops at
+  # the first hit exits while the writer still has megabytes to send.
+  user_line "$U1" "do the thing" > "$TX"
+  fill_records 16000 uuid
+  [ "$(wc -c < "$TX")" -ge 1000000 ]
+  local t0=$SECONDS elapsed
+  drive "$CLEAN"
+  elapsed=$((SECONDS - t0))
+  [ "$(field .ask_uuid)" = "$U1" ]
+  [ "$elapsed" -le 5 ]
+}
+
+@test "UUID-CHECK: a valid end_uuid survives a long uuid list" {
+  # end_uuid is the LAST uuid of the turn, so it is never early in the list.
+  # Records whose uuid is the number 0 come after it: the slicer treats them
+  # as uuid-less (falsy, so end_uuid stays put), jq lists each as a "0" line
+  # (an empty line would not do: $(...) strips a trailing run of them), and 70k of them leave the writer far more than a pipe buffer to send
+  # after the match.
+  user_line "$U1" "do the thing" > "$TX"
+  text_line "$U2" "done" >> "$TX"
+  fill_records 70000 zero
+  local t0=$SECONDS elapsed
+  drive "$CLEAN"
+  elapsed=$((SECONDS - t0))
+  [ "$(field .end_uuid)" = "$U2" ]
+  [ "$elapsed" -le 5 ]
+}
+
+@test "UUID-CHECK: a uuid held by the transcript is written unchanged" {
+  fixture_full
+  drive "$CLEAN"
+  [ "$(field .ask_uuid)" = "$U1" ]
+}
+
+@test "UUID-CHECK: given an ask_uuid no jq-listed record holds, it is written null" {
+  user_line "$U0" "an earlier prompt" > "$TX"
+  glued_line "$(user_line "$U1" "do the thing")" >> "$TX"
+  drive "$CLEAN"
+  [ "$(jq -c .ask_uuid "$WORKLOG_JSONL")" = "null" ]
+}
+
+@test "UUID-CHECK: given an ask_uuid that is a strict prefix of another record's uuid, it is written null" {
+  longer="${U1}-extra"
+  text_line "$longer" "a record with a longer uuid" > "$TX"
+  glued_line "$(user_line "$U1" "do the thing")" >> "$TX"
+  drive "$CLEAN"
+  [ "$(jq -c .ask_uuid "$WORKLOG_JSONL")" = "null" ]
+}
+
+@test "UUID-CHECK: given an ask_uuid that is another uuid with its last 4 chars starred, it is written null" {
+  starred="${U1%????}****"
+  text_line "$U1" "a record with the full uuid" > "$TX"
+  glued_line "$(user_line "$starred" "do the thing")" >> "$TX"
+  drive "$CLEAN"
+  [ "$(jq -c .ask_uuid "$WORKLOG_JSONL")" = "null" ]
+}
+
+@test "UUID-CHECK: given an end_uuid no jq-listed record holds, it is written null" {
+  user_line "$U1" "do the thing" > "$TX"
+  glued_line "$(text_line "$U2" "done")" >> "$TX"
+  drive "$CLEAN"
+  [ "$(jq -c .end_uuid "$WORKLOG_JSONL")" = "null" ]
+}
+
+@test "UUID-CHECK: given an end_uuid that is a strict prefix of another record's uuid, it is written null" {
+  text_line "${U2}-extra" "a record with a longer uuid" > "$TX"
+  user_line "$U1" "do the thing" >> "$TX"
+  glued_line "$(text_line "$U2" "done")" >> "$TX"
+  drive "$CLEAN"
+  [ "$(jq -c .end_uuid "$WORKLOG_JSONL")" = "null" ]
+}
+
+@test "UUID-CHECK: given an end_uuid that is another uuid with its last 4 chars starred, it is written null" {
+  text_line "$U2" "a record with the full uuid" > "$TX"
+  user_line "$U1" "do the thing" >> "$TX"
+  glued_line "$(text_line "${U2%????}****" "done")" >> "$TX"
+  drive "$CLEAN"
+  [ "$(jq -c .end_uuid "$WORKLOG_JSONL")" = "null" ]
+}
