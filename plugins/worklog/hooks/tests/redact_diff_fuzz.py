@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
 """Differential fuzz of hooks/lib/redact.py (claude-plugins#218).
 
-A candidate redact lib is compared with a pinned reference lib. A text is
-"worse" when the candidate leaves more of the planted fake tokens in its output
-than the reference does (see leak_spans). Exit 0: no worse text. Exit 1: one or
-more. Exit 2: the harness could not run (one stderr line names the cause).
+A candidate redact lib is compared with a reference lib that this file works
+out from git history on every run (see resolve_reference). A text is "worse"
+when the candidate leaves more of the planted fake tokens in its output than the
+reference does (see leak_spans). Exit 0: no worse text. Exit 1: one or more.
+Exit 2: the harness could not run (one stderr line names the cause).
 
-PIN RULE
-  (a) The reference is one constant, PINNED_SHA below. It is the only place the
-      full sha stands outside the release-please CHANGELOG.md files. Do not copy
-      it anywhere else. The pin test in redact-diff-fuzz.bats holds the same
-      sha as two string halves; move both halves together with PINNED_SHA.
-  (b) Move PINNED_SHA to the new commit after each merged change to redact.py.
-  (c) After a move, the named-case runs and the teeth runs in
-      redact-diff-fuzz.bats must give the same exit codes as before.
-  (d) A PR that makes a text worse on purpose fails this test. That PR must
-      change the score or the corpus in the same PR, and give the reason in the
-      PR body.
+REFERENCE RULE
+  (a) No sha is stored anywhere. The live library is hooks/lib/redact.py in the
+      working tree. The base is the merge base of HEAD and refs/remotes/origin/main.
+  (b) Live library differs from the base (blob): the reference is the base.
+  (c) Live library equals the base: the reference is the first parent of the
+      newest commit on the first-parent history of the base that changed the
+      library blob (a mode-only commit is not a change).
+  (d) A PR that makes a text worse on purpose must change the corpus or the
+      score in the same PR and give the reason in the PR body. There is no
+      flag, no environment variable and no workflow setting that changes or
+      skips the reference.
 
 All tokens here are generated fakes: a prefix plus seeded random characters.
 No token literal is in this file or in the bats file.
 
-Subcommands: fuzz --mode builtin|gitleaks, case --name NAME, selftest.
+Subcommands: fuzz --mode builtin|gitleaks, case --name NAME, reference, selftest.
 Python 3.9-safe, stdlib only. The corpus uses only random.Random(seed) with
 random(), randint(), randrange() and choice(), so it is the same on every
 Python and OS.
@@ -38,10 +39,18 @@ import subprocess
 import sys
 import tempfile
 
-PINNED_SHA = "84304ff2b409d4fd308d3a91b557ea00ef825e20"
 LIB_PATH = "plugins/worklog/hooks/lib/redact.py"
+ORIGIN_MAIN = "refs/remotes/origin/main"
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CANDIDATE_DIR = os.path.normpath(os.path.join(HERE, "..", "lib"))
+FIXTURE_DIR = os.path.join(HERE, "fixtures", "redact-regress")
+# Checked-in bad libs (PR 217 regressions) and their git blob ids. A planned
+# edit of a fixture must change the id here, in the open.
+FIXTURE_BLOBS = {
+    "cb0ab84": "1fb239a6e64ba14a251e6024e2e3fc0ab728cacc",
+    "3854dc2": "b2fe72cdd7571765ead3ae5bcd84b7b6510d0935",
+    "f1f1f8a": "a749eeeb36f53fc1514118de638d6a147c0651a5",
+}
 
 
 class HarnessError(Exception):
@@ -450,28 +459,107 @@ def load_from_dir(name, directory):
         raise HarnessError("%s error: cannot load lib (%s)" % (name, type(e).__name__))
 
 
-def load_from_sha(name, sha, tmp, hint, root):
-    p = subprocess.run(["git", "-C", root, "show", "%s:%s" % (sha, LIB_PATH)],
-                       capture_output=True)
-    if p.returncode != 0:
-        raise HarnessError("%s lib %s not found in this clone; run: %s" % (name, sha, hint))
+def _git(root, *args):
+    return subprocess.run(["git", "-C", root] + list(args), capture_output=True)
+
+
+def lib_at(root, rev):
+    """Bytes of the lib at `rev`, or None when that commit has no lib file."""
+    p = _git(root, "show", "%s:%s" % (rev, LIB_PATH))
+    return p.stdout if p.returncode == 0 else None
+
+
+def git_blob_id(data):
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def stage(tmp, name, data):
+    """Write `data` as <tmp>/<name>/redact.py. -> that dir."""
     d = os.path.join(tmp, name)
     os.makedirs(d)
     with open(os.path.join(d, "redact.py"), "wb") as f:
-        f.write(p.stdout)
-    return load_from_dir(name, d)
+        f.write(data)
+    return d
 
 
-def load_libs(args, tmp):
-    """-> (candidate, reference), loaded as two separate modules."""
-    root = repo_root()
-    ref = load_from_sha("reference", args.reference_sha or PINNED_SHA, tmp, "git fetch --unshallow", root)
+class Reference(object):
+    """The reference lib: its commit, the rule that chose it, and its bytes."""
+
+    def __init__(self, sha, data, changed, last_change=None):
+        self.sha, self.data, self.changed, self.last_change = sha, data, changed, last_change
+
+    def line(self):
+        if self.changed:
+            return "reference=%s rule=merge-base library_changed=True" % self.sha
+        return "reference=%s rule=parent-of-last-change library_changed=False last_change=%s" % (
+            self.sha, self.last_change)
+
+
+def resolve_reference(root):
+    """-> Reference, by the REFERENCE RULE in the header. Checks run in this fixed order."""
+    no_earlier = HarnessError("no earlier version of the lib to use as the reference")
+    if _git(root, "rev-parse", "--is-shallow-repository").stdout.strip() == b"true":
+        raise HarnessError("shallow clone: run: git fetch --unshallow")
+    if _git(root, "rev-parse", "--verify", "-q", ORIGIN_MAIN).returncode != 0:
+        raise HarnessError("no %s: run: git fetch origin main" % ORIGIN_MAIN)
+    bases = _git(root, "merge-base", "--all", "HEAD", ORIGIN_MAIN).stdout.split()
+    if len(bases) != 1:
+        raise HarnessError("no single merge base between HEAD and %s" % ORIGIN_MAIN)
+    base = bases[0].decode()
+    base_lib = lib_at(root, base)
+    if base_lib is None:
+        raise no_earlier
+    # The live lib is always the working-tree file next to this harness.
+    with open(os.path.join(DEFAULT_CANDIDATE_DIR, "redact.py"), "rb") as f:
+        live = f.read()
+    if live != base_lib:
+        return Reference(base, base_lib, True)
+    # Path-limited rev-list also lists mode-only commits: compare bytes to skip them.
+    for c in _git(root, "rev-list", "--first-parent", base, "--", LIB_PATH).stdout.decode().split():
+        before = lib_at(root, c + "^")
+        if before == lib_at(root, c):
+            continue
+        if before is None:
+            raise no_earlier
+        parent = _git(root, "rev-parse", c + "^").stdout.decode().strip()
+        return Reference(parent, before, False, c)
+    raise no_earlier
+
+
+def candidate_bytes(args, root):
+    """-> (candidate dir or None, its redact.py bytes). A sha or a fixture has no dir yet."""
     if args.candidate_sha:
-        cand = load_from_sha("candidate", args.candidate_sha, tmp,
-                             "git fetch origin refs/pull/217/head, or git fetch --unshallow", root)
-    else:
-        cand = load_from_dir("candidate", args.candidate_dir or DEFAULT_CANDIDATE_DIR)
-    return cand, ref
+        data = lib_at(root, args.candidate_sha)
+        if data is None:
+            raise HarnessError("candidate lib %s not found in this clone; run: git fetch --unshallow"
+                               % args.candidate_sha)
+        return None, data
+    if args.candidate_fixture:
+        name = "redact-%s.py.txt" % args.candidate_fixture
+        try:
+            with open(os.path.join(FIXTURE_DIR, name), "rb") as f:
+                data = f.read()
+        except OSError:
+            raise HarnessError("fixture %s not readable" % name)
+        if git_blob_id(data) != FIXTURE_BLOBS[args.candidate_fixture]:
+            raise HarnessError("fixture %s: blob id differs from the recorded blob id" % name)
+        return None, data
+    d = args.candidate_dir or DEFAULT_CANDIDATE_DIR
+    try:
+        with open(os.path.join(d, "redact.py"), "rb") as f:
+            return d, f.read()
+    except OSError as e:
+        raise HarnessError("candidate error: cannot load lib (%s)" % type(e).__name__)
+
+
+def load_libs(args, ref, root, tmp):
+    """-> (candidate, reference), loaded as two separate modules."""
+    cand_dir, data = candidate_bytes(args, root)
+    if data == ref.data:
+        raise HarnessError("reference is identical to the candidate")
+    if cand_dir is None:
+        cand_dir = stage(tmp, "candidate", data)
+    return load_from_dir("candidate", cand_dir), load_from_dir("reference", stage(tmp, "reference", ref.data))
 
 
 # ------------------------------------------------------------------- running --
@@ -528,7 +616,7 @@ def check_libs(mode, cand, ref):
 def start_session(mode, cand, ref, tmp):
     """Set the gitleaks environment for the mode, then check both libs agree with it.
 
-    Called after every `git show`, because builtin mode removes git from PATH.
+    Called after every git call, because builtin mode removes git from PATH.
     """
     version = None
     if mode == "gitleaks":
@@ -664,7 +752,8 @@ def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--candidate-dir", help="dir holding redact.py (default: hooks/lib next to this file)")
     common.add_argument("--candidate-sha", help="use hooks/lib/redact.py from this commit")
-    common.add_argument("--reference-sha", help="override the pinned reference (tests only)")
+    common.add_argument("--candidate-fixture", choices=sorted(FIXTURE_BLOBS),
+                        help="use a checked-in bad lib from fixtures/redact-regress")
     common.add_argument("--dump-planted", metavar="FILE", help="write planted pieces of worse texts here")
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -676,6 +765,7 @@ def build_parser():
     f.add_argument("--confirm-cap", type=int)
     c = sub.add_parser("case", parents=[common])
     c.add_argument("--name", choices=sorted(CASES), required=True)
+    sub.add_parser("reference", help="print the reference line and exit")
     sub.add_parser("selftest")
     return p
 
@@ -686,10 +776,10 @@ def check_args(args):
     A flag that is silently ignored would let a caller think it took effect.
     The rejected sha is not echoed: only the flag name.
     """
-    for flag in ("candidate_sha", "reference_sha"):
-        value = getattr(args, flag)
-        if value is not None and not SHA_RE.fullmatch(value):
-            raise HarnessError("bad sha: --%s" % flag.replace("_", "-"))
+    if args.candidate_sha is not None and not SHA_RE.fullmatch(args.candidate_sha):
+        raise HarnessError("bad sha: --candidate-sha")
+    if sum(v is not None for v in (args.candidate_dir, args.candidate_sha, args.candidate_fixture)) > 1:
+        raise HarnessError("use only one of --candidate-dir, --candidate-sha, --candidate-fixture")
     if args.cmd != "fuzz":
         return
     unused = (("--seed", args.seed), ("--n", args.n)) if args.mode == "gitleaks" \
@@ -707,14 +797,23 @@ def check_args(args):
 def run(args):
     if args.cmd == "selftest":
         return selftest()
+    if args.cmd == "reference":
+        print(resolve_reference(repo_root()).line())
+        return 0
     check_args(args)
     mode = args.mode if args.cmd == "fuzz" else CASES[args.name][1]
     if mode == "gitleaks" and not shutil.which("gitleaks"):
         raise HarnessError("gitleaks not found on PATH (gitleaks mode needs it)")
     with tempfile.TemporaryDirectory() as tmp:
-        cand, ref = load_libs(args, tmp)
-        session = start_session(mode, cand, ref, tmp)
+        root = repo_root()
+        ref = resolve_reference(root)
+        cand, ref_lib = load_libs(args, ref, root, tmp)
+        session = start_session(mode, cand, ref_lib, tmp)
         lines, worse = (run_fuzz if args.cmd == "fuzz" else run_case)(args, session)
+    if worse and not ref.changed:
+        lines.insert(0, "not from this change: the library change %s on main is worse than its parent"
+                     % ref.last_change)
+    lines.insert(0, ref.line())
     dump_planted(args.dump_planted, worse)
     print("\n".join(lines))
     return 1 if worse else 0
