@@ -1066,6 +1066,17 @@ _glued_head() {
   run grep -q ghp_ <(git -C "$ROOT" show HEAD:mistakes.jsonl); [ "$status" -ne 0 ]
 }
 
+# ---- claude#41 AC11: rows may carry a `source` key; rollback keeps appending ----
+
+@test "AC11: a commit that adds a mistake row with a source key is accepted" {
+  _committed_jsonl '{"old":1}'
+  printf '{"session":"s1","source":"s1:653-670","category":"c"}\n' >> "$ROOT/mistakes.jsonl"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(_commit_count)" -eq "$((before + 1))" ]
+}
+
 # ---- --root pinned to CODEX_ROOT (headless allowlist leaves later args open) ----
 
 # _other_repo — a second git root whose scripts/validate.sh drops a marker if run.

@@ -60,7 +60,7 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 
    | Kind | Your write |
    |---|---|
-   | mistake | `CODEX_ROOT=<root> MISTAKES_JSONL=<root>/mistakes.jsonl bash ${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh mistake --category ... --description ... --correction ... --severity ... --trigger ...` |
+   | mistake | `CODEX_ROOT=<root> MISTAKES_JSONL=<root>/mistakes.jsonl bash ${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh mistake --category ... --description ... --correction ... --severity ... --trigger ... --source <session-uuid>:<first>-<last>` |
    | decision / solution | Same script, `decision`/`solution` subcommand, targeting `<root>`. `--slug` is one filename component (ASCII `[A-Za-z0-9._-]`, no `..`, no leading `-`/`.`, no trailing `.`, never `CLAUDE`, `CLAUDE.local` or `AGENTS` in any case) and `--date` is `YYYY-MM-DD`; the script refuses anything else. It does not currently emit `description:` into the frontmatter block — add it by hand (Edit) right after minting: one neutral sentence per specs/RECORD_FRONTMATTER.md's `description` guidance, not a restatement of the kind or the filename. |
    | procedure / evolution / rule-kind (policy, standard) | Hand-write directly from that store's template in `skills/update-records/templates/`, same as procedure-evolver's procedure route — full seven-key frontmatter (`id`, `kind`, `date`, `keywords`, `links`, `status`, `description`), `id` corpus-unique (grep the root before minting), `kind` matching the containing store directory. Procedures: only `.md` files (`PROCEDURE.md`, `EVOLUTION.md`), never a procedure's `scripts/`. |
    | invariant, principle, `common-mistakes.md`, any script or non-`.md` file | Not yours to write: queue the proposed change in `grooming-queue.md`. The headless run denies these paths (invariants and `common-mistakes.md` can be `@`-imported into every session). |
@@ -72,6 +72,25 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    and refuses a `MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`,
    `FAILURE_MODES_DIR` or `CODEX_RECORDS_DIR` that points anywhere else, so never
    set those to anything but the root's own path.
+
+   Every `log-record.sh` call (and the `commit-records.sh` call) is one Bash call that
+   STARTS with `CODEX_ROOT=` followed by the root path written out in full. Use no
+   shell variable for the root or the plugin path, no leading `cd`, no `;`, `&&` or
+   pipe before or after it, and no trailing `echo`. The headless allowlist matches the
+   command text literally, so any other form is denied and the row is lost. Write
+   `${CLAUDE_PLUGIN_ROOT}` out as the plugin's resolved path. Quote both assignments
+   the same way (both bare, both single-quoted or both double-quoted) and write the
+   script path bare or double-quoted. Wrong:
+   `R=<root>; CODEX_ROOT=$R ... log-record.sh ...; echo rc=$?`. The exit status is
+   already in the tool result.
+
+   For `--source`, the uuid is the id in the batch's `=== <id> (<path>) ===` header and
+   the range is the `[L<n>]` markers of the lines that show the mistake (never offsets
+   inside the batch file); give one narrow range per mistake, and keep it narrow: a
+   range of 2000 lines or more is refused. The range is the numbers only, without the
+   `L`: markers `[L10]` to `[L14]` give `--source <session-uuid>:10-14`. A `duplicate`
+   note on stderr means that mistake is already logged — it is not an error, and
+   nothing was appended.
 
    As you write, capture — per store root — the four **reason fields** the commit
    gate records in git history (step 6): **what** (the kinds and counts written,

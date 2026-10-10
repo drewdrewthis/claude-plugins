@@ -51,15 +51,34 @@ mkdir -p "$CURSORS"
 : > "$OUT"
 : > "$MANIFEST.tmp"
 
-# _is_librarian <transcript> — 0 when it is a `claude -p --agent
-# procedures:librarian` session. Claude Code writes that as the first line:
-# {"type":"agent-setting","agentSetting":"procedures:librarian",...}. Only the
-# first line is read, and jq runs only when it looks like an agent-setting.
-_is_librarian() {
+# _first_line <file> — print the first line; fails when the file has none. The
+# `-n` guard keeps a last line that has no trailing newline.
+_first_line() {
     local first=""
     IFS= read -r first < "$1" 2>/dev/null || [ -n "$first" ] || return 1
-    case "$first" in *'"agent-setting"'*) ;; *) return 1 ;; esac
-    [ "$(printf '%s\n' "$first" | jq -r 'select(.type == "agent-setting") | .agentSetting' 2>/dev/null)" = "procedures:librarian" ]
+    printf '%s' "$first"
+}
+
+# _is_librarian <first-line> — 0 when it is a `claude -p --agent
+# procedures:librarian` session. Claude Code writes that as the first line:
+# {"type":"agent-setting","agentSetting":"procedures:librarian",...}. jq runs
+# only when the line looks like an agent-setting.
+_is_librarian() {
+    case "$1" in *'"agent-setting"'*) ;; *) return 1 ;; esac
+    [ "$(printf '%s\n' "$1" | jq -r 'select(.type == "agent-setting") | .agentSetting' 2>/dev/null)" = "procedures:librarian" ]
+}
+
+# _is_judge <first-line> — 0 when it is a worklog judge `claude -p` run, whose
+# first line is the enqueue record of its CANDIDATES prompt. That text is the
+# judge's input, not a session. Same jq-only-on-a-hit shape as above.
+# The heading literal copies the judge prompt heading in
+# plugins/worklog/hooks/worklog-record.sh; the two must change together. The
+# judge now runs with --no-session-persistence, so this skip only covers
+# transcripts saved before that.
+_is_judge() {
+    case "$1" in *'"queue-operation"'*'CANDIDATES (uuid, where, kind, text):'*) ;; *) return 1 ;; esac
+    printf '%s\n' "$1" | jq -e 'select(.type == "queue-operation" and .operation == "enqueue")
+        | .content | strings | startswith("CANDIDATES (uuid, where, kind, text):")' >/dev/null 2>&1
 }
 
 _mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
@@ -93,7 +112,9 @@ used=0
 while IFS=$'\t' read -r _ f; do
     [ "$used" -lt "$BUDGET" ] || break
     slug="$(basename "$f" .jsonl)"
-    _is_librarian "$f" && continue           # the librarian's own drains: never issued, no cursor
+    first="$(_first_line "$f")" || first=""
+    _is_librarian "$first" && continue       # the librarian's own drains: never issued, no cursor
+    _is_judge "$first" && continue           # the worklog judge's runs: same
     total="$(wc -l < "$f" 2>/dev/null | tr -d ' ')" || continue   # vanished/unreadable since find
     [ -n "$total" ] || continue
     cur=0

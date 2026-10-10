@@ -705,12 +705,12 @@ def blocks(r):
     c = msg(r).get("content")
     return c if isinstance(c, list) else []
 
-def text_of(r):
+def text_of(r, each=lambda t: t):
     c = msg(r).get("content")
     if isinstance(c, str):
-        return c
+        return each(c)
     if isinstance(c, list):
-        return " ".join(b.get("text", "") for b in c
+        return " ".join(each(b.get("text", "")) for b in c
                         if isinstance(b, dict) and b.get("type") == "text")
     return ""
 
@@ -837,6 +837,21 @@ for r in turn:
             for p in bash_paths(inp.get("command")):
                 add(p)
 
+# A channel (Discord) message arrives wrapped in <channel ...>text</channel>.
+# The opening tag alone is 183-256 chars, so left in it used up the 200-char cap
+# and the owner's words never reached the model. Only a wrapper at the very
+# start counts; a `<channel` further in is the owner quoting one.
+CHANNEL_OPEN = re.compile(r"\s*<channel(?=[\s>])(?:[^>\"']|\"[^\"]*\"|'[^']*')*>\s*")
+# The closing tag is stripped with str ops: a `\s*...\s*$` regex is quadratic on
+# a long whitespace run.
+# One leading wrapper is removed per text block (see text_of's `each`).
+def unwrap_channel(text):
+    m = CHANNEL_OPEN.match(text)
+    if not m:
+        return text
+    t = text[m.end():].rstrip()
+    return t[:-len("</channel>")].rstrip() if t.endswith("</channel>") else t
+
 # --- candidates: the ONLY uuids the model may return ---------------------
 # Conversation records only, and thinking blocks are excluded: detection is
 # lexical and anchored to what was actually said, so an internal deliberation
@@ -864,7 +879,7 @@ for r in recs:
                                      if isinstance(y, dict))
             body = " ".join(parts)
         else:
-            kind, body = "user", text_of(r)
+            kind, body = "user", text_of(r, unwrap_channel)
     else:
         tools = [b.get("name") for b in blocks(r)
                  if isinstance(b, dict) and b.get("type") == "tool_use"]
@@ -1017,6 +1032,7 @@ EOF
 # ---------------------------------------------------------------------------
 wl_candidates() {
     local cands="$1"
+    # The heading below is copied in procedures' librarian-batch.sh _is_judge; change together.
     cat <<EOF
 CANDIDATES (uuid, where, kind, text):
 $cands
@@ -1119,9 +1135,12 @@ wl_run() {
     # A failed slice pass means the candidates may hold a gitleaks-only secret:
     # skip the model entirely.
     if [ "$gl_failed" -eq 0 ] && command -v claude >/dev/null 2>&1; then
+        # --no-session-persistence below: else each judge call saves a transcript
+        # the knowledge intake reads as if it were a session.
         raw="$(wl_candidates "$cands" \
             | WORKLOG_DISABLE=1 wl_timeout "$WORKLOG_MODEL_TIMEOUT" \
               claude -p --model "$WORKLOG_MODEL" --output-format text \
+                     --no-session-persistence \
                      --system-prompt "$(wl_prompt)" \
                      --allowed-tools '' 2>/dev/null || true)"
     fi
