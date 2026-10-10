@@ -11,7 +11,7 @@ load helpers/common
 # setup — fresh tmp fixture: an isolated state dir plus a git root with a
 # committed anchor record ($ROOT). Runs before every test.
 setup() {
-  git_no_auto_maintenance
+  git_fixture_env
   GATE="$BATS_TEST_DIRNAME/../../scripts/commit-records.sh"
   FIX="$(mktemp -d)"
   export PROCEDURES_STATE_DIR="$FIX/state"
@@ -64,9 +64,6 @@ EOF
 _run_gate() {  # COMMIT_RECORDS_NO_PUSH by default
   COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" "$@"
 }
-# GNU stat -c vs BSD stat -f.
-_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
-_inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
 
 # _commit_count — number of commits on HEAD in $ROOT.
 _commit_count() { git -C "$ROOT" rev-list --count HEAD; }
@@ -550,49 +547,59 @@ _clone() {
 @test "AC26: an ignored .index with nothing tracked never reaches git add -u (newer git exits 128 on it)" {
   # git 2.55 exits 128 on `git add -u -- .index` when nothing under .index is
   # tracked; 2.39 exits 0, so the real git cannot pin the guard on every box.
-  # A shim first on PATH reproduces the newer behaviour on any git version.
-  local real shimdir; real="$(command -v git)"; shimdir="$FIX/shim"; mkdir -p "$shimdir"
-  cat > "$shimdir/git" <<SHIM
-#!/usr/bin/env bash
-args=("\$@")
-dir=.
-if [ "\${args[0]:-}" = "-C" ]; then dir="\${args[1]}"; args=("\${args[@]:2}"); fi
-if [ "\${args[*]:-}" = "add -u -- .index" ] && [ -z "\$("$real" -C "\$dir" ls-files -- .index)" ]; then
-  echo "error: pathspec '.index' did not match any file(s) known to git" >&2
-  exit 128
+  # A shim first on PATH reproduces the newer behaviour on any git version. It
+  # marks any `git add` naming .index, not one exact spelling, so a respelled
+  # call (--update, -A) cannot slip past it.
+  git_shim "$(cat <<'SNIP'
+if [ "${args[0]:-}" = "add" ]; then
+  for a in "${args[@]:1}"; do
+    case "$a" in
+      .index|.index/|.index/*)
+        if [ -z "$("$real" -C "$dir" ls-files -- .index)" ]; then
+          : > "$shim_dir/add-index"
+          echo "error: pathspec '.index' did not match any file(s) known to git" >&2
+          exit 128
+        fi ;;
+    esac
+  done
 fi
-exec "$real" "\$@"
-SHIM
-  chmod +x "$shimdir/git"
+SNIP
+)"
   printf '.index/\n' > "$ROOT/.gitignore"
   git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index
   _fm "$ROOT/records/failure-modes/local.md" fm.local LOCAL
-  PATH="$shimdir:$PATH" _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  PATH="$GIT_SHIM_DIR:$PATH" _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  [ -f "$GIT_SHIM_DIR/invoked" ]       # the shim was on PATH, so the next line cannot pass vacuously
+  [ ! -f "$GIT_SHIM_DIR/add-index" ]   # the guard kept git add away from the untracked .index
   [ "$status" -eq 0 ]
 }
 
 @test "AC26: a failing git ls-files on an ignored .index aborts the commit instead of skipping the restage" {
   # A failed ls-files must not read as "nothing tracked": a tracked index would go unstaged.
-  local real shimdir; real="$(command -v git)"; shimdir="$FIX/shim"; mkdir -p "$shimdir"
-  cat > "$shimdir/git" <<SHIM
-#!/usr/bin/env bash
-args=("\$@")
-if [ "\${args[0]:-}" = "-C" ]; then args=("\${args[@]:2}"); fi
-if [ "\${args[*]:-}" = "ls-files -- .index" ]; then
+  git_shim "$(cat <<'SNIP'
+if [ "${args[*]:-}" = "ls-files -- .index" ]; then
   echo "fatal: ls-files broke" >&2
   exit 128
 fi
-exec "$real" "\$@"
-SHIM
-  chmod +x "$shimdir/git"
+SNIP
+)"
   printf '.index/\n' > "$ROOT/.gitignore"
   git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index
   local before; before="$(git -C "$ROOT" rev-parse HEAD)"
   _fm "$ROOT/records/failure-modes/local.md" fm.local LOCAL
-  PATH="$shimdir:$PATH" _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
+  PATH="$GIT_SHIM_DIR:$PATH" _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
   [ "$status" -ne 0 ]
   [[ "$output" == *"git ls-files failed for: .index"* ]]
   [ "$(git -C "$ROOT" rev-parse HEAD)" = "$before" ]                           # nothing committed
+}
+
+@test "fixtures ignore the system gitconfig (GIT_CONFIG_NOSYSTEM)" {
+  # A poisoned system config is the only way to see the isolation; /etc/gitconfig is not writable in a test.
+  # Kept in each git-fixture suite on purpose: it pins that suite's own setup() call to the fixture helper.
+  printf '[push]\n\tdefault = nothing\n' > "$FIX/system.gitconfig"
+  GIT_CONFIG_SYSTEM="$FIX/system.gitconfig" run git -C "$ROOT" config --get push.default
+  [ "$status" -eq 1 ]   # 1 = key not set; any other code means git itself failed
+  [ -z "$output" ]
 }
 
 @test "AC29: index files tracked before .index/ was gitignored still get the rebuilt index staged" {

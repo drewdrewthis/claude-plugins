@@ -136,20 +136,38 @@ Feature: The procedures bats suites are green, hermetic, and run in CI
     When those two exports are removed in a copy
     Then the leak-guard test fails
 
-  # proves: hooks/tests/commit-records.bats "AC26: a store that gitignores .index/ still commits the record (index left local)"; command `PATH=<git 2.55 dir>:$PATH bats hooks/tests/commit-records.bats` gives 63 tests, 0 not ok, and the same test fails on the unfixed scripts/commit-records.sh; also green on git 2.39 and on both CI legs (git 2.55)
+  # proves: hooks/tests/commit-records.bats "AC26: a store that gitignores .index/ still commits the record (index left local)"; command `PATH=<git 2.55 dir>:$PATH bats hooks/tests/commit-records.bats` gives at least 64 tests, 0 not ok, and the same test fails on the unfixed scripts/commit-records.sh; also green on git 2.39 and on both CI legs (git 2.55)
   @integration
   Scenario: A store that gitignores .index still commits under git 2.55
     Given a store whose .gitignore excludes .index/ and tracks nothing under it
     When commit-records.sh commits a record with git 2.55 first on PATH
     Then the commit succeeds and the index stays local
 
-  # proves: hooks/tests/commit-records.bats "AC26: an ignored .index with nothing tracked never reaches git add -u (newer git exits 128 on it)" (a git shim first on PATH exits 128 with git 2.55's message for `add -u -- .index` when nothing under .index is tracked, so it holds on any git version); fails with the ls-files guard reverted in a throwaway copy, passes with it
+  # proves: hooks/tests/commit-records.bats "AC26: an ignored .index with nothing tracked never reaches git add -u (newer git exits 128 on it)" (a git shim first on PATH records a marker and exits 128 with git 2.55's message for any `git add` that names .index while nothing under .index is tracked, so it holds on any git version and any flag spelling); the test asserts the shim ran and the marker is absent; fails with the ls-files guard reverted in a throwaway copy, passes with it
   @integration
   Scenario: The .index restage is guarded on tracked files, on any git version
     Given a store that gitignores .index/ with nothing tracked under it
-    And a git that exits 128 for `add -u -- .index` when nothing is tracked
+    And a git that exits 128 for any `git add` naming .index when nothing under it is tracked
     When commit-records.sh commits a record
     Then the commit succeeds
+    And git add is never called on .index
+
+  # proves: hooks/tests/commit-records.bats "AC26: a failing git ls-files on an ignored .index aborts the commit instead of skipping the restage" (a git shim first on PATH exits 128 for `ls-files -- .index`); the test passes only when the gate exits non-zero, prints "git ls-files failed for: .index", and HEAD is unchanged
+  @integration
+  Scenario: A failing ls-files on an ignored .index aborts the commit
+    Given a store that gitignores .index/
+    And a git whose `ls-files -- .index` fails
+    When commit-records.sh commits a record
+    Then it exits non-zero and names the failed ls-files
+    And nothing is committed
+
+  # proves: hooks/tests/commit-records.bats and hooks/tests/librarian-poke.bats "fixtures ignore the system gitconfig (GIT_CONFIG_NOSYSTEM)" (setup() calls git_fixture_env in hooks/tests/helpers/common.bash); command form: `GIT_CONFIG_SYSTEM=<file with push.default = nothing> bats hooks/tests/commit-records.bats` gave 3 not ok before the export (AC21, AC22, AC31) and 0 after
+  @integration
+  Scenario: The git fixtures ignore the system gitconfig
+    Given a system gitconfig that sets push.default to nothing
+    When the git-fixture suites run
+    Then every test passes
+    And git reads no system setting inside a fixture
 
 # --- AC Coverage Map ---
 # AC1  -> Each suite is green with a clean environment
@@ -165,4 +183,5 @@ Feature: The procedures bats suites are green, hermetic, and run in CI
 # AC11 -> CI goes red when a suite fails (proof: failing run linked in the body of PR #221)
 # AC12 -> The suites leave the real gate logs alone
 # AC13 -> The four formerly weak gate-escape tests fail under a one-line mutant; The gates.bats leak guard fails without its setup exports
-# AC14 -> A store that gitignores .index still commits under git 2.55; The .index restage is guarded on tracked files, on any git version
+# AC14 -> A store that gitignores .index still commits under git 2.55; The .index restage is guarded on tracked files, on any git version; A failing ls-files on an ignored .index aborts the commit
+# #222 -> The git fixtures ignore the system gitconfig
