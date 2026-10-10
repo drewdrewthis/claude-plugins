@@ -97,12 +97,28 @@ SH
 #   fail-after:N      succeed (no findings) for N calls, then exit 2; the call
 #                     count lives in GITLEAKS_COUNT_FILE
 #   hang              block for 30s (exec'd, so a killed child frees the pipe)
+  # `gitleaks version` prints 8.30.1 unless GITLEAKS_STUB_VERSION overrides it:
+  # `fail` exits 2, `none` prints no version, anything else is printed as given.
+  # The version call is logged to GITLEAKS_VERSION_LOG only: it is neither
+  # counted (GITLEAKS_COUNT_FILE) nor put in GITLEAKS_CALL_LOG, so tests that
+  # count stdin calls hold on systems where the library asks for the version.
   # GITLEAKS_CALL_LOG, when set, gets one line per invocation.
   # GITLEAKS_STDIN_LOG, when set, gets the exact bytes the call read on stdin.
   export GITLEAKS_CALL_LOG="$SCRATCH/gitleaks-calls.txt"
   export GITLEAKS_COUNT_FILE="$SCRATCH/gitleaks-count.txt"
+  export GITLEAKS_VERSION_LOG="$SCRATCH/gitleaks-version-calls.txt"
   cat > "$STUB/gitleaks" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = version ]; then
+  [ -n "${GITLEAKS_VERSION_LOG:-}" ] && echo "$*" >>"$GITLEAKS_VERSION_LOG"
+  case "${GITLEAKS_STUB_VERSION:-}" in
+    fail) exit 2 ;;
+    none) echo "gitleaks unknown"; exit 0 ;;
+    "") echo 8.30.1 ;;
+    *) echo "$GITLEAKS_STUB_VERSION" ;;
+  esac
+  exit 0
+fi
 # Save stdin, then run again on the saved copy so every mode below still reads
 # it. The re-run logs the call once; this first pass must not log.
 if [ -n "${GITLEAKS_STDIN_LOG:-}" ] && [ -z "${GL_STDIN_SAVED:-}" ]; then
@@ -938,7 +954,8 @@ PY
   # would silently keep these rows out of any rate a consumer computes.
   for w in transcript-unreadable judgment-unavailable store-unwritable \
            malformed-payload non-object-payload no-jq detach-failed \
-           gitleaks-failed lib-unreadable:redact redact-failed gitleaks-absent; do
+           gitleaks-failed gitleaks-too-old gitleaks-report-file \
+           lib-unreadable:redact redact-failed gitleaks-absent; do
     : > "$GATE_FAILOPEN_LOG"
     env HOME="$FAKE_HOME" GATE_FAILOPEN_LOG="$GATE_FAILOPEN_LOG" \
       bash -c ". '$HOOKS/lib/gate-failopen.sh'; gate_failopen 'worklog-record' '$w' 'sess1'"
@@ -1447,7 +1464,7 @@ real_gitleaks() {
 
 # gl_report_path — the report path the library passes to gitleaks: /dev/stdout
 # on Linux, a lone dash elsewhere (macOS has no usable /dev/stdout for it).
-gl_report_path() { if [ "$(uname -s)" = "Linux" ]; then printf '/dev/stdout'; else printf -- '-'; fi; }
+gl_report_path() { if on_linux; then printf '/dev/stdout'; else printf -- '-'; fi; }
 
 # on_linux — true on Linux; the old-binary tests branch their expectations on it.
 on_linux() { [ "$(uname -s)" = "Linux" ]; }
@@ -3286,14 +3303,18 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
 # 20. gitleaks older than 8.22.0 (claude-plugins#245)
 # ==========================================================================
 #
-# gitleaks before 8.22.0 reads a lone dash as the report path as a FILE NAME, not stdout:
-# it writes the raw findings to a file called `-` in the working directory and
-# prints nothing, which the hook read as "no findings". On Linux the library asks
-# for /dev/stdout and refuses to scan when that path is absent or a regular
-# file. Elsewhere (macOS has no usable /dev/stdout for gitleaks) it asks for the
-# dash, refuses a symbolic link `./-`, and treats a `./-` that gitleaks created
-# or changed as a failed scan (removing it). So with the old binary a Linux turn
-# is redacted and a non-Linux turn is loud: unjudged row, gitleaks-failed.
+# gitleaks before 8.22.0 reads a lone dash as the report path as a FILE NAME, not
+# stdout: it writes the raw findings to a file called `-` in the working
+# directory and prints nothing, which the hook read as "no findings". Contract 3:
+# the hook deletes nothing, ever. Per-system minimums: on Linux the library asks
+# for /dev/stdout (gitleaks 8.19.1 or later) and refuses to scan when that path
+# is absent or a regular file; on other systems it asks for the dash, reads
+# `gitleaks version` first and, below 8.22.0 or with no readable version, does not
+# run gitleaks (notes gitleaks-failed and gitleaks-too-old). If a `-` entry
+# appears during a run the version claimed was safe, the scan fails and the
+# entry is left in place (note gitleaks-report-file). So with the old binary a
+# Linux turn is redacted and a non-Linux turn is loud: unjudged row, no model
+# call, built-in redaction still on.
 #
 # ⚠ THE OLD BINARY COMES FROM WORKLOG_TEST_OLD_GITLEAKS (a real 8.21.2). Never
 # put it on the suite's default PATH and never replace the box binary.
@@ -3324,7 +3345,8 @@ confirmed_pulumi() {
   local i t
   for i in 1 2 3 4 5 6 7 8 9 10; do
     t="pu""l-$(od -An -N20 -tx1 /dev/urandom | tr -d ' \n')"
-    # Elsewhere the old binary would write a file named `-` here: do not run it.
+    # Off Linux the library never runs this binary, so it needs no confirmed
+    # token: fake_pulumi stands in (the built-in rules still see it).
     if ! on_linux; then fake_pulumi; return 0; fi
     if printf 'my token is %s please keep it\nleaked %s\n' "$t" "$t" \
         | "$1" stdin --no-banner --exit-code 0 --report-format json --report-path /dev/stdout 2>/dev/null \
@@ -3461,6 +3483,18 @@ old_clean_turn() {
   if on_linux; then [ "${n:-0}" -eq 0 ]; else [ "${n:-0}" -eq 1 ]; fi
 }
 
+@test "gitleaks 8.21.2 on a secret turn logs gitleaks-too-old once off Linux and never on Linux" {
+  old_secret_turn
+  n="$(note_count gitleaks-too-old)"
+  if on_linux; then [ "${n:-0}" -eq 0 ]; else [ "${n:-0}" -eq 1 ]; fi
+}
+
+@test "gitleaks 8.21.2 on a clean turn logs gitleaks-too-old once off Linux and never on Linux" {
+  old_clean_turn
+  n="$(note_count gitleaks-too-old)"
+  if on_linux; then [ "${n:-0}" -eq 0 ]; else [ "${n:-0}" -eq 1 ]; fi
+}
+
 @test "gitleaks 8.21.2 on a clean turn calls the model on Linux and never elsewhere" {
   old_clean_turn
   if on_linux; then
@@ -3470,45 +3504,71 @@ old_clean_turn() {
   fi
 }
 
-# --- the /dev/stdout guard --------------------------------------------------
+# --- the report path guards and the version check ---------------------------
 
-# scan_with_path <report-path> — redact.scan() on a fake token with the report
-# path injected; prints the repr of the result.
-scan_with_path() {
-  PATH="$STUB:$PATH" python3 - "$HOOKS/lib" "$1" "$(fake_pulumi)" <<'PY'
+# scan_report <report-path> <workdir> <PATH> [token] — redact.scan() on a fake
+# token with the report path forced, <workdir> as the working directory and
+# <PATH> as the command path. Prints
+# "<failed> <rule ids> <gitleaks_too_old> <report_file_left>".
+scan_report() {
+  ( cd "$2" && PATH="$3" python3 - "$HOOKS/lib" "$1" "${4:-$(fake_pulumi)}" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 import redact
 redact._REPORT_PATH = sys.argv[2]
-print(redact.scan("my token is " + sys.argv[3] + " please keep it"))
+found, failed = redact.scan("my token is " + sys.argv[3] + " please keep it")
+print("%s %s %s %s" % (failed, [r for _, r in found], redact.gitleaks_too_old, redact.report_file_left))
 PY
+  )
 }
 
 @test "a report path that is absent makes the scan report failure" {
-  run scan_with_path "$SCRATCH/no-such-report-path"
-  [ "$output" = "([], True)" ]
+  run scan_report "$SCRATCH/no-such-report-path" "$SCRATCH" "$STUB:$PATH"
+  [ "$output" = "True [] False False" ]
 }
 
 @test "a report path that is absent never runs gitleaks" {
-  scan_with_path "$SCRATCH/no-such-report-path" >/dev/null
+  scan_report "$SCRATCH/no-such-report-path" "$SCRATCH" "$STUB:$PATH" >/dev/null
   [ ! -s "$GITLEAKS_CALL_LOG" ]
 }
 
 @test "a report path that is a regular file makes the scan report failure" {
   printf 'known bytes\n' > "$SCRATCH/regular"
-  run scan_with_path "$SCRATCH/regular"
-  [ "$output" = "([], True)" ]
+  run scan_report "$SCRATCH/regular" "$SCRATCH" "$STUB:$PATH"
+  [ "$output" = "True [] False False" ]
 }
 
 @test "a report path that is a regular file never runs gitleaks" {
   printf 'known bytes\n' > "$SCRATCH/regular"
-  scan_with_path "$SCRATCH/regular" >/dev/null
+  scan_report "$SCRATCH/regular" "$SCRATCH" "$STUB:$PATH" >/dev/null
   [ ! -s "$GITLEAKS_CALL_LOG" ]
 }
 
+# writer_gitleaks — a gitleaks that, if it ever runs a scan, writes to the path
+# it is given as --report-path. Lets the "file keeps its bytes" test fail when
+# the guard stops protecting the file (the plain stub never writes a report).
+writer_gitleaks() {
+  WRITER="$SCRATCH/writer"
+  mkdir -p "$WRITER"
+  cat > "$WRITER/gitleaks" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = version ]; then echo 8.30.1; exit 0; fi
+cat >/dev/null
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--report-path" ]; then printf 'stub overwrote it\n' > "$a"; fi
+  prev="$a"
+done
+echo '[]'
+exit 0
+SH
+  chmod +x "$WRITER/gitleaks"
+}
+
 @test "a report path that is a regular file keeps its bytes" {
+  writer_gitleaks
   printf 'known bytes\n' > "$SCRATCH/regular"
-  scan_with_path "$SCRATCH/regular" >/dev/null
+  scan_report "$SCRATCH/regular" "$SCRATCH" "$WRITER:$PATH" >/dev/null
   [ "$(cat "$SCRATCH/regular")" = "known bytes" ]
 }
 
@@ -3526,28 +3586,9 @@ PY
 
 # --- the dash report path (non-Linux default), forced from python -----------
 #
-# The library never touches a `-` entry that existed before the run. A `-` that
-# gitleaks creates (old versions) is removed by name; if it cannot be removed,
-# or the entry was not a regular file, redact.report_file_left is set.
-
-# scan_dash <workdir> <PATH> — redact.scan() on a fake token with the report
-# path forced to a lone dash and <workdir> as the working directory; prints
-# "<failed> <rule ids> <report_file_left>". UNLINK_FAILS=1 makes os.unlink raise.
-scan_dash() {
-  ( cd "$1" && PATH="$2" python3 - "$HOOKS/lib" "$(fake_pulumi)" <<'PY'
-import os, sys
-sys.path.insert(0, sys.argv[1])
-import redact
-redact._REPORT_PATH = "-"
-if os.environ.get("UNLINK_FAILS"):
-    def _boom(*a, **k):
-        raise OSError("unlink refused")
-    os.unlink = _boom
-found, failed = redact.scan("my token is " + sys.argv[2] + " please keep it")
-print("%s %s %s" % (failed, [r for _, r in found], redact.report_file_left))
-PY
-  )
-}
+# Every run has a fresh temporary directory as its working directory. The
+# library reads `gitleaks version` first: below 8.22.0, or with no readable
+# version, gitleaks stdin is not run. It never removes anything.
 
 # dash_wd <kind> — a fresh empty working directory in WD; <kind> pre-creates a
 # `-` entry: file (known bytes), link (to a file with known bytes), dir.
@@ -3560,102 +3601,209 @@ dash_wd() {
   esac
 }
 
-@test "dash path: the old binary's file report makes the scan report failure" {
-  require_old_gitleaks
-  dash_wd none
-  run scan_dash "$WD" "$OLDBIN:$PATH"
-  [ "$output" = "True [] False" ]
+# dash_stub — the stub reports one pulumi finding for KEY (version 8.30.1).
+dash_stub() {
+  KEY="$(fake_pulumi)"
+  export GITLEAKS_STUB="find:pulumi-api-token:$KEY"
 }
 
-@test "dash path: the old binary's file report is removed" {
+@test "dash path: gitleaks 8.21.2 makes the scan report failure and sets the too-old flag" {
   require_old_gitleaks
   dash_wd none
-  scan_dash "$WD" "$OLDBIN:$PATH" >/dev/null
+  run scan_report "-" "$WD" "$OLDBIN:$PATH"
+  [ "$output" = "True [] True False" ]
+}
+
+@test "dash path: gitleaks 8.21.2 leaves no entry in the working directory" {
+  require_old_gitleaks
+  dash_wd none
+  scan_report "-" "$WD" "$OLDBIN:$PATH" >/dev/null
   [ -z "$(ls -A "$WD")" ]
 }
 
-@test "dash path: a regular file named dash makes the scan report failure and sets the flag" {
-  dash_wd file
-  run scan_dash "$WD" "$STUB:$PATH"
-  [ "$output" = "True [] True" ]
+@test "dash path: a gitleaks whose version call fails makes the scan report failure and sets the too-old flag" {
+  dash_wd none
+  GITLEAKS_STUB_VERSION=fail run scan_report "-" "$WD" "$STUB:$PATH"
+  [ "$output" = "True [] True False" ]
 }
 
-@test "dash path: a regular file named dash never runs gitleaks" {
-  dash_wd file
-  scan_dash "$WD" "$STUB:$PATH" >/dev/null
+@test "dash path: a gitleaks whose version call fails never runs gitleaks stdin" {
+  dash_wd none
+  GITLEAKS_STUB_VERSION=fail scan_report "-" "$WD" "$STUB:$PATH" >/dev/null
   [ ! -s "$GITLEAKS_CALL_LOG" ]
 }
 
-@test "dash path: a regular file named dash keeps its bytes" {
+@test "dash path: a gitleaks whose version call fails leaves no entry in the working directory" {
+  dash_wd none
+  GITLEAKS_STUB_VERSION=fail scan_report "-" "$WD" "$STUB:$PATH" >/dev/null
+  [ -z "$(ls -A "$WD")" ]
+}
+
+@test "dash path: a gitleaks whose version call prints no version makes the scan report failure and sets the too-old flag" {
+  dash_wd none
+  GITLEAKS_STUB_VERSION=none run scan_report "-" "$WD" "$STUB:$PATH"
+  [ "$output" = "True [] True False" ]
+}
+
+@test "dash path: a gitleaks whose version call prints no version never runs gitleaks stdin" {
+  dash_wd none
+  GITLEAKS_STUB_VERSION=none scan_report "-" "$WD" "$STUB:$PATH" >/dev/null
+  [ ! -s "$GITLEAKS_CALL_LOG" ]
+}
+
+@test "dash path: a gitleaks whose version call prints no version leaves no entry in the working directory" {
+  dash_wd none
+  GITLEAKS_STUB_VERSION=none scan_report "-" "$WD" "$STUB:$PATH" >/dev/null
+  [ -z "$(ls -A "$WD")" ]
+}
+
+@test "dash path: gitleaks 8.30.1 with no dash entry before returns the finding and sets no flag" {
+  dash_stub
+  dash_wd none
+  run scan_report "-" "$WD" "$STUB:$PATH" "$KEY"
+  [ "$output" = "False ['pulumi-api-token'] False False" ]
+}
+
+@test "dash path: gitleaks 8.30.1 with no dash entry before leaves no entry in the working directory" {
+  dash_stub
+  dash_wd none
+  scan_report "-" "$WD" "$STUB:$PATH" "$KEY" >/dev/null
+  [ -z "$(ls -A "$WD")" ]
+}
+
+@test "dash path: the real gitleaks returns the finding without failure and leaves both flags clear" {
+  require_real_gitleaks
+  dash_wd none
+  run scan_report "-" "$WD" "$(dirname "$(real_gitleaks)"):$PATH"
+  [ "$output" = "False ['pulumi-api-token'] False False" ]
+}
+
+@test "dash path: the real gitleaks leaves no entry named dash" {
+  require_real_gitleaks
+  dash_wd none
+  scan_report "-" "$WD" "$(dirname "$(real_gitleaks)"):$PATH" >/dev/null
+  [ -z "$(ls -A "$WD")" ]
+}
+
+@test "dash path: gitleaks 8.30.1 with a regular file named dash before returns the finding and sets no flag" {
+  dash_stub
   dash_wd file
-  scan_dash "$WD" "$STUB:$PATH" >/dev/null
+  run scan_report "-" "$WD" "$STUB:$PATH" "$KEY"
+  [ "$output" = "False ['pulumi-api-token'] False False" ]
+}
+
+@test "dash path: gitleaks 8.30.1 with a regular file named dash before keeps its bytes" {
+  dash_stub
+  dash_wd file
+  scan_report "-" "$WD" "$STUB:$PATH" "$KEY" >/dev/null
   [ "$(cat "$WD/-")" = "known bytes" ]
 }
 
-@test "dash path: a symbolic link named dash makes the scan report failure and sets the flag" {
+@test "dash path: gitleaks 8.30.1 with a symbolic link named dash before returns the finding and sets no flag" {
+  dash_stub
   dash_wd link
-  run scan_dash "$WD" "$STUB:$PATH"
-  [ "$output" = "True [] True" ]
+  run scan_report "-" "$WD" "$STUB:$PATH" "$KEY"
+  [ "$output" = "False ['pulumi-api-token'] False False" ]
 }
 
-@test "dash path: a symbolic link named dash never runs gitleaks" {
+@test "dash path: gitleaks 8.30.1 with a symbolic link named dash before leaves it a link" {
+  dash_stub
   dash_wd link
-  scan_dash "$WD" "$STUB:$PATH" >/dev/null
-  [ ! -s "$GITLEAKS_CALL_LOG" ]
-}
-
-@test "dash path: a symbolic link named dash leaves its target bytes" {
-  dash_wd link
-  scan_dash "$WD" "$STUB:$PATH" >/dev/null
-  [ "$(cat "$SCRATCH/link-target")" = "target bytes" ]
-}
-
-@test "dash path: a symbolic link named dash stays a symbolic link" {
-  dash_wd link
-  scan_dash "$WD" "$STUB:$PATH" >/dev/null
+  scan_report "-" "$WD" "$STUB:$PATH" "$KEY" >/dev/null
   [ -L "$WD/-" ]
 }
 
-@test "dash path: a directory named dash makes the scan report failure and sets the flag" {
-  dash_wd dir
-  run scan_dash "$WD" "$STUB:$PATH"
-  [ "$output" = "True [] True" ]
+@test "dash path: gitleaks 8.30.1 with a symbolic link named dash before leaves its target bytes" {
+  dash_stub
+  dash_wd link
+  scan_report "-" "$WD" "$STUB:$PATH" "$KEY" >/dev/null
+  [ "$(cat "$SCRATCH/link-target")" = "target bytes" ]
 }
 
-@test "dash path: a directory named dash never runs gitleaks" {
+@test "dash path: gitleaks 8.30.1 with a directory named dash before returns the finding and sets no flag" {
+  dash_stub
   dash_wd dir
-  scan_dash "$WD" "$STUB:$PATH" >/dev/null
-  [ ! -s "$GITLEAKS_CALL_LOG" ]
+  run scan_report "-" "$WD" "$STUB:$PATH" "$KEY"
+  [ "$output" = "False ['pulumi-api-token'] False False" ]
 }
 
-@test "dash path: a directory named dash stays a directory" {
+@test "dash path: gitleaks 8.30.1 with a directory named dash before leaves it a directory" {
+  dash_stub
   dash_wd dir
-  scan_dash "$WD" "$STUB:$PATH" >/dev/null
+  scan_report "-" "$WD" "$STUB:$PATH" "$KEY" >/dev/null
   [ -d "$WD/-" ]
 }
 
-@test "dash path: a report file that cannot be removed makes the scan report failure and sets the flag" {
-  require_old_gitleaks
-  dash_wd none
-  UNLINK_FAILS=1 run scan_dash "$WD" "$OLDBIN:$PATH"
-  [ "$output" = "True [] True" ]
+# misread_gitleaks — a gitleaks that claims 8.30.1 but, like an old binary,
+# writes its report to a file named `-` and prints nothing.
+misread_gitleaks() {
+  MISREAD="$SCRATCH/misread"
+  mkdir -p "$MISREAD"
+  cat > "$MISREAD/gitleaks" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = version ]; then echo 8.30.1; exit 0; fi
+cat >/dev/null
+printf 'stub report bytes\n' > ./-
+exit 0
+SH
+  chmod +x "$MISREAD/gitleaks"
 }
 
-@test "dash path: the real 8.30.1 returns the finding without failure and leaves the flag clear" {
-  require_real_gitleaks
+@test "dash path: a dash file that appears during a run claimed safe makes the scan report failure and sets the report-file flag" {
+  misread_gitleaks
   dash_wd none
-  run scan_dash "$WD" "$(dirname "$(real_gitleaks)"):$PATH"
-  [ "$output" = "False ['pulumi-api-token'] False" ]
+  run scan_report "-" "$WD" "$MISREAD:$PATH"
+  [ "$output" = "True [] False True" ]
 }
 
-@test "dash path: the real 8.30.1 leaves no entry named dash" {
-  require_real_gitleaks
+@test "dash path: a dash file that appears during a run claimed safe stays in place" {
+  misread_gitleaks
   dash_wd none
-  scan_dash "$WD" "$(dirname "$(real_gitleaks)"):$PATH" >/dev/null
-  [ -z "$(ls -A "$WD")" ]
+  scan_report "-" "$WD" "$MISREAD:$PATH" >/dev/null
+  [ -f "$WD/-" ]
+}
+
+@test "dash path: a dash file that appears during a run claimed safe keeps the bytes gitleaks wrote" {
+  misread_gitleaks
+  dash_wd none
+  scan_report "-" "$WD" "$MISREAD:$PATH" >/dev/null
+  [ "$(cat "$WD/-")" = "stub report bytes" ]
+}
+
+@test "dash path: a normal run asks for the version exactly once" {
+  dash_stub
+  dash_wd none
+  scan_report "-" "$WD" "$STUB:$PATH" "$KEY" >/dev/null
+  [ "$(cat "$GITLEAKS_VERSION_LOG")" = "version" ]
+}
+
+@test "dash path: a normal run scans once" {
+  dash_stub
+  dash_wd none
+  scan_report "-" "$WD" "$STUB:$PATH" "$KEY" >/dev/null
+  [ "$(wc -l < "$GITLEAKS_CALL_LOG")" -eq 1 ]
+}
+
+@test "the default report path asks for the version only off Linux" {
+  KEY="$(fake_lw)"
+  fixture_secret_prompt "$KEY"
+  drive "$CLEAN"
+  if on_linux; then
+    [ ! -s "$GITLEAKS_VERSION_LOG" ]
+  else
+    [ -s "$GITLEAKS_VERSION_LOG" ] && [ "$(sort -u "$GITLEAKS_VERSION_LOG")" = "version" ]
+  fi
+}
+
+@test "the redact library never removes a file" {
+  run grep -c 'os\.unlink\|os\.remove\|shutil\.rmtree' "$HOOKS/lib/redact.py"
+  [ "$output" = "0" ]
 }
 
 # --- hook, a pre-existing `-` file in the working directory ------------------
+#
+# Same expectation on both systems: the real gitleaks reports on its own
+# stdout, so a `-` file that was there before is ignored and left alone.
 
 # dash_file_turn — a secret turn, real gitleaks, in a working directory that
 # holds a regular `-` file with known bytes.
@@ -3677,41 +3825,175 @@ dash_file_turn() {
   [ "$(grep -cF -- "$KEY" "$WORKLOG_JSONL" || true)" -eq 0 ]
 }
 
-@test "a pre-existing dash file in the working directory logs gitleaks-failed once off Linux" {
+@test "a pre-existing dash file in the working directory logs no gitleaks-failed" {
   dash_file_turn
-  n="$(note_count gitleaks-failed)"
-  if on_linux; then [ "${n:-0}" -eq 0 ]; else [ "${n:-0}" -eq 1 ]; fi
+  n="$(note_count gitleaks-failed)"; [ "${n:-0}" -eq 0 ]
 }
 
-@test "a pre-existing dash file in the working directory logs gitleaks-report-file once off Linux" {
+@test "a pre-existing dash file in the working directory logs no gitleaks-too-old" {
   dash_file_turn
-  n="$(note_count gitleaks-report-file)"
-  if on_linux; then [ "${n:-0}" -eq 0 ]; else [ "${n:-0}" -eq 1 ]; fi
+  n="$(note_count gitleaks-too-old)"; [ "${n:-0}" -eq 0 ]
 }
 
-@test "a pre-existing dash file in the working directory judges the row on Linux and leaves it unjudged elsewhere" {
+@test "a pre-existing dash file in the working directory logs no gitleaks-report-file" {
   dash_file_turn
-  if on_linux; then
-    [ "$(field '.requests|length')" -eq 1 ]
-  else
-    [ "$(field '.requests|length')" -eq 0 ]
-  fi
+  n="$(note_count gitleaks-report-file)"; [ "${n:-0}" -eq 0 ]
 }
 
-@test "a pre-existing dash file in the working directory stores the marker on Linux" {
+@test "a pre-existing dash file in the working directory judges the row" {
   dash_file_turn
-  if on_linux; then
-    grep -qF -- "<redacted:pulumi-api-token>" "$WORKLOG_JSONL"
-  else
-    [ "$(grep -cF -- "<redacted:pulumi-api-token>" "$WORKLOG_JSONL" || true)" -eq 0 ]
-  fi
+  [ "$(field '.requests|length')" -eq 1 ]
 }
 
-@test "a pre-existing dash file in the working directory calls the model on Linux and never elsewhere" {
+@test "a pre-existing dash file in the working directory stores the marker" {
   dash_file_turn
-  if on_linux; then
-    [ -s "$CLAUDE_STDIN_LOG" ]
-  else
-    [ ! -s "$CLAUDE_STDIN_LOG" ]
-  fi
+  grep -qF -- "<redacted:pulumi-api-token>" "$WORKLOG_JSONL"
+}
+
+# --- hook, the dash path forced on either system ------------------------------
+#
+# Production code has no test switch. A sitecustomize.py on PYTHONPATH sets
+# sys.platform to "darwin" before redact.py is imported, so the REAL hook takes
+# the non-Linux branch (report path "-", version read first) on Linux too. The
+# hook's python heredocs are plain `python3 -` calls that inherit the
+# environment, so the PYTHONPATH reaches them. These tests are what fail when
+# the hook stops noting gitleaks-too-old or gitleaks-report-file.
+
+# forced_darwin — a fresh directory holding the sitecustomize.py; sets FORCED.
+forced_darwin() {
+  FORCED="$(mktemp -d "$SCRATCH/forced.XXXXXX")"
+  printf 'import sys\nsys.platform = "darwin"\n' > "$FORCED/sitecustomize.py"
+}
+
+# drive_dash <workdir> <path-prefix> <reply> [VAR=VAL ...] — the hook with the
+# dash path forced, <path-prefix> first on PATH and <workdir> as working directory.
+drive_dash() {
+  local wd="$1" pre="$2" reply="$3"
+  shift 3
+  ( cd "$wd" && drive_with "PYTHONPATH=$FORCED" "PATH=$pre:$STUB:$PATH" "$@" -- "$reply" )
+}
+
+# dash_secret_turn <version> — a secret turn through the stub gitleaks reporting
+# <version>, dash path forced, in a fresh empty WD.
+dash_secret_turn() {
+  forced_darwin
+  KEY="$(fake_pulumi)"
+  WD="$(mktemp -d "$SCRATCH/wd.XXXXXX")"
+  fixture_secret_prompt "$KEY"
+  drive_dash "$WD" "$STUB" "$(old_reply "$KEY")" "GITLEAKS_STUB_VERSION=$1"
+}
+
+@test "forced dash path: gitleaks 8.21.2 logs gitleaks-too-old once" {
+  dash_secret_turn 8.21.2
+  [ "$(note_count gitleaks-too-old)" -eq 1 ]
+}
+
+@test "forced dash path: gitleaks 8.21.2 logs gitleaks-failed once" {
+  dash_secret_turn 8.21.2
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "forced dash path: gitleaks 8.21.2 logs no gitleaks-report-file" {
+  dash_secret_turn 8.21.2
+  [ "$(note_count gitleaks-report-file)" -eq 0 ]
+}
+
+@test "forced dash path: gitleaks 8.21.2 stores one row" {
+  dash_secret_turn 8.21.2
+  [ "$(wc -l < "$WORKLOG_JSONL")" -eq 1 ]
+}
+
+@test "forced dash path: gitleaks 8.21.2 does not call the model" {
+  dash_secret_turn 8.21.2
+  [ ! -s "$CLAUDE_STDIN_LOG" ]
+}
+
+@test "forced dash path: gitleaks 8.21.2 never runs gitleaks stdin" {
+  dash_secret_turn 8.21.2
+  [ ! -s "$GITLEAKS_CALL_LOG" ]
+}
+
+@test "forced dash path: gitleaks 8.21.2 leaves no entry in the working directory" {
+  dash_secret_turn 8.21.2
+  [ -z "$(ls -A "$WD")" ]
+}
+
+@test "forced dash path: a gitleaks whose version call fails logs gitleaks-too-old once" {
+  dash_secret_turn fail
+  [ "$(note_count gitleaks-too-old)" -eq 1 ]
+}
+
+@test "forced dash path: gitleaks-too-old is logged once per session across two turns" {
+  dash_secret_turn 8.21.2
+  fixture_next_turn
+  drive_dash "$WD" "$STUB" "$CLEAN" "GITLEAKS_STUB_VERSION=8.21.2"
+  [ "$(note_count gitleaks-too-old)" -eq 1 ]
+}
+
+@test "forced dash path: gitleaks-failed is logged on each of two turns" {
+  dash_secret_turn 8.21.2
+  fixture_next_turn
+  drive_dash "$WD" "$STUB" "$CLEAN" "GITLEAKS_STUB_VERSION=8.21.2"
+  [ "$(note_count gitleaks-failed)" -eq 2 ]
+}
+
+# dash_misread_turn — a secret turn through a gitleaks that prints 8.30.1 but
+# writes a file named `-` and prints nothing, dash path forced.
+dash_misread_turn() {
+  forced_darwin
+  misread_gitleaks
+  KEY="$(fake_pulumi)"
+  WD="$(mktemp -d "$SCRATCH/wd.XXXXXX")"
+  fixture_secret_prompt "$KEY"
+  drive_dash "$WD" "$MISREAD" "$(old_reply "$KEY")"
+}
+
+@test "forced dash path: a dash file written during a run claimed safe logs gitleaks-report-file once" {
+  dash_misread_turn
+  [ "$(note_count gitleaks-report-file)" -eq 1 ]
+}
+
+@test "forced dash path: a dash file written during a run claimed safe logs gitleaks-failed once" {
+  dash_misread_turn
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "forced dash path: a dash file written during a run claimed safe logs no gitleaks-too-old" {
+  dash_misread_turn
+  [ "$(note_count gitleaks-too-old)" -eq 0 ]
+}
+
+@test "forced dash path: a dash file written during a run claimed safe does not call the model" {
+  dash_misread_turn
+  [ ! -s "$CLAUDE_STDIN_LOG" ]
+}
+
+@test "forced dash path: a dash file written during a run claimed safe stays with its bytes" {
+  dash_misread_turn
+  [ "$(cat "$WD/-")" = "stub report bytes" ]
+}
+
+# dash_old_real_turn — a secret turn through the real 8.21.2 binary, dash path forced.
+dash_old_real_turn() {
+  require_old_gitleaks
+  forced_darwin
+  KEY="$(fake_pulumi)"
+  WD="$(mktemp -d "$SCRATCH/wd.XXXXXX")"
+  fixture_secret_prompt "$KEY"
+  drive_dash "$WD" "$OLDBIN" "$(old_reply "$KEY")"
+}
+
+@test "forced dash path: the real gitleaks 8.21.2 logs gitleaks-too-old once" {
+  dash_old_real_turn
+  [ "$(note_count gitleaks-too-old)" -eq 1 ]
+}
+
+@test "forced dash path: the real gitleaks 8.21.2 leaves no entry in the working directory" {
+  dash_old_real_turn
+  [ -z "$(ls -A "$WD")" ]
+}
+
+@test "forced dash path: the real gitleaks 8.21.2 keeps the raw token out of the worklog" {
+  dash_old_real_turn
+  [ "$(grep -cF -- "$KEY" "$WORKLOG_JSONL" || true)" -eq 0 ]
 }

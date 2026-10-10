@@ -64,11 +64,9 @@ token before punctuation stays raw. (5) Without gitleaks nothing changes:
 gitleaks-only shapes stay raw. (6) gitleaks 8.19.0 and older cannot run the stdin
 call, so the scan fails on every system and the row is stored unjudged
 (gitleaks-failed). The minimum version is 8.19.1 on Linux and 8.22.0 on other
-systems; there, 8.19.1 to 8.21.2 write the report to a file named "-", which is
-removed after the run, and the scan fails
-(https://github.com/drewdrewthis/claude-plugins/issues/245). A "-" entry in the
-working directory on a non-Linux system blocks the gitleaks layer: gitleaks is
-not run and the hook notes gitleaks-report-file. (7) The
+systems. There, an older or unreadable version is not run: the row is stored
+unjudged (gitleaks-failed, gitleaks-too-old) and only the built-in rules redact
+(https://github.com/drewdrewthis/claude-plugins/issues/245). (7) The
 copies make the one gitleaks run larger (about 0.5 to 0.9 MB more), so a batch that is
 close to the gitleaks time limit without them can pass it with them; the row is
 then stored unjudged (gitleaks-failed), never unredacted.
@@ -274,8 +272,14 @@ def gitleaks_present():
 # https://github.com/drewdrewthis/claude-plugins/issues/245
 _REPORT_PATH = "/dev/stdout" if sys.platform.startswith("linux") else "-"
 
-# True when a "-" entry in the working directory blocked the run, or a raw
-# report file could not be removed. The hook reads it to note gitleaks-report-file.
+# First gitleaks version where the report path "-" means stdout. Older versions
+# write the raw report to a file named "-" in the working directory.
+_MIN_DASH_VERSION = (8, 22, 0)
+
+# Set by scan(); the hook reads them to note gitleaks-too-old (non-Linux gitleaks
+# older than _MIN_DASH_VERSION or unreadable, so it was not run) and
+# gitleaks-report-file (a "-" file appeared during a run; the hook never removes it).
+gitleaks_too_old = False
 report_file_left = False
 
 
@@ -293,20 +297,15 @@ def _report_path_usable():
         return False
 
 
-def _remove_dash_report():
-    """Remove the file that gitleaks before 8.22.0 wrote to "-"; it holds the raw secret.
-
-    Only a regular file is removed, by name: unlink never follows a link.
-    Anything else, or a failed removal, sets report_file_left.
-    """
-    global report_file_left
+def _gitleaks_version():
+    """The (major, minor, patch) of `gitleaks version`, or None when unreadable."""
     try:
-        if stat.S_ISREG(os.lstat("-").st_mode):
-            os.unlink("-")
-        else:
-            report_file_left = True
-    except OSError:
-        report_file_left = True
+        secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
+        p = subprocess.run(["gitleaks", "version"], capture_output=True, timeout=secs)
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", p.stdout.decode("utf-8", "replace"))
+        return tuple(int(g) for g in m.groups()) if p.returncode == 0 and m else None
+    except Exception:
+        return None
 
 
 def _run_gitleaks(text):
@@ -336,27 +335,26 @@ def scan(text):
     findings is [(secret, rule_id)]. Absent gitleaks is (not failed): nothing
     was attempted; the caller reports absence via gitleaks_present().
     """
-    global report_file_left
+    global gitleaks_too_old, report_file_left
     if not gitleaks_present() or not text.strip():
         return [], False
-    if _REPORT_PATH == "-":
-        # The hook cannot know whose "-" this is, so it is never read, changed
-        # or removed. Relative "-" is the working directory of the session,
-        # which is where gitleaks writes.
-        if os.path.lexists("-"):
-            report_file_left = True
-            return [], True
-    elif not _report_path_usable():
+    if _REPORT_PATH != "-":
+        return ([], True) if not _report_path_usable() else _run_gitleaks(text)
+    # The version is read first: gitleaks older than 8.22.0 writes its raw report
+    # to a file named "-", and removing that file afterwards races with a second
+    # hook run in the same directory (issue #245,
+    # https://github.com/drewdrewthis/claude-plugins/issues/245). The hook removes nothing.
+    version = _gitleaks_version()
+    if version is None or version < _MIN_DASH_VERSION:
+        gitleaks_too_old = True
         return [], True
-    try:
-        result = _run_gitleaks(text)
-    finally:
-        # Also after a timeout: a report written before it must not stay.
-        wrote_file = _REPORT_PATH == "-" and os.path.lexists("-")
-        if wrote_file:
-            _remove_dash_report()
-    # Gitleaks before 8.22.0 put the report in the file, so stdout has nothing to read.
-    return ([], True) if wrote_file else result
+    had_dash = os.path.lexists("-")
+    result = _run_gitleaks(text)
+    if not had_dash and os.path.lexists("-"):
+        # The version was misread: a report file now holds the findings, stdout has none.
+        report_file_left = True
+        return [], True
+    return result
 
 
 _MARK = "<redacted:"

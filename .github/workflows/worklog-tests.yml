@@ -115,6 +115,9 @@ jobs:
           jq --version
           gitleaks version
           "$WORKLOG_TEST_OLD_GITLEAKS" version
+          # The hook reads the version once per pass on non-Linux systems; show what that costs.
+          time gitleaks version
+          time "$WORKLOG_TEST_OLD_GITLEAKS" version
           command -v timeout || echo "no GNU timeout (expected on macOS)"
           command -v perl && perl --version | sed -n 2p
 

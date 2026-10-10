@@ -45,10 +45,12 @@
 # built-in rules saw gitleaks error or time out. The row is still written, but
 # UNJUDGED (mechanical fields only), and the model is skipped if the candidate
 # pass failed: built-ins alone must not stand in for a layer meant to run.
-# gitleaks-report-file — a caller that redacts with gitleaks found a file named
-# `-` in the working directory of the session: it blocked the gitleaks run, or
-# it can hold a raw gitleaks report that could not be removed. Written once per
-# session, with gitleaks-failed.
+# gitleaks-too-old — on a non-Linux system gitleaks is older than 8.22.0 or its
+# version cannot be read; gitleaks was not run; upgrade to 8.22.0 or later.
+# Written once per session, with gitleaks-failed on each such turn.
+# gitleaks-report-file — gitleaks created a file named `-` in the working
+# directory of the session during the run; it can hold a raw report; the caller
+# did not remove it. Written once per session, with gitleaks-failed.
 # redact-failed — a caller that redacts secrets before writing hit a RUNTIME
 # error inside redaction (the lib imported fine; that is lib-unreadable:*).
 # Unlike gitleaks-failed this writes no row at all, not an unjudged one: a
@@ -125,6 +127,7 @@ gate_failopen() {
         non-object-payload|skill-unresolvable) ;;
         transcript-unreadable|judgment-unavailable|detach-failed) ;;
         no-timeout|gitleaks-failed|gitleaks-absent|gitleaks-report-file|redact-failed) ;;
+        gitleaks-too-old) ;;
         *) why="unrecognized:${why}" ;;
     esac
     # worklog-record.sh's wl_note_once greps this exact field order.
