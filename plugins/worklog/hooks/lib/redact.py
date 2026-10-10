@@ -38,28 +38,30 @@ These limits are ACCEPTED (owner decision, issue #219:
 https://github.com/drewdrewthis/claude-plugins/issues/219). The glued-prefix
 limit leaves the WHOLE usable token raw. With gitleaks present it still holds
 for some shapes (npm, AWS key id); gitleaks finds others (Shopify). It is
-looked at again when the differential fuzz from issue #218 exists. Also
-accepted for now: no built-in rule covers Pulumi, and the gitleaks
-pulumi-api-token rule needs a terminator directly after the token. Measured
-with gitleaks 8.30.1, the whole usable token stays raw before a period, a
-comma, "/", "&", a no-break space or a curly quote, and directly after an
-ASCII letter, digit or underscore. In the same measurement it was found when
-no such character was directly in front of it and directly after it came an
-ASCII space, tab, newline, carriage return or form feed, a straight quote, a
-backtick, a semicolon, a literal "\\n" or "\\r" escape, a percent or "\\u"
-escape of one of these, or the end of the text, but not when a gitleaks allow
-comment (the word gitleaks, a colon, then allow) stood on the same line as the
-token, or stood on an earlier line or in an earlier text of the batch while the
-token was on the last line of all the scanned text with no newline after it:
-gitleaks then skipped the finding and the whole token stayed raw. A comment on
-a later line did not hide it. This exception is not specific to Pulumi: it
-applies to every token shape that only gitleaks finds; a token that a built-in
-rule finds is still redacted. Without the comment it was also redacted when
-another rule matched around it (for example a secret keyword such as "token" in
-front of it with a separator). These lists are measured, not complete; the
-"known limit:" tests pin a sample of them.
-The fix is issue #238
-(https://github.com/drewdrewthis/claude-plugins/issues/238).
+looked at again when the differential fuzz from issue #218 exists.
+
+What the gitleaks layer does (issue #238,
+https://github.com/drewdrewthis/claude-plugins/issues/238): gitleaks is called
+with --ignore-gitleaks-allow, so a gitleaks allow comment in the text no longer
+hides a finding. In the same single run it also scans 4 copies of the text with
+one space in front of punctuation, so a token that only gitleaks finds (Pulumi
+and others) is found when punctuation directly follows it. Copies are limited
+by a byte budget (smallest texts first).
+
+Limits that REMAIN: (1) a gitleaks-only token directly followed by "-", "=",
+"+" or "_" stays raw. (2) A word character glued in front (limit of issue #219,
+above). (3) A token whose own alphabet holds punctuation can be redacted in
+part or stay raw; measured on gitleaks 8.30.1 these rules: aws-amazon-bedrock-
+api-key-long-lived, azure-ad-client-secret, cloudflare-origin-ca-key,
+curl-auth-user, dropbox-short-lived-api-token, flyio-access-token, jwt,
+lob-pub-api-key, mapbox-api-token, rubygems-api-token, sidekiq-secret,
+telegram-bot-api-token, twitter-bearer-token, vault-service-token,
+yandex-access-token (rubygems-api-token and twitter-bearer-token can be
+redacted in part). (4) Texts beyond the byte budget get no copies. (5) Without
+gitleaks nothing changes: gitleaks-only shapes stay raw. (6) gitleaks older than
+8.22.0 gives the hook no findings
+(https://github.com/drewdrewthis/claude-plugins/issues/245).
+The "known limit:" tests pin a sample of these.
 Because the two stages above have separate step caps, a body can settle where
 the same text as a quote hits the cap; the quote is then dropped or matches
 only as the bare glued-secrets marker. No raw text either way.
@@ -265,7 +267,8 @@ def scan(text):
         secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
         p = subprocess.run(
             ["gitleaks", "stdin", "--no-banner", "--exit-code", "0",
-             "--report-format", "json", "--report-path", "-", "--log-level", "error"],
+             "--report-format", "json", "--report-path", "-", "--log-level", "error",
+             "--ignore-gitleaks-allow"],
             input=text.encode("utf-8", "replace"), capture_output=True, timeout=secs)
         if p.returncode != 0:
             return [], True
@@ -304,10 +307,53 @@ def apply(s, findings):
     return s
 
 
+# Byte budget for the spaced copies. Four copies multiply the scan size, and a
+# huge text would make the one gitleaks run slow enough to hit the timeout and
+# fail the whole row; texts beyond it still get the flag, just no copies.
+_COPY_BUDGET = 1000000
+
+# A line of 512 spaces between scan parts. gitleaks reads keyword context across
+# lines; the long blank line keeps one part's keyword from reaching the next
+# part's token (a plain blank line did not).
+_SEPARATOR = "\n" + " " * 512 + "\n"
+
+# Where each spaced copy gets one space in front of a character. gitleaks rules
+# end a token at a terminator; a space in front of the punctuation supplies it.
+# re.ASCII makes every non-ASCII character (no-break space, curly quote) match
+# the first pattern. "-", "=", "+", "_" are left out on purpose: a space there
+# would split tokens whose alphabet holds them (accepted limit).
+_SPACERS = [re.compile(p, re.ASCII) for p in (
+    r"(?=[^\w\s.\-/+=:])",
+    r"(?=\.)",
+    r"(?=/)",
+    r"(?=:)",
+)]
+
+
+def _scan_text(pre):
+    """The text for the single gitleaks run: the joined texts, then, when any
+    text fits the byte budget, four spaced copies of those texts, each part
+    split by a separator line and the whole ending in a newline.
+    """
+    joined = "\n".join(pre)
+    sizes = [(len(t.encode("utf-8", "replace")), i)
+             for i, t in enumerate(pre) if t.strip()]
+    fit, total = set(), 0
+    for size, i in sorted(sizes):
+        if total + size > _COPY_BUDGET:
+            break
+        total += size
+        fit.add(i)
+    if not fit:
+        return joined
+    base = "\n".join(t for i, t in enumerate(pre) if i in fit)
+    return _SEPARATOR.join([joined] + [r.sub(" ", base) for r in _SPACERS]) + "\n"
+
+
 def redact_texts(texts):
     """Rules, ONE gitleaks batch over all, full built-ins. -> (texts, failed)."""
     pre = [_rules(t) for t in texts]
-    findings, failed = scan("\n".join(pre))
+    findings, failed = scan(_scan_text(pre))
     # builtin() adds the key id run and tail steps. The result must be a
     # builtin() fixed point: verified_quote runs builtin() on the model's quote
     # and then needs an exact match in this body. A gitleaks marker with a glued

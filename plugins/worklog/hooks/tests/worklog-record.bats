@@ -98,10 +98,17 @@ SH
 #                     count lives in GITLEAKS_COUNT_FILE
 #   hang              block for 30s (exec'd, so a killed child frees the pipe)
   # GITLEAKS_CALL_LOG, when set, gets one line per invocation.
+  # GITLEAKS_STDIN_LOG, when set, gets the exact bytes the call read on stdin.
   export GITLEAKS_CALL_LOG="$SCRATCH/gitleaks-calls.txt"
   export GITLEAKS_COUNT_FILE="$SCRATCH/gitleaks-count.txt"
   cat > "$STUB/gitleaks" <<'SH'
 #!/usr/bin/env bash
+# Save stdin, then run again on the saved copy so every mode below still reads
+# it. The re-run logs the call once; this first pass must not log.
+if [ -n "${GITLEAKS_STDIN_LOG:-}" ] && [ -z "${GL_STDIN_SAVED:-}" ]; then
+  cat >"$GITLEAKS_STDIN_LOG"
+  GL_STDIN_SAVED=1 exec "$0" "$@" <"$GITLEAKS_STDIN_LOG"
+fi
 [ -n "${GITLEAKS_CALL_LOG:-}" ] && echo "$*" >>"$GITLEAKS_CALL_LOG"
 case "${GITLEAKS_STUB:-}" in
   fail) cat >/dev/null; exit 2 ;;
@@ -1423,6 +1430,10 @@ fake_npm() { fake_key "np""m_" "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5" 36; }
 # context, and no built-in rule matches it. The gitleaks-only fixture.
 fake_pulumi() { fake_key "pu""l-" "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678" 40; }
 
+# A Sentry user token: a second shape only gitleaks finds (sentry-user-token);
+# no built-in rule matches it.
+fake_sentry() { fake_key "sn""tryu_" "a1b2c3d4e5f60718" 64; }
+
 # real_gitleaks — path of the real binary, searched outside the stub dir.
 real_gitleaks() {
   local d
@@ -1672,7 +1683,7 @@ require_real_gitleaks() {
   KEY="$(fake_lw)"
   fixture_secret_prompt "$KEY"
   drive "$CLEAN"
-  grep -qxF -- "stdin --no-banner --exit-code 0 --report-format json --report-path - --log-level error" "$GITLEAKS_CALL_LOG"
+  grep -qxF -- "stdin --no-banner --exit-code 0 --report-format json --report-path - --log-level error --ignore-gitleaks-allow" "$GITLEAKS_CALL_LOG"
 }
 
 @test "an unreadable redact lib writes no row" {
@@ -2367,65 +2378,288 @@ _$(fake_do)"
 }
 
 # No built-in rule covers Pulumi, and the gitleaks pulumi-api-token rule needs
-# a terminator directly after the token. Measured with gitleaks 8.30.1: the
-# whole token stays raw before the characters pinned below and directly after
-# an ASCII word character. In the same measurement it was found before an ASCII
-# space, tab, newline, carriage return or form feed, a straight quote, a
-# backtick, a semicolon, a literal \n or \r escape, a percent or \u escape of
-# one of these, or the end of the text, and when another rule matches around it
-# (for example a secret keyword in front). It was not found when a gitleaks
-# allow comment stood on the same line as the token, or stood on an earlier
-# line (or in an earlier text of the batch) while the token was on the last
-# line of all the scanned text with no newline after it. With a further line
-# after the token's line, an earlier comment did not hide it; a comment on a
-# later line did not hide it. The tests pin a sample of these lists, which are
-# measured, not complete. Accepted for now in issue 219. The fix is issue 238.
-@test "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front" {
+# a terminator directly after the token: a space, a quote, a backtick, a
+# semicolon, a literal \n or \r escape, or the end of the text. Issue 238: the
+# redaction asks gitleaks about spaced copies of the text too, so a token
+# directly before most punctuation is found, and it ignores the gitleaks allow
+# string, so that string in the text cannot hide a token. The tests below pin
+# the fixed shapes (each follows this comment) and the shapes that stay raw.
+
+# assert_only_token_replaced <row>... — real gitleaks, ONE batch: each output
+# equals its row with only $KEY replaced by the marker of $RULE (default
+# pulumi-api-token), and the batch did not fail. Rows are separate texts, so they must not hold an allow string
+# unless the test is about that.
+assert_only_token_replaced() {
+  local out i=0 row want got rule="${RULE:-pulumi-api-token}"
+  out="$(PATH="$(dirname "$(real_gitleaks)"):$PATH" redact_batch "$@")"
+  [ "$(jq -r .failed <<<"$out")" = "false" ]
+  for row in "$@"; do
+    want="${row//$KEY/<redacted:$rule>}"
+    got="$(jq -r ".texts[$i]" <<<"$out")"
+    [ "$got" = "$want" ] || { printf 'row %d\n want: %s\n got:  %s\n' "$i" "$want" "$got" >&2; return 1; }
+    i=$((i+1))
+  done
+}
+
+@test "a pulumi token at the end of a sentence is redacted" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
-  input="open https://app.example.com/$KEY/stacks/production to check"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  input="see $KEY."
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  input="see $KEY, ok"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  input="see https://app.example.com/x?t=$KEY&a=1 ok"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  input="see x$KEY now"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  input="see ($KEY) now"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  input="see $KEY: bad"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  input="see https://app.example.com/x?key=$KEY&a=1 ok"
-  [ "$(real_redact_texts "$input")" = "$input" ]
+  [ "$(real_redact_texts "see $KEY.")" = "see <redacted:pulumi-api-token>." ]
+}
+
+@test "a pulumi token as a query value before an ampersand is redacted" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  [ "$(real_redact_texts "see https://app.example.com/x?t=$KEY&a=1 ok")" = "see https://app.example.com/x?t=<redacted:pulumi-api-token>&a=1 ok" ]
+}
+
+@test "a pulumi token directly before each ascii punctuation character is redacted" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  rows=()
+  for c in . , ')' ']' '}' : '&' '#' @ / '?' '!' '*' '%' '~'; do
+    rows+=("see $KEY$c next")
+  done
+  assert_only_token_replaced "${rows[@]}"
+}
+
+@test "a pulumi token next to a no-break space or curly double quotes is redacted" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
   nbsp=$'\xc2\xa0'
-  input="see $KEY${nbsp}now"
-  [ "$(real_redact_texts "$input")" = "$input" ]
   lq=$'\xe2\x80\x9c'
   rq=$'\xe2\x80\x9d'
-  input="say $lq$KEY$rq now"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  [ "$(real_redact_texts "open https://app.example.com/$KEY")" = "open https://app.example.com/<redacted:pulumi-api-token>" ]
-  [ "$(real_redact_texts "open https://app.example.com/x?t=$KEY")" = "open https://app.example.com/x?t=<redacted:pulumi-api-token>" ]
-  [ "$(real_redact_texts "see $KEY now")" = "see <redacted:pulumi-api-token> now" ]
-  [ "$(real_redact_texts "say \"$KEY\" now")" = "say \"<redacted:pulumi-api-token>\" now" ]
-  [ "$(real_redact_texts "see $KEY. and again $KEY now")" = "see <redacted:pulumi-api-token>. and again <redacted:pulumi-api-token> now" ]
-  [ "$(real_redact_texts 'see '"$KEY"'\nmore')" = 'see <redacted:pulumi-api-token>\nmore' ]
-  [ "$(real_redact_texts 'see '"$KEY"'%20more')" = 'see <redacted:pulumi-api-token>%20more' ]
-  [ "$(real_redact_texts 'see '"$KEY"'\u0020more')" = 'see <redacted:pulumi-api-token>\u0020more' ]
+  assert_only_token_replaced "see $KEY${nbsp}now" "say $lq$KEY$rq now" "see $KEY$rq"
+}
+
+@test "a pulumi token in round brackets, before a colon or in a query string is redacted" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  assert_only_token_replaced "see ($KEY) now" "see $KEY: bad" \
+    "see https://app.example.com/x?key=$KEY&a=1 ok" "see https://app.example.com/x?t=$KEY#frag ok"
+}
+
+@test "a pulumi token in the middle of a url path or in user info is redacted" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  assert_only_token_replaced "open https://user:$KEY@app.example.com/x to check"
+  # A path glued after the marker is 8 or more value characters, so the tail
+  # sweep takes it too (the accepted over-redaction after any marker).
+  out="$(real_redact_texts "open https://app.example.com/$KEY/stacks/production to check")"
+  [ "$out" = "open https://app.example.com/<redacted:pulumi-api-token><redacted:glued-secrets> to check" ]
+}
+
+@test "a second gitleaks-only secret shape is redacted before a period and a comma" {
+  require_real_gitleaks
+  KEY="$(fake_sentry)"
+  assert_gitleaks_only "$KEY" sentry-user-token
+  RULE=sentry-user-token assert_only_token_replaced "see $KEY." "see $KEY, ok"
+}
+
+# The old known-limit test pinned these as raw. They are redacted now: the
+# gitleaks allow string, on the same line before or after the token, with and
+# without a hash sign, and next to a period.
+@test "a pulumi token on the same line as a gitleaks allow string is redacted" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
   allow="gitleaks"":allow"
-  input="see $KEY now # $allow"
-  [ "$(real_redact_texts "$input")" = "$input" ]
+  assert_only_token_replaced "see $KEY now # $allow" "see $KEY now $allow" \
+    "# $allow see $KEY now" "$allow see $KEY now" "see $KEY. # $allow"
+}
+
+@test "a pulumi token on the last line is redacted when an earlier line holds a gitleaks allow string" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  allow="gitleaks"":allow"
   nl=$'\n'
   input="# $allow${nl}plain words here${nl}plain words here${nl}see $KEY now"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  [ "$(real_redact_texts "see $KEY now${nl}# $allow")" = "see <redacted:pulumi-api-token> now${nl}# $allow" ]
-  [ "$(real_redact_texts "# $allow${nl}see $KEY now${nl}trailer")" = "# $allow${nl}see <redacted:pulumi-api-token> now${nl}trailer" ]
-  input="# $allow see $KEY now${nl}trailer"
-  [ "$(real_redact_texts "$input")" = "$input" ]
-  [ "$(real_redact_texts "see $KEY now # other note")" = "see <redacted:pulumi-api-token> now # other note" ]
+  [ "$(real_redact_texts "$input")" = "# $allow${nl}plain words here${nl}plain words here${nl}see <redacted:pulumi-api-token> now" ]
+}
+
+@test "a pulumi token in the last text is redacted when the first text of the batch holds a gitleaks allow string" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  allow="gitleaks"":allow"
+  out="$(PATH="$(dirname "$(real_gitleaks)"):$PATH" redact_batch "$allow" "see $KEY now")"
+  [ "$(jq -c .texts <<<"$out")" = "$(jq -nc --arg a "$allow" '[$a, "see <redacted:pulumi-api-token> now"]')" ]
+}
+
+@test "a pulumi token ending the last text is redacted when the first of three texts holds a gitleaks allow string" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  allow="gitleaks"":allow"
+  out="$(PATH="$(dirname "$(real_gitleaks)"):$PATH" redact_batch "$allow" "plain words" "see $KEY now")"
+  [ "$(jq -c .texts <<<"$out")" = "$(jq -nc --arg a "$allow" '[$a, "plain words", "see <redacted:pulumi-api-token> now"]')" ]
+}
+
+# Shapes that were redacted before issue 238 keep their exact output. Also the
+# allow string AFTER or BEFORE a token on another line, which never hid it.
+@test "pulumi token shapes that were redacted before keep the same output" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  allow="gitleaks"":allow"
+  nl=$'\n'
+  assert_only_token_replaced \
+    "open https://app.example.com/x?t=$KEY" "see $KEY now" "say \"$KEY\" now" \
+    "see $KEY. and again $KEY now" 'see '"$KEY"'\nmore' 'see '"$KEY"'%20more' \
+    'see '"$KEY"' more' "see $KEY; ok" "see \`$KEY\` ok" \
+    "see $KEY now${nl}# $allow" "# $allow${nl}see $KEY now${nl}trailer" \
+    "see $KEY now # other note" "plain end"
   [ "$(real_redact_texts "PULUMI_ACCESS_TOKEN=$KEY")" = "PULUMI_ACCESS_<redacted:generic-secret>" ]
+}
+
+# Still raw after issue 238: a word character glued in front is accepted limit 2
+# of issue 219. A token directly followed by a hyphen, an equals sign, a plus
+# sign or an underscore stays raw because no spaced copy puts a space in front
+# of those four (they sit inside many tokens).
+@test "known limit: a pulumi token stays raw when a word character is glued in front or a hyphen, equals sign, plus sign or underscore follows it" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  for input in "see x$KEY now" "see $KEY-x now" "see $KEY=1 now" "see $KEY+ now" "see ${KEY}_x now"; do
+    [ "$(real_redact_texts "$input")" = "$input" ]
+  done
+}
+
+# --- spaced copies: what is sent to gitleaks (issue 238) --------------------
+
+# stub_batch <text|@file>... — redact_batch with the STUB gitleaks first on PATH.
+stub_batch() { PATH="$STUB:$PATH" redact_batch "$@"; }
+
+# big_text <file> <unit> <bytes-wanted> — <unit> repeated into <file> until it
+# holds exactly <bytes-wanted> UTF-8 bytes (the unit must divide it, or end in a
+# one-byte tail added by the caller). A megabyte does not fit in argv, so big
+# texts travel by file.
+big_text() {
+  python3 -c '
+import sys
+unit, n = sys.argv[2], int(sys.argv[3])
+b = unit.encode()
+open(sys.argv[1], "wb").write(b * (n // len(b)) + b"a" * (n % len(b)))
+' "$1" "$2" "$3"
+}
+
+@test "with gitleaks absent a pulumi token before a period comes back unchanged" {
+  KEY="$(fake_pulumi)"
+  out="$(PATH="$(path_without_gitleaks)" redact_batch "see $KEY.")"
+  [ "$(jq -r '.texts[0]' <<<"$out")" = "see $KEY." ]
+}
+
+@test "with gitleaks absent the batch is not reported as failed" {
+  KEY="$(fake_pulumi)"
+  out="$(PATH="$(path_without_gitleaks)" redact_batch "see $KEY.")"
+  [ "$(jq -r '.failed' <<<"$out")" = "false" ]
+}
+
+@test "one redact_texts call starts gitleaks exactly once" {
+  stub_batch "see one." "see two, ok" "see (three)" >/dev/null
+  [ "$(wc -l < "$GITLEAKS_CALL_LOG")" -eq 1 ]
+}
+
+# The scan text joins the original and the copies. A match must not cross from
+# the end of one part into the start of the next: with an empty line between
+# them, the word before a final "my token:" would have been read as its value.
+@test "a batch part end does not complete a keyword match with the next part" {
+  require_real_gitleaks
+  input=$'Zx9Qw7Er5Ty3Ui1Op8As6Df4 is the build id\nnotes follow\nmy token:'
+  [ "$(real_redact_texts "$input")" = "$input" ]
+}
+
+# A finding whose Secret exists only in a spaced copy ("foo .barbaz") is not a
+# substring of the text, so applying it changes nothing.
+@test "a finding that exists only in a spaced copy changes nothing" {
+  out="$(GITLEAKS_STUB="find:copy-only:foo .barbaz" stub_batch "foo.barbaz")"
+  [ "$(jq -r '.texts[0]' <<<"$out")" = "foo.barbaz" ]
+}
+
+@test "a finding that exists only in a spaced copy does not fail the batch" {
+  out="$(GITLEAKS_STUB="find:copy-only:foo .barbaz" stub_batch "foo.barbaz")"
+  [ "$(jq -r '.failed' <<<"$out")" = "false" ]
+}
+
+# The npm token is a built-in marker before the pulumi token's period is
+# scanned, so the pulumi finding must not land inside a marker. Every marker
+# stays closed and none is nested.
+@test "a built-in marker directly before a pulumi token and period leaves every marker closed and unnested" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  for input in "see $(fake_npm)$KEY." "see $(fake_npm) $KEY."; do
+    out="$(real_redact_texts "$input")"
+    [ "$(grep -o '<redacted:' <<<"$out" | wc -l)" -eq "$(grep -oE '<redacted:[a-z0-9-]+>' <<<"$out" | wc -l)" ]
+    ! grep -qE '<redacted:[^>]*<redacted:' <<<"$out"
+  done
+}
+
+# --- byte budget: only texts that fit get spaced copies ----------------------
+
+# A text of 1,000,001 bytes does not fit the 1,000,000 byte budget, so it is
+# scanned once and a small text beside it still gets its copies.
+@test "a batch with a text over the byte budget sends the 512-space separator line" {
+  big_text "$SCRATCH/big.txt" "ab, " 1000001
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
+  grep -qxE ' {512}' "$SCRATCH/stdin.txt"
+}
+
+@test "a batch with a text over the byte budget sends a spaced copy of the small text" {
+  big_text "$SCRATCH/big.txt" "ab, " 1000001
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
+  grep -qF -- "see Q ." "$SCRATCH/stdin.txt"
+}
+
+@test "a batch with a text over the byte budget sends no spaced copy of that text" {
+  big_text "$SCRATCH/big.txt" "ab, " 1000001
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
+  ! grep -qF -- "ab , " "$SCRATCH/stdin.txt"
+}
+
+@test "one text over the byte budget sends no 512-space separator line" {
+  big_text "$SCRATCH/big.txt" "ab, " 1000001
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" >/dev/null
+  ! grep -qxE ' {512}' "$SCRATCH/stdin.txt"
+}
+
+@test "one text over the byte budget sends the text and at most one final newline" {
+  big_text "$SCRATCH/big.txt" "ab, " 1000001
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" >/dev/null
+  [ "$(wc -c < "$SCRATCH/stdin.txt")" -le 1000002 ]
+}
+
+# 333,334 fullwidth commas are under 1,000,000 characters and over 1,000,000
+# UTF-8 bytes. The budget counts bytes.
+@test "a text under the budget in characters and over it in bytes gets no spaced copy" {
+  big_text "$SCRATCH/big.txt" "，" 1000002
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
+  ! grep -qF -- " ，" "$SCRATCH/stdin.txt"
+}
+
+@test "a text under the budget in characters and over it in bytes leaves the small text its copy" {
+  big_text "$SCRATCH/big.txt" "，" 1000002
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
+  grep -qF -- "see Q ." "$SCRATCH/stdin.txt"
+}
+
+# --- hook, end to end, real gitleaks ----------------------------------------
+
+# period_reply — a stub reply quoting the prompt as the model is shown it.
+period_reply() {
+  jq -nc --arg u "$U1" --arg q "my token is <redacted:pulumi-api-token>. please keep it" \
+    '{requests:[{text:"user shared a token",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}'
+}
+
+@test "the real gitleaks redacts a pulumi token followed by a period from prompt to stored row" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  fixture_secret_prompt "$KEY."
+  drive_with "GITLEAKS_STUB=passthrough" -- "$(period_reply)"
+  assert_redacted_in_worklog pulumi-api-token "$KEY"
+}
+
+@test "the real gitleaks redacts a pulumi token followed by a period in the stdin the model receives" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  fixture_secret_prompt "$KEY."
+  drive_with "GITLEAKS_STUB=passthrough" -- "$CLEAN"
+  grep -qF -- "<redacted:pulumi-api-token>" "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- "$KEY" "$CLAUDE_STDIN_LOG"
 }
 
 # The quote path runs redact.builtin once; the body path runs two stages, each
@@ -2680,6 +2914,22 @@ if failed:
     sys.exit(3)
 sys.stdout.write(texts[0])
 ' "$HOOKS/lib" "$1"
+}
+
+# redact_batch <text|@file>... — redact_texts over ONE batch with whatever
+# gitleaks the caller's PATH leads to. Prints {"texts":[...],"failed":bool}.
+# An argument starting with "@/" is read from that file, since a megabyte text
+# does not fit in argv.
+redact_batch() {
+  python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import redact
+texts = [open(a[1:], encoding="utf-8").read() if a.startswith("@/") else a
+         for a in sys.argv[2:]]
+out, failed = redact.redact_texts(texts)
+json.dump({"texts": out, "failed": bool(failed)}, sys.stdout)
+' "$HOOKS/lib" "$@"
 }
 
 # The key id run step must not hide a value from gitleaks: its generic rule
