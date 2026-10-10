@@ -1106,17 +1106,18 @@ wl_run() {
     # and nulls two uuids that were fine.
     local present; present="$(jq -R -r 'fromjson? | select(type == "object") | .uuid // empty' "$tx" 2>/dev/null || true)"
     # The membership test is a quoted `case`, not a printf-into-`grep -Fxq`
-    # pipe. Under `pipefail` (set above and in gate-failopen.sh) that pipe is a
-    # race: `grep -q` exits at the first match, and if `printf` is still writing
-    # it dies of SIGPIPE (exit 141), so the pipeline reports failure and
-    # `|| ask=""` wipes a VALID uuid (issue #218). Seen under machine load with
-    # a short list, and every time once the list outgrows the pipe buffer. No
-    # pipe means no SIGPIPE. A here-string is not the answer either: bash before
-    # 5.1 (macOS ships 3.2) backs it with a temp file. The `$ask`/`$end` inside
-    # the pattern MUST stay double-quoted so `*`, `?`, `[` in a value match only
-    # themselves; the newline wrap makes it a whole-line match, never a prefix
-    # or substring. An empty value falls through to "" either way, as it did
-    # under grep.
+    # pipe. Under `pipefail` (set above and in gate-failopen.sh) that pipe
+    # races: `grep -q` exits at the first match, and if `printf` is still
+    # writing it dies of SIGPIPE (exit 141), so the pipeline reports failure
+    # and `|| ask=""` wipes a VALID uuid. No pipe means no SIGPIPE. A
+    # here-string is not the answer either: bash before 5.1 (macOS ships 3.2)
+    # backs it with a temp file. The `$ask`/`$end` inside the pattern MUST stay
+    # double-quoted so `*`, `?`, `[` in a value match only themselves; the
+    # newline wrap makes it a whole-line match, never a prefix or substring. An
+    # empty value falls through to "" either way, as it did under grep.
+    # A value holding a newline would match two neighbouring lines of the list.
+    case "$ask" in *$'\n'*) ask="" ;; esac
+    case "$end" in *$'\n'*) end="" ;; esac
     case $'\n'"$present"$'\n' in *$'\n'"$ask"$'\n'*) ;; *) ask="" ;; esac
     case $'\n'"$present"$'\n' in *$'\n'"$end"$'\n'*) ;; *) end="" ;; esac
 

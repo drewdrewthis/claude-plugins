@@ -2713,7 +2713,8 @@ long_text() { printf 'Q%s' "$(printf 'a%.0s' $(seq 1 "$(( $1 - 1 ))"))"; }
 #     written null, whatever the other records look like (same match rule).
 # ---------------------------------------------------------------------------
 
-# fill_records <count> <uuid-expr> — append <count> small non-prompt records.
+# fill_records <count> <uuid|zero> — append <count> small non-prompt records,
+# each with a distinct uuid ("uuid") or with the number 0 as its uuid ("zero").
 # Written by python3 in one pass: a jq call per record would take minutes. The
 # type is one the slicer ignores, so the slice is unchanged by the bulk.
 fill_records() {
@@ -2753,8 +2754,9 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
   # end_uuid is the LAST uuid of the turn, so it is never early in the list.
   # Records whose uuid is the number 0 come after it: the slicer treats them
   # as uuid-less (falsy, so end_uuid stays put), jq lists each as a "0" line
-  # (an empty line would not do: $(...) strips a trailing run of them), and 70k of them leave the writer far more than a pipe buffer to send
-  # after the match.
+  # (an empty line would not do: $(...) strips a trailing run of them), and
+  # 70k of them leave the writer far more than a pipe buffer to send after the
+  # match.
   user_line "$U1" "do the thing" > "$TX"
   text_line "$U2" "done" >> "$TX"
   fill_records 70000 zero
@@ -2816,6 +2818,32 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
   text_line "$U2" "a record with the full uuid" > "$TX"
   user_line "$U1" "do the thing" >> "$TX"
   glued_line "$(text_line "${U2%????}****" "done")" >> "$TX"
+  drive "$CLEAN"
+  [ "$(jq -c .end_uuid "$WORKLOG_JSONL")" = "null" ]
+}
+
+# Under pipefail a `printf | grep -Fxq` pipe nulls valid uuids (SIGPIPE, 141).
+@test "UUID-CHECK: the hook checks uuids without a grep pipe" {
+  run grep -cF '| grep -Fxq' "$HOOK"
+  [ "$output" = "0" ]
+}
+
+# A uuid value holding a newline would match two neighbouring lines of the list
+# (jq prints it as two lines). Both records are real: the slicer keeps the
+# newline, jq -r prints it intact.
+@test "UUID-CHECK: given an ask_uuid that holds a newline spanning two listed uuids, it is written null" {
+  text_line "$U0" "first listed" > "$TX"
+  text_line "$U2" "second listed" >> "$TX"
+  user_line "$U0"$'\n'"$U2" "do the thing" >> "$TX"
+  drive "$CLEAN"
+  [ "$(jq -c .ask_uuid "$WORKLOG_JSONL")" = "null" ]
+}
+
+@test "UUID-CHECK: given an end_uuid that holds a newline spanning two listed uuids, it is written null" {
+  text_line "$U0" "first listed" > "$TX"
+  user_line "$U1" "do the thing" >> "$TX"
+  text_line "$U2" "second listed" >> "$TX"
+  text_line "$U0"$'\n'"$U2" "done" >> "$TX"
   drive "$CLEAN"
   [ "$(jq -c .end_uuid "$WORKLOG_JSONL")" = "null" ]
 }

@@ -402,7 +402,7 @@ def load_libs(args, tmp):
     """-> (candidate, reference), loaded as two separate modules."""
     ref = load_from_sha("reference", args.reference_sha or PINNED_SHA, tmp, "git fetch --unshallow")
     if args.candidate_sha:
-        cand = load_from_sha("candidate", args.candidate_sha, tmp, "git fetch origin refs/pull/217/head")
+        cand = load_from_sha("candidate", args.candidate_sha, tmp, "git fetch origin refs/pull/217/head, or git fetch --unshallow")
     else:
         cand = load_from_dir("candidate", args.candidate_dir or DEFAULT_CANDIDATE_DIR)
     return cand, ref
@@ -411,11 +411,13 @@ def load_libs(args, tmp):
 # ------------------------------------------------------------------- running --
 
 class Session(object):
-    """Both libs, the mode, and the checked redact call."""
+    """Both libs, the mode, what was measured, and the checked redact call."""
 
-    def __init__(self, mode, cand, ref):
+    def __init__(self, mode, cand, ref, present, version):
         self.mode, self.cand, self.ref = mode, cand, ref
         self.gitleaks = mode == "gitleaks"
+        self.present, self.version = present, version
+        self.failed = False
 
     def redact(self, label, lib, texts):
         try:
@@ -426,39 +428,58 @@ class Session(object):
             raise HarnessError("%s output count %d differs from input count %d" % (label, len(out), len(texts)))
         if self.gitleaks and failed:
             raise HarnessError("gitleaks failed in %s run" % label)
+        self.failed = self.failed or bool(failed)
         return out
 
     def both(self, texts):
         return self.redact("candidate", self.cand, texts), self.redact("reference", self.ref, texts)
 
 
+def hide_gitleaks(tmp):
+    """Point PATH at an empty dir so no lib can find gitleaks."""
+    empty = os.path.join(tmp, "empty-path")
+    os.makedirs(empty)
+    os.environ["PATH"] = empty
+
+
+def gitleaks_version():
+    os.environ.setdefault("WORKLOG_GITLEAKS_TIMEOUT", "120")
+    return subprocess.run(["gitleaks", "version"], capture_output=True, text=True).stdout.strip()
+
+
+def check_libs(mode, cand, ref):
+    """Both libs must report the gitleaks state the mode needs. -> measured presence."""
+    measured = {}
+    for label, lib in (("candidate", cand), ("reference", ref)):
+        try:
+            measured[label] = bool(lib.gitleaks_present())
+        except Exception as e:
+            raise HarnessError("%s error: gitleaks_present raised %s" % (label, type(e).__name__))
+        if mode == "builtin" and measured[label]:
+            raise HarnessError("gitleaks present in builtin mode (%s lib)" % label)
+        if mode == "gitleaks" and not measured[label]:
+            raise HarnessError("gitleaks not present in gitleaks mode (%s lib)" % label)
+    return measured["candidate"]
+
+
 def start_session(mode, cand, ref, tmp):
-    """Set the gitleaks environment for the mode and check both libs agree with it.
+    """Set the gitleaks environment for the mode, then check both libs agree with it.
 
     Called after every `git show`, because builtin mode removes git from PATH.
     """
+    version = None
     if mode == "gitleaks":
-        os.environ.setdefault("WORKLOG_GITLEAKS_TIMEOUT", "120")
-        version = subprocess.run(["gitleaks", "version"], capture_output=True, text=True).stdout.strip()
+        version = gitleaks_version()
     else:
-        empty = os.path.join(tmp, "empty-path")
-        os.makedirs(empty)
-        os.environ["PATH"] = empty
-        version = None
-    for label, lib in (("candidate", cand), ("reference", ref)):
-        try:
-            present = bool(lib.gitleaks_present())
-        except Exception as e:
-            raise HarnessError("%s error: gitleaks_present raised %s" % (label, type(e).__name__))
-        if present and mode == "builtin":
-            raise HarnessError("gitleaks present in builtin mode (%s lib)" % label)
-    return Session(mode, cand, ref), version
+        hide_gitleaks(tmp)
+    return Session(mode, cand, ref, check_libs(mode, cand, ref), version)
 
 
-def mode_line(mode, version):
-    if mode == "builtin":
-        return "mode=builtin gitleaks_present=False"
-    return "mode=gitleaks gitleaks_present=True version=%s failed=False" % version
+def mode_line(session):
+    if session.mode == "builtin":
+        return "mode=builtin gitleaks_present=%s" % session.present
+    return "mode=gitleaks gitleaks_present=%s version=%s failed=%s" % (
+        session.present, session.version, session.failed)
 
 
 def worse_items(corpus, cand_out, ref_out):
@@ -473,8 +494,18 @@ def worse_items(corpus, cand_out, ref_out):
     return found
 
 
-def confirm_alone(session, corpus, flagged, cap):
-    """Re-run the first `cap` flagged texts alone; keep the ones still worse."""
+def outputs_differ(cand_out, ref_out):
+    """Count of texts whose candidate output string is not the reference output string."""
+    return sum(1 for c, r in zip(cand_out, ref_out) if c != r)
+
+
+def confirm_alone(session, flagged, cap):
+    """Re-run the first `cap` flagged texts alone; keep the ones still worse.
+
+    Accepted blind spot: only texts flagged in the batch are re-run alone. A text
+    that is worse alone but not in the batch is not seen, because gitleaks
+    replaces a found secret in every text of a batch.
+    """
     kept = []
     for i, text, planted, _ in flagged[:cap]:
         cand_out, ref_out = session.both([text])
@@ -503,32 +534,34 @@ def dump_planted(path, worse):
                     f.write(line + "\n")
 
 
-def run_fuzz(args, session, version):
+def run_fuzz(args, session):
     if args.mode == "builtin":
         corpus = random_corpus(args.seed, args.n)
     else:
         corpus = pairs_corpus()
     cand_out, ref_out = session.both([t for t, _ in corpus])
     flagged = worse_items(corpus, cand_out, ref_out)
-    lines = [mode_line(args.mode, version), "corpus_sha256=" + corpus_sha256(corpus)]
+    lines = [mode_line(session), "corpus_sha256=" + corpus_sha256(corpus)]
     if args.mode == "builtin":
         worse = flagged
     else:
-        worse = confirm_alone(session, corpus, flagged, args.confirm_cap)
+        worse = confirm_alone(session, flagged, args.confirm_cap)
+        lines.append("confirm_cap=%d" % args.confirm_cap)
         lines.append("flagged=%d confirmed=%d" % (len(flagged), len(worse)))
         if len(flagged) > args.confirm_cap and not worse:
             raise HarnessError("too many to confirm: %d flagged, none of the first %d worse alone"
                                % (len(flagged), args.confirm_cap))
+    lines.append("outputs_differ=%d" % outputs_differ(cand_out, ref_out))
     report(lines, worse)
     return lines, worse
 
 
-def run_case(args, session, version):
-    recipe, mode, seed = CASES[args.name]
+def run_case(args, session):
+    recipe, _, seed = CASES[args.name]
     planted, text = recipe(random.Random(seed))
     cand_out, ref_out = session.both([text])
     worse = worse_items([(text, planted)], cand_out, ref_out)
-    lines = [mode_line(mode, version)]
+    lines = [mode_line(session), "outputs_differ=%d" % outputs_differ(cand_out, ref_out)]
     report(lines, worse)
     return lines, worse
 
@@ -578,8 +611,8 @@ def run(args):
         raise HarnessError("gitleaks not found on PATH (gitleaks mode needs it)")
     with tempfile.TemporaryDirectory() as tmp:
         cand, ref = load_libs(args, tmp)
-        session, version = start_session(mode, cand, ref, tmp)
-        lines, worse = (run_fuzz if args.cmd == "fuzz" else run_case)(args, session, version)
+        session = start_session(mode, cand, ref, tmp)
+        lines, worse = (run_fuzz if args.cmd == "fuzz" else run_case)(args, session)
     dump_planted(args.dump_planted, worse)
     print("\n".join(lines))
     return 1 if worse else 0

@@ -6,7 +6,7 @@
 #   "worse" when the candidate leaves more of the planted fake tokens in the
 #   output than the reference does. Exit 0 = no worse text, 1 = one or more,
 #   2 = the harness could not run. These tests pin that contract, the named
-#   regressions from PR 217, and the eight exit-2 failure modes.
+#   regressions from PR 217, and the nine exit-2 failure modes.
 #
 # ⚠ NO TOKEN LITERALS IN THIS FILE. Every fake token is made by the helper at
 # run time (prefix + seeded random characters). This file only holds recipe
@@ -57,7 +57,14 @@ show() {
   local l
   printf '# $ redact_diff_fuzz.py %s\n' "$*" >&3
   printf '# [exit %s]\n' "$status" >&3
-  while IFS= read -r l; do printf '# %s\n' "$l" >&3; done <<<"$output"
+  # Summary lines come first in the helper output, so a cap loses only masked texts.
+  local n=0 total
+  total="$(grep -c '' <<<"$output")"
+  while IFS= read -r l; do
+    n=$((n + 1))
+    [ "$n" -le 12 ] && printf '# %s\n' "$l" >&3
+  done <<<"$output"
+  [ "$total" -gt 12 ] && printf '# ... (%s more lines)\n' "$((total - 12))" >&3
   while IFS= read -r l; do [ -n "$l" ] && printf '# stderr: %s\n' "$l" >&3; done <<<"$stderr"
   return 0
 }
@@ -78,6 +85,7 @@ has_match() { grep -Eq -- "$1" <<<"$output"; }
 value_of() { grep -Eo -- "(^|[ ])$1=[^ ]+" <<<"$output" | head -n 1 | sed -e 's/^ //' -e "s/^$1=//"; }
 
 BUILTIN_MODE='mode=builtin gitleaks_present=False'
+# A gitleaks bump means changing this constant, the "installed" test and the workflow install step together.
 GITLEAKS_MODE='mode=gitleaks gitleaks_present=True version=8.30.1 failed=False'
 
 # no_planted_leak <planted file> — AC7. No run of 8+ chars of any planted piece
@@ -185,6 +193,7 @@ builtin_seed() {
   fuzz fuzz --mode gitleaks
   [ "$status" -eq 0 ]
   has_line "$GITLEAKS_MODE"
+  has_line confirm_cap=40
   has_match '^flagged=[0-9]+ confirmed=0$'
   has_line worse=0
 }
@@ -207,6 +216,8 @@ builtin_seed() {
 @test "named case G2 changes only marker names" {
   fuzz case --name G2 --candidate-sha "$SHA_G"
   [ "$status" -eq 0 ]
+  # The outputs differ (marker names) yet nothing is worse.
+  has_line outputs_differ=1
   has_line worse=0
 }
 
@@ -222,7 +233,8 @@ builtin_seed() {
 
 @test "gitleaks fuzz has teeth against f1f1f8a" {
   local pl="$BATS_TEST_TMPDIR/planted" confirmed
-  fuzz fuzz --mode gitleaks --candidate-sha "$SHA_H" --dump-planted "$pl"
+  # A small cap still confirms one or more texts; the default cap is kept by the clean run.
+  fuzz fuzz --mode gitleaks --candidate-sha "$SHA_H" --confirm-cap 8 --dump-planted "$pl"
   [ "$status" -eq 1 ]
   has_match '^flagged=[0-9]+ confirmed=[1-9][0-9]*$'
   confirmed="$(grep -Eo 'confirmed=[0-9]+' <<<"$output" | head -n 1 | sed 's/confirmed=//')"
@@ -230,7 +242,7 @@ builtin_seed() {
   no_planted_leak "$pl"
 }
 
-# --- AC6: eight exit-2 failure modes ----------------------------------------
+# --- AC6: nine exit-2 failure modes ----------------------------------------
 
 @test "failure mode 1 exits 2 when the pinned sha is not in the clone" {
   fuzz case --name F --reference-sha "$SHA_ABSENT"
@@ -341,15 +353,29 @@ PY
 @test "failure mode 8 exits 2 when over the cap and none of the first flagged is confirmed" {
   write_stub8
   export STUB_ALONE=clean
-  fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 5
+  fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 3
   [ "$status" -eq 2 ]
   [[ "$stderr" == *"too many to confirm"* ]]
 }
 
-@test "more than 40 flagged with a confirmed text exits 1" {
+@test "failure mode 9 exits 2 when a lib reports no gitleaks in gitleaks mode" {
+  write_stub "$BATS_TEST_TMPDIR/stub9" <<'PY'
+def gitleaks_present():
+    return False
+
+
+def redact_texts(texts):
+    return list(texts), False
+PY
+  fuzz case --name H1 --candidate-dir "$BATS_TEST_TMPDIR/stub9"
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"gitleaks not present in gitleaks mode"* ]]
+}
+
+@test "more flagged than the cap, with a confirmed text, exits 1" {
   write_stub8
   export STUB_ALONE=leak
-  fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 5
+  fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 3
   [ "$status" -eq 1 ]
   has_match '^flagged=[0-9]+ confirmed=[1-9][0-9]*$'
 }
@@ -357,9 +383,8 @@ PY
 # --- AC6b: marker rule ------------------------------------------------------
 
 @test "marker with a name outside the allowed set keeps its piece" {
-  run python3 "$HELPER" selftest
-  echo "# [exit $status]" >&3
-  while IFS= read -r l; do printf '# %s\n' "$l" >&3; done <<<"$output"
+  run --separate-stderr python3 "$HELPER" selftest
+  show selftest
   [ "$status" -eq 0 ]
   grep -Eq '^check=uppercase-marker score=[1-9][0-9]*$' <<<"$output"
 }
