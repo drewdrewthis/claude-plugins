@@ -1,30 +1,38 @@
 # Coverage map for claude-plugins#245 — gitleaks older than 8.22.0 reads a lone
 # dash as the report path as a file name: it writes the raw findings to a file
 # named "-" in the working directory and prints nothing, which the hook read as
-# "no findings". The hook asks for /dev/stdout instead. Not executable: each
-# Scenario carries a "# proves:" comment naming the bats test that proves it, or
-# the terminal evidence / grep that proves it where the suite cannot.
+# "no findings". The library asks for /dev/stdout on Linux and for the dash
+# elsewhere (macOS gives no report on /dev/stdout), and guards each path. Not
+# executable: each Scenario carries a "# proves:" comment naming the bats test
+# that proves it, or the terminal evidence / grep that proves it where the suite
+# cannot.
 
 Feature: Old gitleaks versions redact, and leave no report file behind
-  The hook runs gitleaks with --report-path /dev/stdout. On 8.19.1 and later
-  that gives the findings on stdout and creates no file. On 8.19.0 and older
-  gitleaks exits 1, which the hook records as gitleaks-failed. Before the call
-  the redact library checks the report path without following it: absent or a
-  regular file means the scan fails and gitleaks is not run.
+  The report path is /dev/stdout on Linux and a lone dash on other systems.
+  On Linux, before the call, the redact library checks /dev/stdout without
+  following it: absent or a regular file means the scan fails and gitleaks is
+  not run. Elsewhere it refuses a symbolic link named "-" in the working
+  directory, and after the call a "-" that gitleaks created or changed means the
+  scan fails and the file is removed. With 8.21.2 a Linux turn is redacted; a
+  turn on any other system is loud (gitleaks-failed, unjudged row, no model
+  call). 8.19.1 and later on Linux give the findings on stdout and no file;
+  8.19.0 and older exit 1, recorded as gitleaks-failed.
 
   # AC1
-  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 stores the pulumi marker in the worklog"
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 stores the pulumi marker in the worklog on Linux"
   # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 keeps the raw pulumi token out of the worklog"
   # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 keeps the raw pulumi token out of the stdin the model receives"
-  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a secret turn logs no gitleaks-failed"
-  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a secret turn stores a judged row"
-  Scenario: A secret turn on gitleaks 8.21.2 is redacted in the prompt and in the model reply
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a secret turn logs gitleaks-failed once off Linux and never on Linux"
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a secret turn stores one row"
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a secret turn judges the row on Linux and leaves it unjudged elsewhere"
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a secret turn calls the model on Linux and never elsewhere"
+  Scenario: A secret turn on gitleaks 8.21.2 never leaks the token, on either system
     Given gitleaks 8.21.2 is first on PATH and the hook runs in a fresh empty directory
     And a fake Pulumi token is in the prompt and in the model reply text
     When the hook records the turn
-    Then the worklog holds the pulumi-api-token marker and the token 0 times
-    And the stdin the model receives holds the token 0 times
-    And no gitleaks-failed note is logged and the row is judged
+    Then the worklog and the stdin the model receives hold the token 0 times
+    And on Linux the worklog holds the pulumi-api-token marker, no gitleaks-failed note is logged and the row is judged
+    And on other systems one gitleaks-failed note is logged, the row is unjudged and the model is called 0 times
 
   # AC2
   # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a secret turn leaves the working directory empty"
@@ -35,12 +43,16 @@ Feature: Old gitleaks versions redact, and leave no report file behind
     Then after each run the directory is still empty
 
   # AC2b
-  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a clean turn stores a judged row"
-  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a clean turn logs no gitleaks-failed"
-  Scenario: A clean turn on gitleaks 8.21.2 stays quiet
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a clean turn stores one row"
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a clean turn judges the row on Linux and leaves it unjudged elsewhere"
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a clean turn logs gitleaks-failed once off Linux and never on Linux"
+  # proves: hooks/tests/worklog-record.bats "gitleaks 8.21.2 on a clean turn calls the model on Linux and never elsewhere"
+  Scenario: A clean turn on gitleaks 8.21.2 is quiet on Linux and loud elsewhere
     Given gitleaks 8.21.2 is first on PATH
     When the hook records a turn with no secret
-    Then the row is judged and no gitleaks-failed note is logged
+    Then exactly one row is stored
+    And on Linux the row is judged, no gitleaks-failed note is logged and the model is called
+    And on other systems the row is unjudged, one gitleaks-failed note is logged and the model is called 0 times
 
   # AC3 and AC-matrix: terminal evidence, quoted in the PR
   # proves: terminal loop of the real hook over 8.18.4 8.19.0 8.19.1 8.19.2 8.19.3 8.20.0 8.21.0 8.21.1 8.21.2 8.22.0 8.30.1
@@ -52,10 +64,10 @@ Feature: Old gitleaks versions redact, and leave no report file behind
 
   # AC4c
   # proves: hooks/tests/worklog-record.bats "gitleaks is invoked with the stdin report flags"
-  Scenario: The call shape names /dev/stdout as the report path
+  Scenario: The call shape names the platform report path
     Given the gitleaks stub logs its arguments
     When the hook scans a turn
-    Then the logged arguments hold --report-path /dev/stdout
+    Then the logged arguments hold --report-path /dev/stdout on Linux and --report-path - elsewhere
 
   # AC4 a, b, d: CI log lines and one terminal comparison, quoted in the PR
   # proves: CI log of "the real gitleaks redacts a pulumi token from prompt to stored row" on both legs, the fuzz run result line, and the fuzz corpus diff at seed 1
@@ -92,7 +104,7 @@ Feature: Old gitleaks versions redact, and leave no report file behind
   # proves: hooks/tests/worklog-record.bats "a report path that is absent makes the scan report failure"
   # proves: hooks/tests/worklog-record.bats "a report path that is absent never runs gitleaks"
   Scenario: An absent report path fails the scan without running gitleaks
-    Given the report path the library uses does not exist
+    Given the report path (a non-dash path set by the test) does not exist
     When a scan is asked for on text with a fake token
     Then the scan reports failure and gitleaks is called 0 times
 
@@ -100,13 +112,13 @@ Feature: Old gitleaks versions redact, and leave no report file behind
   # proves: hooks/tests/worklog-record.bats "a report path that is a regular file never runs gitleaks"
   # proves: hooks/tests/worklog-record.bats "a report path that is a regular file keeps its bytes"
   Scenario: A regular file as report path fails the scan and is left unchanged
-    Given the report path the library uses is a regular file with known bytes
+    Given the report path (a non-dash path set by the test) is a regular file with known bytes
     When a scan is asked for on text with a fake token
     Then the scan reports failure, gitleaks is called 0 times and the bytes are unchanged
 
   # proves: hooks/tests/worklog-record.bats "the real /dev/stdout with the caller's stdout closed still returns the finding"
   Scenario: A closed stdout of the caller does not trip the guard
-    Given the real /dev/stdout and a calling process whose stdout is closed
+    Given the platform default report path and a calling process whose stdout is closed
     When a scan is asked for on text with a fake token
     Then the finding is returned
 
@@ -117,11 +129,37 @@ Feature: Old gitleaks versions redact, and leave no report file behind
     When the real hook records a turn on real 8.21.2
     Then one gitleaks-failed line is logged and /dev holds no file
 
-  # AC8
-  # proves: hooks/tests/worklog-record.bats "no call site under plugins/worklog passes the dash report path as an argv string"
-  # proves: hooks/tests/worklog-record.bats "no call site under plugins/worklog passes the dash report path as a python list"
-  Scenario: No call site keeps the dash report path
-    Given the plugins/worklog tree
-    When git grep looks for the dash report path in both spellings
-    Then it prints nothing
-    And every test helper that runs the real gitleaks pipes its stdout
+  # AC8 withdrawn: the dash is the report path on non-Linux systems, so a grep
+  # for it proves nothing. Every test helper that runs the real gitleaks still
+  # pipes its stdout and takes its report path from gl_report_path.
+
+  # AC10 (report path forced to the dash from python, run in a fresh empty directory, on both systems)
+  # proves: hooks/tests/worklog-record.bats "with the dash report path the old binary's file report makes the scan report failure"
+  # proves: hooks/tests/worklog-record.bats "with the dash report path the old binary leaves no entry named dash behind"
+  Scenario: A report written to a file named dash fails the scan and is removed
+    Given the report path is the dash and gitleaks 8.21.2 is first on PATH
+    When a scan is asked for on text with a fake token
+    Then the scan reports failure and no entry named "-" remains
+
+  # proves: hooks/tests/worklog-record.bats "with the dash report path a pre-existing dash file is no failure when the binary reports on stdout"
+  # proves: hooks/tests/worklog-record.bats "with the dash report path a pre-existing dash file keeps its bytes when the binary reports on stdout"
+  Scenario: A file named dash that gitleaks does not touch is left alone
+    Given the report path is the dash, gitleaks 8.30.1 is first on PATH and "-" is a regular file with known bytes
+    When a scan is asked for on text with a fake token
+    Then the finding is returned, the scan is not failed and the bytes are unchanged
+
+  # proves: hooks/tests/worklog-record.bats "with the dash report path a symbolic link named dash makes the scan report failure"
+  # proves: hooks/tests/worklog-record.bats "with the dash report path a symbolic link named dash never runs gitleaks"
+  # proves: hooks/tests/worklog-record.bats "with the dash report path a symbolic link named dash leaves its target bytes"
+  # proves: hooks/tests/worklog-record.bats "with the dash report path a symbolic link named dash stays a symbolic link"
+  Scenario: A symbolic link named dash fails the scan without running gitleaks
+    Given the report path is the dash and "-" is a symbolic link to a file with known bytes
+    When a scan is asked for on text with a fake token
+    Then the scan reports failure, gitleaks is called 0 times, the target keeps its bytes and the link still exists
+
+  # proves: hooks/tests/worklog-record.bats "with the dash report path a pre-existing dash file and the old binary make the scan report failure"
+  # proves: hooks/tests/worklog-record.bats "with the dash report path a pre-existing dash file and the old binary leave no entry named dash"
+  Scenario: A file named dash that gitleaks overwrites fails the scan and is removed
+    Given the report path is the dash, gitleaks 8.21.2 is first on PATH and "-" is a regular file with known bytes
+    When a scan is asked for on text with a fake token
+    Then the scan reports failure and no entry named "-" remains

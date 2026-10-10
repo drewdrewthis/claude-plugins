@@ -58,7 +58,10 @@
 # that was meant to run. If gitleaks is ABSENT: built-ins only, and
 # gitleaks-absent is noted ONCE per session (not per turn, which would swamp the
 # fail-open rate). It is not a failure: the row is complete and judged, but the
-# built-in list is narrower than gitleaks' rule set. An
+# built-in list is narrower than gitleaks' rule set. If a file named "-" is in
+# the working directory of the session and blocked the gitleaks run, or may
+# hold a raw gitleaks report that could not be removed (issue #245),
+# gitleaks-report-file is noted once per session, before gitleaks-failed. An
 # unreadable lib fails open (lib-unreadable:redact), and a redaction that dies
 # at runtime fails open (redact-failed) — never a row without completed redaction.
 #
@@ -658,6 +661,7 @@ print(json.dumps({
     "outcomes": entries("outcomes", "uuid"),
     "mistakes": entries("mistakes", "uuids"),
     "gitleaks_failed": gl_failed,
+    "gitleaks_report_file": redact.report_file_left,
 }, ensure_ascii=False))
 PY
 }
@@ -932,6 +936,7 @@ print(json.dumps({
     "candidates": "\n".join(lines),
     "gitleaks_failed": gl_failed,
     "gitleaks_absent": not redact.gitleaks_present(),
+    "gitleaks_report_file": redact.report_file_left,
 }))
 PY
 }
@@ -1102,6 +1107,9 @@ wl_run() {
     local gl_absent=0
     [ "$(printf '%s' "$slice" | jq -r '.gitleaks_absent // false')" = "true" ] \
         && gl_absent=1
+    local gl_report_file=0
+    [ "$(printf '%s' "$slice" | jq -r '.gitleaks_report_file // false')" = "true" ] \
+        && gl_report_file=1
     ask="$(printf '%s' "$slice" | jq -r '.ask_uuid // empty')"
     end="$(printf '%s' "$slice" | jq -r '.end_uuid // empty')"
     uuids="$(printf '%s' "$slice" | jq -c '.uuids // []')"
@@ -1184,6 +1192,8 @@ wl_run() {
             && { wl_unclaim; gate_failopen worklog-record redact-failed "$sid"; }
         [ "$(printf '%s' "$entries" | jq -r '.lib_unreadable // false' 2>/dev/null)" = "true" ] \
             && { wl_unclaim; gate_failopen worklog-record lib-unreadable:redact "$sid"; }
+        [ "$(printf '%s' "$entries" | jq -r '.gitleaks_report_file // false' 2>/dev/null)" = "true" ] \
+            && gl_report_file=1
         # Model text may carry a gitleaks-only secret: drop it, keep the row.
         [ "$(printf '%s' "$entries" | jq -r '.gitleaks_failed // false' 2>/dev/null)" = "true" ] \
             && { gl_failed=1; entries=""; }
@@ -1236,6 +1246,7 @@ wl_run() {
     # machine-settled half of the turn is the durable part, and losing it to a
     # model outage would lose the turn entirely. gate_failopen exits.
     [ "$gl_absent" -eq 0 ] || wl_note_once gitleaks-absent "$sid"
+    [ "$gl_report_file" -eq 0 ] || wl_note_once gitleaks-report-file "$sid"
     [ "$gl_failed" -eq 0 ] || gate_failopen worklog-record gitleaks-failed "$sid"
     [ "$judged" -eq 0 ] || gate_failopen worklog-record judgment-unavailable "$sid"
     exit 0

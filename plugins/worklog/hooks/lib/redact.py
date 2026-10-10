@@ -62,8 +62,13 @@ redacted in part). (4) Texts beyond the copy budget (the copy budget,
 _COPY_BUDGET, in bytes of original text per batch, smallest texts first) get no copies; for them a gitleaks-only
 token before punctuation stays raw. (5) Without gitleaks nothing changes:
 gitleaks-only shapes stay raw. (6) gitleaks 8.19.0 and older cannot run the stdin
-call, so the scan fails and the row is stored unjudged (gitleaks-failed); the
-minimum version is 8.19.1 (https://github.com/drewdrewthis/claude-plugins/issues/245). (7) The
+call, so the scan fails on every system and the row is stored unjudged
+(gitleaks-failed). The minimum version is 8.19.1 on Linux and 8.22.0 on other
+systems; there, 8.19.1 to 8.21.2 write the report to a file named "-", which is
+removed after the run, and the scan fails
+(https://github.com/drewdrewthis/claude-plugins/issues/245). A "-" entry in the
+working directory on a non-Linux system blocks the gitleaks layer: gitleaks is
+not run and the hook notes gitleaks-report-file. (7) The
 copies make the one gitleaks run larger (about 0.5 to 0.9 MB more), so a batch that is
 close to the gitleaks time limit without them can pass it with them; the row is
 then stored unjudged (gitleaks-failed), never unredacted.
@@ -81,6 +86,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 
 _PEM = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
@@ -262,11 +268,15 @@ def gitleaks_present():
     return bool(shutil.which("gitleaks"))
 
 
-# gitleaks older than 8.22.0 reads "-" as a file name: it writes the report, with
-# the raw secret, to a file named "-" in the working directory. /dev/stdout
-# gives the report on stdout from 8.19.1 on.
+# Where gitleaks writes its JSON report. Linux only: /dev/stdout gives the
+# report on stdout from 8.19.1 on, but macOS gives no report there (measured
+# on 8.21.2 and 8.30.1). Other systems use "-", which is stdout from 8.22.0 on.
 # https://github.com/drewdrewthis/claude-plugins/issues/245
-_REPORT_PATH = "/dev/stdout"
+_REPORT_PATH = "/dev/stdout" if sys.platform.startswith("linux") else "-"
+
+# True when a "-" entry in the working directory blocked the run, or a raw
+# report file could not be removed. The hook reads it to note gitleaks-report-file.
+report_file_left = False
 
 
 def _report_path_usable():
@@ -283,16 +293,23 @@ def _report_path_usable():
         return False
 
 
-def scan(text):
-    """One gitleaks run over `text`. Returns (findings, failed).
+def _remove_dash_report():
+    """Remove the file that gitleaks before 8.22.0 wrote to "-"; it holds the raw secret.
 
-    findings is [(secret, rule_id)]. Absent gitleaks is (not failed): nothing
-    was attempted; the caller reports absence via gitleaks_present().
+    Only a regular file is removed, by name: unlink never follows a link.
+    Anything else, or a failed removal, sets report_file_left.
     """
-    if not gitleaks_present() or not text.strip():
-        return [], False
-    if not _report_path_usable():
-        return [], True
+    global report_file_left
+    try:
+        if stat.S_ISREG(os.lstat("-").st_mode):
+            os.unlink("-")
+        else:
+            report_file_left = True
+    except OSError:
+        report_file_left = True
+
+
+def _run_gitleaks(text):
     try:
         secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
         p = subprocess.run(
@@ -311,6 +328,35 @@ def scan(text):
         return out, False
     except Exception:
         return [], True
+
+
+def scan(text):
+    """One gitleaks run over `text`. Returns (findings, failed).
+
+    findings is [(secret, rule_id)]. Absent gitleaks is (not failed): nothing
+    was attempted; the caller reports absence via gitleaks_present().
+    """
+    global report_file_left
+    if not gitleaks_present() or not text.strip():
+        return [], False
+    if _REPORT_PATH == "-":
+        # The hook cannot know whose "-" this is, so it is never read, changed
+        # or removed. Relative "-" is the working directory of the session,
+        # which is where gitleaks writes.
+        if os.path.lexists("-"):
+            report_file_left = True
+            return [], True
+    elif not _report_path_usable():
+        return [], True
+    try:
+        result = _run_gitleaks(text)
+    finally:
+        # Also after a timeout: a report written before it must not stay.
+        wrote_file = _REPORT_PATH == "-" and os.path.lexists("-")
+        if wrote_file:
+            _remove_dash_report()
+    # Gitleaks before 8.22.0 put the report in the file, so stdout has nothing to read.
+    return ([], True) if wrote_file else result
 
 
 _MARK = "<redacted:"
