@@ -248,12 +248,19 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run
     Then the output equals the input
 
+  # proves: hooks/tests/worklog-record.bats "known limit: with gitleaks, a word character glued in front of a token still keeps the token raw"
+  Scenario: With gitleaks, a word character glued in front of a token keeps the token raw
+    Given an npm token preceded by x, an npm token preceded by FOO_, and an AWS key id preceded by A
+    When the real gitleaks runs
+    Then each output equals its input
+
   # proves: hooks/tests/worklog-record.bats "known limit: a pulumi token in the middle of a URL path is not found by gitleaks"
   Scenario: A Pulumi token in the middle of a URL path is not found by gitleaks
     Given a Pulumi token in the middle of a URL path
     When the real gitleaks runs
     Then the output equals the input
     And the same token at the end of the URL path is redacted
+    And the same token in a query string is redacted
 
   # proves: hooks/tests/worklog-record.bats "known limit: a body can settle where the same text as a quote hits the step cap"
   Scenario: A body can settle where the same text as a quote hits the step cap

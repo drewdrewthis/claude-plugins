@@ -2343,16 +2343,26 @@ _$(fake_do)"
   [ "$(builtin_out "$input")" = "$input" ]
 }
 
+# gitleaks 8.30.1 does not cover this either. Accepted in issue 219; looked at
+# again when the fuzz from issue 218 exists.
+@test "known limit: with gitleaks, a word character glued in front of a token still keeps the token raw" {
+  require_real_gitleaks
+  for input in "x$(fake_npm)" "FOO_$(fake_npm)" "A$(fake_aws)"; do
+    [ "$(real_redact_texts "$input")" = "$input" ]
+  done
+}
+
 # gitleaks 8.30.1 behaviour: no built-in rule covers Pulumi, so only the
 # gitleaks generic rule can catch the token, and it misses it mid-path.
 # Accepted limit, tracked in issue 219. The path-end control shows the token
-# shape is otherwise found.
+# shape is otherwise found, in a query string as well.
 @test "known limit: a pulumi token in the middle of a URL path is not found by gitleaks" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
   input="open https://app.example.com/$KEY/stacks/production to check"
   [ "$(real_redact_texts "$input")" = "$input" ]
   [ "$(real_redact_texts "open https://app.example.com/$KEY")" = "open https://app.example.com/<redacted:pulumi-api-token>" ]
+  [ "$(real_redact_texts "open https://app.example.com/x?t=$KEY")" = "open https://app.example.com/x?t=<redacted:pulumi-api-token>" ]
 }
 
 # The quote path runs redact.builtin once; the body path runs two stages, each
