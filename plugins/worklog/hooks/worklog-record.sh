@@ -705,12 +705,12 @@ def blocks(r):
     c = msg(r).get("content")
     return c if isinstance(c, list) else []
 
-def text_of(r):
+def text_of(r, each=lambda t: t):
     c = msg(r).get("content")
     if isinstance(c, str):
-        return c
+        return each(c)
     if isinstance(c, list):
-        return " ".join(b.get("text", "") for b in c
+        return " ".join(each(b.get("text", "")) for b in c
                         if isinstance(b, dict) and b.get("type") == "text")
     return ""
 
@@ -844,8 +844,7 @@ for r in turn:
 CHANNEL_OPEN = re.compile(r"\s*<channel(?=[\s>])(?:[^>\"']|\"[^\"]*\"|'[^']*')*>\s*")
 # The closing tag is stripped with str ops: a `\s*...\s*$` regex is quadratic on
 # a long whitespace run.
-# Only one leading wrapper is removed; a record holding two wrapped messages
-# keeps the second wrapper (known limit).
+# One leading wrapper is removed per text block (see text_of's `each`).
 def unwrap_channel(text):
     m = CHANNEL_OPEN.match(text)
     if not m:
@@ -880,7 +879,7 @@ for r in recs:
                                      if isinstance(y, dict))
             body = " ".join(parts)
         else:
-            kind, body = "user", unwrap_channel(text_of(r))
+            kind, body = "user", text_of(r, unwrap_channel)
     else:
         tools = [b.get("name") for b in blocks(r)
                  if isinstance(b, dict) and b.get("type") == "tool_use"]

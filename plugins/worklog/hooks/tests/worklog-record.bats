@@ -2672,6 +2672,16 @@ long_text() { printf 'Q%s' "$(printf 'a%.0s' $(seq 1 "$(( $1 - 1 ))"))"; }
   [ "$(field '.requests[0].quote')" = 'look at <channel source="x"> in the log' ]
 }
 
+@test "a record of two wrapped text blocks shows the model both texts and no channel tag" {
+  jq -nc --arg u "$U1" --arg a "$(chan_text 'first message here')" --arg b "$(chan_text 'second message here')" \
+    '{type:"user",uuid:$u,message:{role:"user",content:[{type:"text",text:$a},{type:"text",text:$b}]}}' > "$TX"
+  drive "$(wl_reply 'first message here')"
+  grep -qF -- 'first message here' "$CLAUDE_STDIN_LOG"
+  grep -qF -- 'second message here' "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- '<channel' "$CLAUDE_STDIN_LOG"
+  ! grep -qF -- '</channel>' "$CLAUDE_STDIN_LOG"
+}
+
 @test "an opening tag with no closing tag is still removed from the candidate body" {
   user_line "$U1" "$(printf '<channel source="x" chat_id="1">\nhello there friend')" > "$TX"
   drive "$(wl_reply 'hello there friend')"

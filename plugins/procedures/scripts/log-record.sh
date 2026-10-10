@@ -192,7 +192,7 @@ cmd_mistake() {
             || die "--source must be <session-id>:<first>-<last> (got: $source)"
         [ $((10#${BASH_REMATCH[2]})) -le $((10#${BASH_REMATCH[3]})) ] \
             || die "--source range runs backwards (got: $source)"
-        [ $((10#${BASH_REMATCH[3]} - 10#${BASH_REMATCH[2]})) -lt "$SOURCE_MAX_SPAN" ] \
+        [ $((10#${BASH_REMATCH[3]} - 10#${BASH_REMATCH[2]} + 1)) -lt "$SOURCE_MAX_SPAN" ] \
             || die "--source range is too wide: keep it under $SOURCE_MAX_SPAN lines (got: $source)"
         [ -n "$session" ] || session="${BASH_REMATCH[1]}"
     fi
@@ -241,8 +241,8 @@ cmd_mistake() {
 
 # _source_overlap <source> — print the ts of the first row, in this file or any
 # store root's mistakes.jsonl, whose source shares a line with <source> (same
-# id, ranges share at least one line). Rows whose own span is >= SOURCE_MAX_SPAN
-# are ignored. Unparseable lines are skipped; an unreadable
+# id, ranges share at least one line). Rows whose own span (last - first + 1
+# lines) is >= SOURCE_MAX_SPAN are ignored. Unparseable lines are skipped; an unreadable
 # file is noted on stderr and skipped (fail open: it must not block logging).
 # A row with no ts prints "?" so it still counts as a hit.
 _source_overlap() {
@@ -261,7 +261,7 @@ _source_overlap() {
             ($src | parse) as $n
             | first(inputs | fromjson? | select(type == "object" and (.source | type) == "string")
             | ((.source | parse?) // empty) as $o
-            | select($o.b - $o.a < $cap and $o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
+            | select($o.b - $o.a + 1 < $cap and $o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
             | (.ts | if type == "string" and . != "" then . else "?" end))' "$f")" \
             || { printf 'log-record: note: could not read %s; duplicate check skipped for it\n' "$f" >&2; continue; }
         hit="${hit%%$'\n'*}"

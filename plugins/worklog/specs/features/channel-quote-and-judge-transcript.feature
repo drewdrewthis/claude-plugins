@@ -74,10 +74,17 @@ Feature: The worklog judge leaves no transcript and quotes the owner, not the wr
 
   # proves: worklog-record.bats "an opening tag with no closing tag is still removed from the candidate body"
   @integration
-  Scenario: An unclosed opening tag is still removed
+  Scenario: An unclosed opening tag is still removed; A record of two wrapped text blocks is unwrapped per block
     Given a user turn with an opening channel tag and no closing tag
     When the candidates are built
     Then the body shown to the model is the text after the tag
+
+  # proves: worklog-record.bats "a record of two wrapped text blocks shows the model both texts and no channel tag"
+  @integration
+  Scenario: A record of two wrapped text blocks is unwrapped per block
+    Given a user record with two text blocks, each a wrapped message
+    When the candidates are built
+    Then the body shown to the model holds both texts and no channel tag
 
   # proves: worklog-record.bats "a plain user line stores the same quote as before"
   @integration

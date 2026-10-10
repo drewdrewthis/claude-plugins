@@ -401,11 +401,11 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
 
 @test "a --source whose span reaches the cap is refused and appends nothing" {
   _src_env
-  _m --source "s1:10-2010"
+  _m --source "s1:10-2009"
   [ "$status" -eq 1 ]
   [[ "$output" == *2000* ]]
   [ ! -s "$MISTAKES_JSONL" ]
-  _m --source "s1:10-2009"   # control: one under the cap is accepted
+  _m --source "s1:10-2008"   # control: 1999 lines is accepted
   [ "$status" -eq 0 ]
   [ "$(_rows)" -eq 1 ]
 }
@@ -416,6 +416,18 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
   _m --source "victim:50-60"
   [ "$status" -eq 0 ]
   [ "$(_rows)" -eq 2 ]
+}
+
+@test "a stored row of 2000 lines is ignored and one of 1999 lines blocks an overlapping new row" {
+  _src_env
+  jq -nc '{ts:"T1",source:"x:10-2009"}' > "$MISTAKES_JSONL"
+  _m --source "x:50-52"
+  [ "$status" -eq 0 ]
+  [ "$(_rows)" -eq 2 ]
+  jq -nc '{ts:"T1",source:"x:10-2008"}' > "$MISTAKES_JSONL"
+  _m --source "x:50-52"
+  [ "$status" -eq 0 ]
+  [ "$(_rows)" -eq 1 ]
 }
 
 @test "a wide-span row in a second store root does not suppress a narrow new row" {
