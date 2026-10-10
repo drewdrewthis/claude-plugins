@@ -56,8 +56,9 @@
 
 set -euo pipefail
 
-# Widest --source span (b - a) accepted or counted: without it one row such as
-# victim:1-999999999 would make every later range for that id a "duplicate".
+# A --source range of this many lines or more (last - first + 1) is refused on
+# write and ignored on read: without the cap one row such as victim:1-999999999
+# would make every later range for that id a "duplicate".
 SOURCE_MAX_SPAN=2000
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

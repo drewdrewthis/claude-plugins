@@ -7,7 +7,7 @@
 Feature: Mistake rows carry the session and refuse a duplicate
   The librarian skips worklog judge transcripts. log-record.sh mistake takes
   --source <id>:<a>-<b>, fills the session from it, and refuses a second row for
-  the same session and an overlapping or touching line range in any store root.
+  the same session and a line range that shares at least one line in any store root.
 
   # proves: librarian-batch.bats "a worklog judge transcript is never issued and gets no cursor", "a judge transcript's text is absent from the batch"
   @integration
@@ -79,6 +79,13 @@ Feature: Mistake rows carry the session and refuse a duplicate
     When an overlapping --source is given
     Then nothing is appended
 
+  # proves: log-record.bats "a --source whose span reaches the cap is refused and appends nothing", "a stored row of 2000 lines is ignored and one of 1999 lines blocks an overlapping new row", "a stored wide-span row does not make a narrow new row a duplicate", "a wide-span row in a second store root does not suppress a narrow new row"
+  @integration
+  Scenario: A range of 2000 lines or more is refused, and a stored one is ignored
+    Given a call with --source s1:10-2009, and a stored row of 2000 lines
+    When the call runs, or a narrow overlapping --source is given
+    Then the first is refused and the stored wide row never counts as a duplicate
+
   # proves: log-record.bats "a refused duplicate leaves the earlier bytes unchanged", "an accepted append leaves the earlier bytes unchanged"
   @integration
   Scenario: Earlier rows are never rewritten
@@ -110,7 +117,7 @@ Feature: Mistake rows carry the session and refuse a duplicate
 # --- AC Coverage Map ---
 # AC2 -> A judge transcript is skipped; A session that quotes the judge text later is still issued; An empty or garbled transcript does not abort the batch
 # AC3 -> --source sets the session; A malformed --source is refused; No session flag still appends, with a note
-# AC4 -> The same session and range is a duplicate; Overlapping, touching and re-categorised ranges are duplicates; Other sessions, distant ranges and source-less rows do not match; A match in another store root counts; Earlier rows are never rewritten; Ten parallel identical calls leave one row
+# AC4 -> The same session and range is a duplicate; Overlapping, touching and re-categorised ranges are duplicates; Other sessions, distant ranges and source-less rows do not match; A match in another store root counts; Earlier rows are never rewritten; Ten parallel identical calls leave one row; A range of 2000 lines or more is refused, and a stored one is ignored
 # AC5 -> no scenario here: proven by two real librarian wakes over one fixture (one row, then a duplicate, file unchanged).
 #        The stored range overlaps the lines of the mistake (10-14 in the fixture); the librarian chooses the bounds.
 # AC11 -> The gate accepts source rows and old-flag calls still append

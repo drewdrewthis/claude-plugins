@@ -74,7 +74,7 @@ Feature: The worklog judge leaves no transcript and quotes the owner, not the wr
 
   # proves: worklog-record.bats "an opening tag with no closing tag is still removed from the candidate body"
   @integration
-  Scenario: An unclosed opening tag is still removed; A record of two wrapped text blocks is unwrapped per block
+  Scenario: An unclosed opening tag is still removed
     Given a user turn with an opening channel tag and no closing tag
     When the candidates are built
     Then the body shown to the model is the text after the tag
@@ -95,5 +95,5 @@ Feature: The worklog judge leaves no transcript and quotes the owner, not the wr
 
 # --- AC Coverage Map ---
 # AC1 -> (real-run evidence, not a bats test; the flag itself) The judge call saves no transcript
-# AC9 -> The candidate body starts at the owner's first character; A long quote span from a wrapped message is capped at 120 with no tag; A short wrapped message is quoted whole, without the closing tag; A 256-char opening tag changes nothing; A secret in the wrapped text is redacted in the quote; No tag attribute is stored; A wrapper with empty text gives no request and no error
+# AC9 -> The candidate body starts at the owner's first character; A long quote span from a wrapped message is capped at 120 with no tag; A short wrapped message is quoted whole, without the closing tag; A 256-char opening tag changes nothing; A secret in the wrapped text is redacted in the quote; No tag attribute is stored; A wrapper with empty text gives no request and no error; A record of two wrapped text blocks is unwrapped per block
 # AC10 -> A plain user line is unchanged; A channel tag that is not at the start is left alone; An unclosed opening tag is still removed
