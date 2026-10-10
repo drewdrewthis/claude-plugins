@@ -410,10 +410,9 @@ separately):
 - Scripts: `~/.claude/scripts/session-truth`, `scripts/verify-ci-shard-tally.sh`,
   `~/.claude/tooling/orchardist-watch/pr.sh` (the skill names a `gh pr checks --watch`
   fallback for boxes without it), `records/procedures/github/scripts/tag.sh`.
-- Readiness check: `~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh`
-  and its `lib/gh-checks-rest.sh`, from the
-  https://github.com/drewdrewthis/langwatch-sweatshop toolkit. The skill calls it by
-  that path.
+- Readiness check, from the https://github.com/drewdrewthis/langwatch-sweatshop toolkit
+  (not orchard-codex): `~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh`
+  and its `lib/gh-checks-rest.sh`. The skill calls it by that path.
 - Hook: `~/.claude/hooks/ship-flow-stop.sh` (the Stop hook that blocks premature
   `done`). Config: `~/.claude/fleet.env`.
 - Knowledge records: the `~/.knowledge/modules/shared/records/**` deep-dive
