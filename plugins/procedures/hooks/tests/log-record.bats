@@ -223,20 +223,14 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
   [ "$(jq -r .session "$MISTAKES_JSONL")" = "X" ]
 }
 
-@test "a --source of the wrong shape exits non-zero" {
+@test "a --source of the wrong shape exits non-zero and appends nothing" {
   _src_env
   _m --source "s0:1-2"                      # control: a well-formed value is accepted
   [ "$status" -eq 0 ]
-  for bad in abc "s1:5-3" ":1-2" "s1:a-b" "s1:5"; do
+  for bad in abc "s1:5-3" ":1-2" "s1:a-b" "s1:5" "a b:1-2" $'a\nb:1-2' "s1:1-99999999999999999999"; do
     _m --source "$bad"
     [ "$status" -ne 0 ]
   done
-}
-
-@test "a --source of the wrong shape appends nothing" {
-  _src_env
-  _m --source "s0:1-2"
-  _m --source "s1:5-3"
   [ "$(_rows)" -eq 1 ]
 }
 
@@ -261,11 +255,41 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
   [ "$(_rows)" -eq 1 ]
 }
 
-@test "the duplicate note names the session, the range and the matched row's ts" {
+@test "the duplicate note names the source, the range and the matched row's ts" {
   _src_env
   _m --source "s1:653-670" --ts 2026-01-02T03:04:05Z
   _m --source "s1:653-670"
   [[ "$output" == *duplicate* && "$output" == *s1* && "$output" == *653-670* && "$output" == *2026-01-02T03:04:05Z* ]]
+}
+
+@test "a covering row with an empty or missing ts still counts as a duplicate" {
+  _src_env
+  jq -nc '{ts:"",source:"s1:653-670"}' > "$MISTAKES_JSONL"
+  _m --source "s1:660-675"
+  [[ "$output" == *duplicate* ]]
+  jq -nc '{source:"s2:1-5"}' > "$MISTAKES_JSONL"
+  _m --source "s2:3-4"
+  [[ "$output" == *duplicate* ]]
+}
+
+@test "a MISTAKES_JSONL that cannot be appended to exits non-zero and never says appended" {
+  _src_env
+  unset CODEX_ROOT
+  export MISTAKES_JSONL="$D/a/dir"; mkdir -p "$MISTAKES_JSONL"
+  _m --source "s1:1-2"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *appended\ mistake* ]]
+}
+
+@test "an unreadable neighbour mistakes.jsonl is named and does not block the append" {
+  _src_env
+  jq -nc '{source:"s1:1-2"}' > "$D/b/mistakes.jsonl"
+  chmod 000 "$D/b/mistakes.jsonl"
+  _m --source "s1:1-2"
+  chmod 644 "$D/b/mistakes.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$D/b/mistakes.jsonl"* && "$output" == *"duplicate check skipped"* ]]
+  [ "$(_rows)" -eq 1 ]
 }
 
 @test "an overlapping range in the same session is a duplicate" {
@@ -335,7 +359,7 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
   [ "$(head -c "$(wc -c < "$D/before")" "$MISTAKES_JSONL" | cmp - "$D/before"; echo $?)" = 0 ]
 }
 
-@test "ten parallel identical calls leave one new row" {
+@test "ten parallel identical calls leave one new row and every line parses as JSON" {
   _src_env
   local i
   for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -344,15 +368,13 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
   done
   wait
   [ "$(_rows)" -eq 1 ]
+  jq -e . "$MISTAKES_JSONL" >/dev/null
 }
 
-@test "after ten parallel calls every line parses as JSON" {
+@test "a call with only the old flags appends to a file that already holds source rows" {
   _src_env
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    bash "$LOG" mistake --category c --trigger t --description d --correction x \
-      --severity low --source "s1:653-670" >/dev/null 2>&1 &
-  done
-  wait
-  jq -e . "$MISTAKES_JSONL" >/dev/null
+  jq -nc '{session:"s1",source:"s1:653-670",category:"c"}' > "$MISTAKES_JSONL"
+  _m
+  [ "$status" -eq 0 ]
+  [ "$(_rows)" -eq 2 ]
 }

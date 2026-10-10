@@ -16,11 +16,12 @@
 # that quoted literal truncates the JSON). This script fixes it by construction.
 #
 # Subcommands:
-#   mistake       append a row to mistakes.jsonl (--source <id>:<a>-<b> names the
-#                 transcript lines, sets the session, and refuses a row whose
-#                 lines an existing row of that session already covers; under the mistakes lock that
-#                 commit-records.sh's quarantine rewrite also takes, see
-#                 lib/mistakes-lock.sh; an unterminated last row is ended first)
+#   mistake       append a row to mistakes.jsonl, under the mistakes lock that
+#                 commit-records.sh's quarantine rewrite also takes (see
+#                 lib/mistakes-lock.sh); an unterminated last row is ended first.
+#                 --source <id>:<a>-<b> names the transcript lines, sets the
+#                 session, and refuses a row whose lines an existing row with
+#                 that id already covers.
 #   decision      write records/decisions/<date>-<slug>.md
 #   solution      write records/solutions/<date>-<slug>.md
 #   failure-mode  write/update records/failure-modes/<slug>.md
@@ -180,7 +181,7 @@ cmd_mistake() {
     # --source <id>:<a>-<b> names the transcript lines that show the mistake;
     # its id fills --session when that is absent.
     if [ -n "$source" ]; then
-        [[ "$source" =~ ^(.+):([0-9]+)-([0-9]+)$ ]] \
+        [[ "$source" =~ ^([^[:space:]]+):([0-9]{1,9})-([0-9]{1,9})$ ]] \
             || die "--source must be <session-id>:<first>-<last> (got: $source)"
         [ $((10#${BASH_REMATCH[2]})) -le $((10#${BASH_REMATCH[3]})) ] \
             || die "--source range runs backwards (got: $source)"
@@ -228,7 +229,9 @@ cmd_mistake() {
 
 # _source_overlap <source> — print the ts of the first row, in this file or any
 # store root's mistakes.jsonl, whose source shares a line with <source> (same
-# id, ranges overlap or touch). Unparseable lines are skipped.
+# id, ranges overlap or touch). Unparseable lines are skipped; an unreadable
+# file is noted on stderr and skipped (fail open: it must not block logging).
+# A row with no ts prints "?" so it still counts as a hit.
 _source_overlap() {
     local f files=("$MISTAKES_JSONL")
     for f in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do files+=("$f/mistakes.jsonl"); done
@@ -239,9 +242,10 @@ _source_overlap() {
                 | .a |= tonumber | .b |= tonumber;
             ($src | parse) as $n
             | fromjson? | select(type == "object" and (.source | type) == "string")
-            | select((.source | parse) as $o
-                     | $o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
-            | .ts' "$f"
+            | ((.source | parse?) // empty) as $o
+            | select($o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
+            | (.ts | if type == "string" and . != "" then . else "?" end)' "$f" \
+            || { [ "$?" -eq 141 ] || printf 'log-record: note: could not read %s; duplicate check skipped for it\n' "$f" >&2; }
     done | head -n1
 }
 
@@ -255,14 +259,14 @@ _append_row() {
     # `|| true`: head closing the pipe early must not read as "no match".
     [ -z "${2:-}" ] || seen="$(_source_overlap "$2" || true)"
     if [ -n "$seen" ]; then
-        printf 'log-record: duplicate: session %s lines %s already logged (row ts %s); nothing appended\n' \
+        printf 'log-record: duplicate: source %s lines %s already logged (row ts %s); nothing appended\n' \
             "${2%:*}" "${2##*:}" "$seen" >&2
         return 0
     fi
     if [ -s "$MISTAKES_JSONL" ] && [ -n "$(tail -c1 "$MISTAKES_JSONL")" ]; then
-        printf '\n' >> "$MISTAKES_JSONL"
+        printf '\n' >> "$MISTAKES_JSONL" || return 1
     fi
-    printf '%s\n' "$1" >> "$MISTAKES_JSONL"
+    printf '%s\n' "$1" >> "$MISTAKES_JSONL" || return 1
     printf 'log-record: appended mistake to %s\n' "$MISTAKES_JSONL" >&2
 }
 

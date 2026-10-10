@@ -2683,3 +2683,12 @@ long_text() { printf 'Q%s' "$(printf 'a%.0s' $(seq 1 "$(( $1 - 1 ))"))"; }
   drive "$(wl_reply 'do the thing please')"
   [ "$(field '.requests[0].quote')" = 'do the thing please' ]
 }
+
+# A whitespace-run regex around the closing tag was quadratic: 200,000 spaces took 120 s.
+@test "a wrapped body with a 200000-space run is unwrapped fast and the row is written" {
+  # Built inside jq: 200,000 chars exceed the shell's single-argument limit.
+  jq -nc --arg u "$U1" '{type:"user",uuid:$u,message:{role:"user",
+    content:("<channel source=\"x\">\nx" + (" " * 200000) + "y\n</channel>")}}' > "$TX"
+  drive "$(wl_reply "x")"
+  [ "$(field '.requests|length')" -eq 1 ]
+}

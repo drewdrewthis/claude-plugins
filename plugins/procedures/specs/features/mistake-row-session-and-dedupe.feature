@@ -37,7 +37,7 @@ Feature: Mistake rows carry the session and refuse a duplicate
     When the row is appended
     Then session is s1 and source is s1:653-670, and an explicit --session wins
 
-  # proves: log-record.bats "a --source of the wrong shape exits non-zero", "a --source of the wrong shape appends nothing"
+  # proves: log-record.bats "a --source of the wrong shape exits non-zero and appends nothing"
   @integration
   Scenario: A malformed --source is refused
     Given a --source that is not <id>:<int>-<int> with a <= b
@@ -51,7 +51,7 @@ Feature: Mistake rows carry the session and refuse a duplicate
     When the row is appended
     Then session is empty and stderr says no session
 
-  # proves: log-record.bats "the same session and range again appends nothing and exits 0", "the duplicate note names the session, the range and the matched row's ts"
+  # proves: log-record.bats "the same session and range again appends nothing and exits 0", "the duplicate note names the source, the range and the matched row's ts"
   @integration
   Scenario: The same session and range is a duplicate
     Given a row for s1:653-670
@@ -86,7 +86,7 @@ Feature: Mistake rows carry the session and refuse a duplicate
     When a call is refused or accepted
     Then the earlier bytes are identical
 
-  # proves: log-record.bats "ten parallel identical calls leave one new row", "after ten parallel calls every line parses as JSON"
+  # proves: log-record.bats "ten parallel identical calls leave one new row and every line parses as JSON"
   @integration
   Scenario: Ten parallel identical calls leave one row
     Given ten parallel calls with one --source
@@ -100,7 +100,7 @@ Feature: Mistake rows carry the session and refuse a duplicate
     When its mistake write row is read
     Then it contains --source
 
-  # proves: commit-records.bats "AC11: a commit that adds a mistake row with a source key is accepted", "AC11: a call with only the old flags appends to a file that already holds source rows"
+  # proves: commit-records.bats "AC11: a commit that adds a mistake row with a source key is accepted"; log-record.bats "a call with only the old flags appends to a file that already holds source rows"
   @integration
   Scenario: The gate accepts source rows and old-flag calls still append
     Given a mistakes.jsonl holding rows with a source key

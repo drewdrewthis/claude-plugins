@@ -55,9 +55,17 @@ mkdir -p "$CURSORS"
 # procedures:librarian` session. Claude Code writes that as the first line:
 # {"type":"agent-setting","agentSetting":"procedures:librarian",...}. Only the
 # first line is read, and jq runs only when it looks like an agent-setting.
-_is_librarian() {
+# _first_line <file> — print the first line; fails when the file has none. The
+# `-n` guard keeps a last line that has no trailing newline.
+_first_line() {
     local first=""
     IFS= read -r first < "$1" 2>/dev/null || [ -n "$first" ] || return 1
+    printf '%s' "$first"
+}
+
+_is_librarian() {
+    local first
+    first="$(_first_line "$1")" || return 1
     case "$first" in *'"agent-setting"'*) ;; *) return 1 ;; esac
     [ "$(printf '%s\n' "$first" | jq -r 'select(.type == "agent-setting") | .agentSetting' 2>/dev/null)" = "procedures:librarian" ]
 }
@@ -66,8 +74,8 @@ _is_librarian() {
 # first line is the enqueue record of its CANDIDATES prompt. That text is the
 # judge's input, not a session. Same first-line, jq-only-on-a-hit shape as above.
 _is_judge() {
-    local first=""
-    IFS= read -r first < "$1" 2>/dev/null || [ -n "$first" ] || return 1
+    local first
+    first="$(_first_line "$1")" || return 1
     case "$first" in *'"queue-operation"'*'CANDIDATES (uuid, where, kind, text):'*) ;; *) return 1 ;; esac
     printf '%s\n' "$first" | jq -e 'select(.type == "queue-operation" and .operation == "enqueue")
         | .content | strings | startswith("CANDIDATES (uuid, where, kind, text):")' >/dev/null 2>&1

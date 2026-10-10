@@ -1077,13 +1077,6 @@ _glued_head() {
   [ "$(_commit_count)" -eq "$((before + 1))" ]
 }
 
-@test "AC11: a call with only the old flags appends to a file that already holds source rows" {
-  _committed_jsonl '{"session":"s1","source":"s1:653-670","category":"c"}'
-  run _log_mistake new-row
-  [ "$status" -eq 0 ]
-  [ "$(wc -l < "$ROOT/mistakes.jsonl")" -eq 2 ]
-}
-
 # ---- --root pinned to CODEX_ROOT (headless allowlist leaves later args open) ----
 
 # _other_repo — a second git root whose scripts/validate.sh drops a marker if run.

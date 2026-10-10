@@ -842,10 +842,14 @@ for r in turn:
 # and the owner's words never reached the model. Only a wrapper at the very
 # start counts; a `<channel` further in is the owner quoting one.
 CHANNEL_OPEN = re.compile(r"\s*<channel(?=[\s>])(?:[^>\"']|\"[^\"]*\"|'[^']*')*>\s*")
-CHANNEL_CLOSE = re.compile(r"\s*</channel>\s*$")
+# The closing tag is stripped with str ops: a `\s*...\s*$` regex is quadratic on
+# a long whitespace run.
 def unwrap_channel(text):
     m = CHANNEL_OPEN.match(text)
-    return CHANNEL_CLOSE.sub("", text[m.end():]) if m else text
+    if not m:
+        return text
+    t = text[m.end():].rstrip()
+    return t[:-len("</channel>")].rstrip() if t.endswith("</channel>") else t
 
 # --- candidates: the ONLY uuids the model may return ---------------------
 # Conversation records only, and thinking blocks are excluded: detection is
