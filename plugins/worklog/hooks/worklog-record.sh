@@ -436,6 +436,21 @@ wl_seen() {
     [ "$hit" = "hit" ]
 }
 
+# wl_listed <list> <value> — 0 when <value> is a whole line of <list>, else 1.
+#
+# A quoted `case`, not a pipe: see the uuid check for the SIGPIPE race. A
+# here-string is no answer either (bash before 5.1, macOS 3.2, backs it with a
+# temp file). `$2` inside the pattern MUST stay double-quoted so `*`, `?`, `[`
+# in a value match only themselves; the newline wrap makes it a whole-line
+# match, never a prefix or substring. An empty value matches only an empty
+# line; the caller ends up with "" either way.
+wl_listed() {
+    # A value holding a newline would match two neighbouring lines of the list.
+    case "${2:-}" in *$'\n'*) return 1 ;; esac
+    case $'\n'"${1:-}"$'\n' in *$'\n'"${2:-}"$'\n'*) return 0 ;; esac
+    return 1
+}
+
 # wl_marker <store> <ask> — path of the claim marker for one turn, or empty.
 #
 # Beside the store and keyed by it, so two stores in one directory (the default
@@ -1105,8 +1120,13 @@ wl_run() {
     # raises "cannot index", and aborts the WHOLE scan — which empties `present`
     # and nulls two uuids that were fine.
     local present; present="$(jq -R -r 'fromjson? | select(type == "object") | .uuid // empty' "$tx" 2>/dev/null || true)"
-    printf '%s\n' "$present" | grep -Fxq -- "$ask" 2>/dev/null || ask=""
-    printf '%s\n' "$present" | grep -Fxq -- "$end" 2>/dev/null || end=""
+    # Membership is a quoted `case` (see wl_listed), not a printf-into-
+    # `grep -Fxq` pipe: under `pipefail` (set above and in gate-failopen.sh)
+    # that pipe races. `grep -q` exits at the first match; if `printf` is still
+    # writing it dies of SIGPIPE (exit 141), the pipeline reports failure and
+    # `|| ask=""` wipes a VALID uuid. No pipe, no SIGPIPE.
+    wl_listed "$present" "$ask" || ask=""
+    wl_listed "$present" "$end" || end=""
 
     # --- store, and the one-row-per-turn key ------------------------------
     # Both halves of the key are settled BEFORE the judgment, never after. The
