@@ -1,7 +1,7 @@
 {
   "plugins/procedures": "0.17.3",
   "plugins/worklog": "0.2.0",
-  "plugins/delegation": "0.1.0",
+  "plugins/delegation": "0.2.0",
   "plugins/about-my-person": "0.1.0",
   "plugins/take-note": "0.1.0",
   "plugins/heartbeats": "0.2.0",
