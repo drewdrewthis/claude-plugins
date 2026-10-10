@@ -1060,3 +1060,21 @@ _glued_head() {
   [ -z "$(git -C "$ROOT" status --porcelain)" ]
   run grep -q ghp_ <(git -C "$ROOT" show HEAD:mistakes.jsonl); [ "$status" -ne 0 ]
 }
+
+# ---- claude#41 AC11: rows may carry a `source` key; rollback keeps appending ----
+
+@test "AC11: a commit that adds a mistake row with a source key is accepted" {
+  _committed_jsonl '{"old":1}'
+  printf '{"session":"s1","source":"s1:653-670","category":"c"}\n' >> "$ROOT/mistakes.jsonl"
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+  [ "$(_commit_count)" -eq "$((before + 1))" ]
+}
+
+@test "AC11: a call with only the old flags appends to a file that already holds source rows" {
+  _committed_jsonl '{"session":"s1","source":"s1:653-670","category":"c"}'
+  run _log_mistake new-row
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$ROOT/mistakes.jsonl")" -eq 2 ]
+}

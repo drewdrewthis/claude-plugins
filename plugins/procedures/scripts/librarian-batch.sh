@@ -62,6 +62,17 @@ _is_librarian() {
     [ "$(printf '%s\n' "$first" | jq -r 'select(.type == "agent-setting") | .agentSetting' 2>/dev/null)" = "procedures:librarian" ]
 }
 
+# _is_judge <transcript> — 0 when it is a worklog judge `claude -p` run, whose
+# first line is the enqueue record of its CANDIDATES prompt. That text is the
+# judge's input, not a session. Same first-line, jq-only-on-a-hit shape as above.
+_is_judge() {
+    local first=""
+    IFS= read -r first < "$1" 2>/dev/null || [ -n "$first" ] || return 1
+    case "$first" in *'"queue-operation"'*'CANDIDATES (uuid, where, kind, text):'*) ;; *) return 1 ;; esac
+    printf '%s\n' "$first" | jq -e 'select(.type == "queue-operation" and .operation == "enqueue")
+        | .content | strings | startswith("CANDIDATES (uuid, where, kind, text):")' >/dev/null 2>&1
+}
+
 _mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 
 # Exactly one output line per input line — awk numbers lines by position, so
@@ -94,6 +105,7 @@ while IFS=$'\t' read -r _ f; do
     [ "$used" -lt "$BUDGET" ] || break
     slug="$(basename "$f" .jsonl)"
     _is_librarian "$f" && continue           # the librarian's own drains: never issued, no cursor
+    _is_judge "$f" && continue               # the worklog judge's runs: same
     total="$(wc -l < "$f" 2>/dev/null | tr -d ' ')" || continue   # vanished/unreadable since find
     [ -n "$total" ] || continue
     cur=0

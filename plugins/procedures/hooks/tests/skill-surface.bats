@@ -111,3 +111,9 @@ setup() {
   [ ! -d "$SKILLS/log" ]
   [ ! -d "$SKILLS/create-new" ]
 }
+
+# The librarian passes --source so log-record.sh can set the session and refuse
+# a second row for the same transcript lines (claude#41).
+@test "the librarian's mistake write row passes --source" {
+  grep -E '^\s*\| mistake \|' "$PLUGIN/agents/librarian.md" | grep -q -- '--source'
+}

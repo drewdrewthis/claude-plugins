@@ -80,7 +80,7 @@ Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `/how-do-i
 
    If the mistake is a narrower FACE of a broader record in the registry, pass the broader record's `--pattern` and name the specific face with `--face "<face-name>"`.
 
-**Call the script** (it stamps `ts`, `project`, `session` if you omit them):
+**Call the script** (it stamps `ts` if you omit it; `session` comes from `--session`, or from `--source <session-id>:<first>-<last>` when that is given):
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" mistake \

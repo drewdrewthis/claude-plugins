@@ -16,7 +16,9 @@
 # that quoted literal truncates the JSON). This script fixes it by construction.
 #
 # Subcommands:
-#   mistake       append a row to mistakes.jsonl (under the mistakes lock that
+#   mistake       append a row to mistakes.jsonl (--source <id>:<a>-<b> names the
+#                 transcript lines, sets the session, and refuses a row whose
+#                 lines an existing row of that session already covers; under the mistakes lock that
 #                 commit-records.sh's quarantine rewrite also takes, see
 #                 lib/mistakes-lock.sh; an unterminated last row is ended first)
 #   decision      write records/decisions/<date>-<slug>.md
@@ -65,7 +67,8 @@ die() { printf 'log-record: %s\n' "$1" >&2; exit 1; }
 # ===========================================================================
 cmd_mistake() {
     local ts project session category trigger description correction
-    local skill severity scenario_matched pattern face recurrence_of
+    local skill severity scenario_matched pattern face recurrence_of source
+    source=""
     ts="" project="" session="" category="" trigger="" description=""
     correction="" skill="" severity="" scenario_matched="" pattern=""
     face="" recurrence_of=""
@@ -85,6 +88,7 @@ cmd_mistake() {
             --pattern)         pattern="$2"; shift 2 ;;
             --face)            face="$2"; shift 2 ;;
             --recurrence-of)   recurrence_of="$2"; shift 2 ;;
+            --source)          source="$2"; shift 2 ;;
             *) die "unknown mistake flag: $1" ;;
         esac
     done
@@ -95,6 +99,17 @@ cmd_mistake() {
     [ -n "$correction" ]  || die "mistake requires --correction"
     [ -n "$severity" ]    || die "mistake requires --severity"
     [ -n "$trigger" ]     || die "mistake requires --trigger"
+
+    # --source <id>:<a>-<b> names the transcript lines that show the mistake;
+    # its id fills --session when that is absent.
+    if [ -n "$source" ]; then
+        [[ "$source" =~ ^(.+):([0-9]+)-([0-9]+)$ ]] \
+            || die "--source must be <session-id>:<first>-<last> (got: $source)"
+        [ $((10#${BASH_REMATCH[2]})) -le $((10#${BASH_REMATCH[3]})) ] \
+            || die "--source range runs backwards (got: $source)"
+        [ -n "$session" ] || session="${BASH_REMATCH[1]}"
+    fi
+    [ -n "$session" ] || printf 'log-record: note: no session on this row (pass --session or --source)\n' >&2
 
     # scenario_matched is always present in the schema; the literal token "null"
     # means JSON null, anything else (incl. empty) is the string form the
@@ -117,29 +132,60 @@ cmd_mistake() {
             --arg pattern "$pattern" \
             --arg face "$face" \
             --arg recurrence_of "$recurrence_of" \
+            --arg source "$source" \
             '{ts:$ts, project:$project, session:$session, category:$category,
               trigger:$trigger, description:$description, correction:$correction,
               skill:$skill, severity:$severity}
              | .scenario_matched = (if $scenario == "null" then null else $scenario end)
              | (if $pattern       != "" then .pattern       = $pattern       else . end)
              | (if $face          != "" then .face          = $face          else . end)
-             | (if $recurrence_of != "" then .recurrence_of = $recurrence_of else . end)'
+             | (if $recurrence_of != "" then .recurrence_of = $recurrence_of else . end)
+             | (if $source        != "" then .source        = $source        else . end)'
     )"
 
     mkdir -p "$(dirname "$MISTAKES_JSONL")"
-    mistakes_locked "$(mistakes_lock_path "$(dirname "$MISTAKES_JSONL")")" _append_row "$row" \
+    mistakes_locked "$(mistakes_lock_path "$(dirname "$MISTAKES_JSONL")")" _append_row "$row" "$source" \
         || die "could not take the mistakes.jsonl lock; row not appended"
-    printf 'log-record: appended mistake to %s\n' "$MISTAKES_JSONL" >&2
 }
 
-# _append_row <row> — append one row, first ending an unterminated last row:
-# a row glued onto it would read as a rewrite of a committed row, which
-# commit-records.sh refuses.
+# _source_overlap <source> — print the ts of the first row, in this file or any
+# store root's mistakes.jsonl, whose source shares a line with <source> (same
+# id, ranges overlap or touch). Unparseable lines are skipped.
+_source_overlap() {
+    local f files=("$MISTAKES_JSONL")
+    for f in ${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"}; do files+=("$f/mistakes.jsonl"); done
+    for f in "${files[@]}"; do
+        [ -f "$f" ] || continue
+        jq -Rr --arg src "$1" '
+            def parse: capture("^(?<id>.+):(?<a>[0-9]+)-(?<b>[0-9]+)$")
+                | .a |= tonumber | .b |= tonumber;
+            ($src | parse) as $n
+            | fromjson? | select(type == "object" and (.source | type) == "string")
+            | select((.source | parse) as $o
+                     | $o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
+            | .ts' "$f"
+    done | head -n1
+}
+
+# _append_row <row> [<source>] — append one row, first ending an unterminated
+# last row: a row glued onto it would read as a rewrite of a committed row,
+# which commit-records.sh refuses. A <source> that an existing row already
+# covers appends nothing; the check runs under the same lock as the append so
+# parallel identical calls cannot both pass it.
 _append_row() {
+    local seen=""
+    # `|| true`: head closing the pipe early must not read as "no match".
+    [ -z "${2:-}" ] || seen="$(_source_overlap "$2" || true)"
+    if [ -n "$seen" ]; then
+        printf 'log-record: duplicate: session %s lines %s already logged (row ts %s); nothing appended\n' \
+            "${2%:*}" "${2##*:}" "$seen" >&2
+        return 0
+    fi
     if [ -s "$MISTAKES_JSONL" ] && [ -n "$(tail -c1 "$MISTAKES_JSONL")" ]; then
         printf '\n' >> "$MISTAKES_JSONL"
     fi
     printf '%s\n' "$1" >> "$MISTAKES_JSONL"
+    printf 'log-record: appended mistake to %s\n' "$MISTAKES_JSONL" >&2
 }
 
 # ===========================================================================

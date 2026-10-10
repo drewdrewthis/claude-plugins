@@ -60,9 +60,11 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 
    | Kind | Your write |
    |---|---|
-   | mistake | `CODEX_ROOT=<root> MISTAKES_JSONL=<root>/mistakes.jsonl bash ${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh mistake --category ... --description ... --correction ... --severity ... --trigger ...` |
+   | mistake | `CODEX_ROOT=<root> MISTAKES_JSONL=<root>/mistakes.jsonl bash ${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh mistake --category ... --description ... --correction ... --severity ... --trigger ... --source <session-uuid>:<first>-<last>` |
    | decision / solution | Same script, `decision`/`solution` subcommand, targeting `<root>`. It does not currently emit `description:` into the frontmatter block — add it by hand (Edit) right after minting: one neutral sentence per specs/RECORD_FRONTMATTER.md's `description` guidance, not a restatement of the kind or the filename. |
    | procedure / evolution / rule-kind (invariant, policy, standard) | Hand-write directly from that store's template in `skills/update-records/templates/`, same as procedure-evolver's procedure route — full seven-key frontmatter (`id`, `kind`, `date`, `keywords`, `links`, `status`, `description`), `id` corpus-unique (grep the root before minting), `kind` matching the containing store directory. |
+
+   For `--source`, the uuid is the id in the batch's `=== <id> (<path>) ===` header and the range is the `[L<n>]` markers of the lines that show the mistake (never offsets inside the batch file); give one narrow range per mistake. A `duplicate` note on stderr means that mistake is already logged — it is not an error, and nothing was appended.
 
    As you write, capture — per store root — the four **reason fields** the commit
    gate records in git history (step 6): **what** (the kinds and counts written,

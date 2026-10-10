@@ -837,6 +837,16 @@ for r in turn:
             for p in bash_paths(inp.get("command")):
                 add(p)
 
+# A channel (Discord) message arrives wrapped in <channel ...>text</channel>.
+# The opening tag alone is 183-256 chars, so left in it used up the 200-char cap
+# and the owner's words never reached the model. Only a wrapper at the very
+# start counts; a `<channel` further in is the owner quoting one.
+CHANNEL_OPEN = re.compile(r"\s*<channel(?=[\s>])(?:[^>\"']|\"[^\"]*\"|'[^']*')*>\s*")
+CHANNEL_CLOSE = re.compile(r"\s*</channel>\s*$")
+def unwrap_channel(text):
+    m = CHANNEL_OPEN.match(text)
+    return CHANNEL_CLOSE.sub("", text[m.end():]) if m else text
+
 # --- candidates: the ONLY uuids the model may return ---------------------
 # Conversation records only, and thinking blocks are excluded: detection is
 # lexical and anchored to what was actually said, so an internal deliberation
@@ -864,7 +874,7 @@ for r in recs:
                                      if isinstance(y, dict))
             body = " ".join(parts)
         else:
-            kind, body = "user", text_of(r)
+            kind, body = "user", unwrap_channel(text_of(r))
     else:
         tools = [b.get("name") for b in blocks(r)
                  if isinstance(b, dict) and b.get("type") == "tool_use"]
@@ -1116,12 +1126,15 @@ wl_run() {
 
     # --- judgment -------------------------------------------------------
     local raw="" entries="" judged=1
+    # --no-session-persistence: else each judge call saves a transcript the
+    # knowledge intake reads as if it were a session.
     # A failed slice pass means the candidates may hold a gitleaks-only secret:
     # skip the model entirely.
     if [ "$gl_failed" -eq 0 ] && command -v claude >/dev/null 2>&1; then
         raw="$(wl_candidates "$cands" \
             | WORKLOG_DISABLE=1 wl_timeout "$WORKLOG_MODEL_TIMEOUT" \
               claude -p --model "$WORKLOG_MODEL" --output-format text \
+                     --no-session-persistence \
                      --system-prompt "$(wl_prompt)" \
                      --allowed-tools '' 2>/dev/null || true)"
     fi
