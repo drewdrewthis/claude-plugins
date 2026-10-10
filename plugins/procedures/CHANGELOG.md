@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.17.4](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.3...procedures-v0.17.4) (2026-10-10)
+
+
+### Bug Fixes
+
+* **procedures:** green the red gate and how-do-i suites, run them in CI, fix commit-records on git 2.55 ([#221](https://github.com/drewdrewthis/claude-plugins/issues/221)) ([f7510ef](https://github.com/drewdrewthis/claude-plugins/commit/f7510ef2515f0bec4707eb5f1f8910b9e8f13196))
+* **procedures:** librarian hook advances cursors, cools down wakes, commits mistakes.jsonl ([#191](https://github.com/drewdrewthis/claude-plugins/issues/191)) ([ee0040a](https://github.com/drewdrewthis/claude-plugins/commit/ee0040a02f1f76a32edfe57c0e95cbf872f04bd3))
+* **procedures:** make how-do-i stage 1 session-free so the index cannot be lost ([#229](https://github.com/drewdrewthis/claude-plugins/issues/229)) ([76c6e9f](https://github.com/drewdrewthis/claude-plugins/commit/76c6e9fb646d276606a1001cf7b8769bc0a1dd4c))
+
+
+### Tests
+
+* **procedures:** arm both gates in gate-failopen.bats ([#209](https://github.com/drewdrewthis/claude-plugins/issues/209)) ([c271738](https://github.com/drewdrewthis/claude-plugins/commit/c2717387f46c81eda70ed1365ed841dd59ae8902))
+* **procedures:** share the git shim, pin the .index guard with markers, ignore the system gitconfig ([#224](https://github.com/drewdrewthis/claude-plugins/issues/224)) ([9d4377b](https://github.com/drewdrewthis/claude-plugins/commit/9d4377b9df9c7107f24dc587441d3f80d88f7c01))
+
 ## [0.17.3](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.2...procedures-v0.17.3) (2026-10-06)
 
 
