@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/drewdrewthis/claude-plugins/compare/worklog-v0.2.3...worklog-v0.2.4) (2026-10-10)
+
+
+### Bug Fixes
+
+* **worklog:** stop old gitleaks from giving a silent raw result ([#249](https://github.com/drewdrewthis/claude-plugins/issues/249)) ([f2c5a3f](https://github.com/drewdrewthis/claude-plugins/commit/f2c5a3fe79c67c3b825be1ceed518aafc370295a))
+
 ## [0.2.3](https://github.com/drewdrewthis/claude-plugins/compare/worklog-v0.2.2...worklog-v0.2.3) (2026-10-10)
 
 
