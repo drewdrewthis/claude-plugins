@@ -267,3 +267,11 @@ _judge_enqueue() {
   _batch
   [ "$(_issued plain)" = "0 2" ]
 }
+
+@test "the judge heading literal is the same in librarian-batch.sh and worklog-record.sh" {
+  local w="$BATS_TEST_DIRNAME/../../../worklog/hooks/worklog-record.sh"
+  [ -f "$w" ] || skip "worklog plugin dir absent: $w"
+  local h='CANDIDATES (uuid, where, kind, text):'
+  grep -qF "$h" "$SCRIPTS/librarian-batch.sh"
+  grep -qF "$h" "$w"
+}

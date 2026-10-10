@@ -123,3 +123,7 @@ setup() {
 @test "the librarian brief says to write the root literally in the log-record call" {
   grep -q 'STARTS with `CODEX_ROOT=`' "$PLUGIN/agents/librarian.md"
 }
+
+@test "the update-records mistake template names --source" {
+  grep -q -- '\[--source "<session-id>:<first>-<last>"\]' "$SKILLS/update-records/SKILL.md"
+}

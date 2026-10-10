@@ -71,6 +71,10 @@ _is_librarian() {
 # _is_judge <first-line> — 0 when it is a worklog judge `claude -p` run, whose
 # first line is the enqueue record of its CANDIDATES prompt. That text is the
 # judge's input, not a session. Same jq-only-on-a-hit shape as above.
+# The heading literal copies the judge prompt heading in
+# plugins/worklog/hooks/worklog-record.sh; the two must change together. The
+# judge now runs with --no-session-persistence, so this skip only covers
+# transcripts saved before that.
 _is_judge() {
     case "$1" in *'"queue-operation"'*'CANDIDATES (uuid, where, kind, text):'*) ;; *) return 1 ;; esac
     printf '%s\n' "$1" | jq -e 'select(.type == "queue-operation" and .operation == "enqueue")

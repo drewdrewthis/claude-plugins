@@ -19,9 +19,12 @@
 #   mistake       append a row to mistakes.jsonl, under the mistakes lock that
 #                 commit-records.sh's quarantine rewrite also takes (see
 #                 lib/mistakes-lock.sh); an unterminated last row is ended first.
-#                 --source <id>:<a>-<b> names the transcript lines, sets the
-#                 session, and refuses a row whose lines an existing row with
-#                 that id already covers.
+#                 --source <id>:<a>-<b> names the transcript lines and sets the
+#                 session. A row whose line range shares at least one line with
+#                 a logged row of the same id is NOT appended: the script prints
+#                 a `duplicate` note and exits 0. Adjacent ranges (10-14, then
+#                 15-20) are both appended. A range spanning SOURCE_MAX_SPAN
+#                 lines or more is refused (exit 1).
 #   decision      write records/decisions/<date>-<slug>.md
 #   solution      write records/solutions/<date>-<slug>.md
 #   failure-mode  write/update records/failure-modes/<slug>.md
@@ -52,6 +55,10 @@
 # the overrides as they were (tests, interactive use).
 
 set -euo pipefail
+
+# Widest --source span (b - a) accepted or counted: without it one row such as
+# victim:1-999999999 would make every later range for that id a "duplicate".
+SOURCE_MAX_SPAN=2000
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stores.sh
@@ -185,6 +192,8 @@ cmd_mistake() {
             || die "--source must be <session-id>:<first>-<last> (got: $source)"
         [ $((10#${BASH_REMATCH[2]})) -le $((10#${BASH_REMATCH[3]})) ] \
             || die "--source range runs backwards (got: $source)"
+        [ $((10#${BASH_REMATCH[3]} - 10#${BASH_REMATCH[2]})) -lt "$SOURCE_MAX_SPAN" ] \
+            || die "--source range is too wide: keep it under $SOURCE_MAX_SPAN lines (got: $source)"
         [ -n "$session" ] || session="${BASH_REMATCH[1]}"
     fi
     [ -n "$session" ] || printf 'log-record: note: no session on this row (pass --session or --source)\n' >&2
@@ -232,7 +241,8 @@ cmd_mistake() {
 
 # _source_overlap <source> — print the ts of the first row, in this file or any
 # store root's mistakes.jsonl, whose source shares a line with <source> (same
-# id, ranges overlap or touch). Unparseable lines are skipped; an unreadable
+# id, ranges share at least one line). Rows whose own span is >= SOURCE_MAX_SPAN
+# are ignored. Unparseable lines are skipped; an unreadable
 # file is noted on stderr and skipped (fail open: it must not block logging).
 # A row with no ts prints "?" so it still counts as a hit.
 _source_overlap() {
@@ -245,13 +255,13 @@ _source_overlap() {
         # No `head`, so a closed pipe cannot masquerade as a read failure: any
         # non-zero exit is a real one. jq 1.6 may emit more than one hit despite
         # first(); the first line is kept below.
-        hit="$(jq -nRr --arg src "$1" '
+        hit="$(jq -nRr --arg src "$1" --argjson cap "$SOURCE_MAX_SPAN" '
             def parse: capture("^(?<id>.+):(?<a>[0-9]+)-(?<b>[0-9]+)$")
                 | .a |= tonumber | .b |= tonumber;
             ($src | parse) as $n
             | first(inputs | fromjson? | select(type == "object" and (.source | type) == "string")
             | ((.source | parse?) // empty) as $o
-            | select($o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
+            | select($o.b - $o.a < $cap and $o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
             | (.ts | if type == "string" and . != "" then . else "?" end))' "$f")" \
             || { printf 'log-record: note: could not read %s; duplicate check skipped for it\n' "$f" >&2; continue; }
         hit="${hit%%$'\n'*}"
@@ -261,8 +271,8 @@ _source_overlap() {
 
 # _append_row <row> [<source>] — append one row, first ending an unterminated
 # last row: a row glued onto it would read as a rewrite of a committed row,
-# which commit-records.sh refuses. A <source> that an existing row already
-# covers appends nothing; the check runs under the same lock as the append so
+# which commit-records.sh refuses. A <source> sharing a line with an existing
+# row appends nothing; the check runs under the same lock as the append so
 # parallel identical calls cannot both pass it.
 _append_row() {
     local seen=""

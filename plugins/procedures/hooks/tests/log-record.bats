@@ -398,3 +398,30 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
   [[ "$output" == *"row not appended"* ]]
   [[ "$output" != *"lock"* ]]
 }
+
+@test "a --source whose span reaches the cap is refused and appends nothing" {
+  _src_env
+  _m --source "s1:10-2010"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *2000* ]]
+  [ ! -s "$MISTAKES_JSONL" ]
+  _m --source "s1:10-2009"   # control: one under the cap is accepted
+  [ "$status" -eq 0 ]
+  [ "$(_rows)" -eq 1 ]
+}
+
+@test "a stored wide-span row does not make a narrow new row a duplicate" {
+  _src_env
+  jq -nc '{ts:"T1",source:"victim:1-999999999"}' > "$MISTAKES_JSONL"
+  _m --source "victim:50-60"
+  [ "$status" -eq 0 ]
+  [ "$(_rows)" -eq 2 ]
+}
+
+@test "a wide-span row in a second store root does not suppress a narrow new row" {
+  _src_env
+  jq -nc '{ts:"T1",source:"victim:1-999999999"}' > "$D/b/mistakes.jsonl"
+  _m --source "victim:50-60"
+  [ "$status" -eq 0 ]
+  [ "$(_rows)" -eq 1 ]
+}

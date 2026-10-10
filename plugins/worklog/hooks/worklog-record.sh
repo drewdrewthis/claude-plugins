@@ -844,6 +844,8 @@ for r in turn:
 CHANNEL_OPEN = re.compile(r"\s*<channel(?=[\s>])(?:[^>\"']|\"[^\"]*\"|'[^']*')*>\s*")
 # The closing tag is stripped with str ops: a `\s*...\s*$` regex is quadratic on
 # a long whitespace run.
+# Only one leading wrapper is removed; a record holding two wrapped messages
+# keeps the second wrapper (known limit).
 def unwrap_channel(text):
     m = CHANNEL_OPEN.match(text)
     if not m:
@@ -1031,6 +1033,7 @@ EOF
 # ---------------------------------------------------------------------------
 wl_candidates() {
     local cands="$1"
+    # The heading below is copied in procedures' librarian-batch.sh _is_judge; change together.
     cat <<EOF
 CANDIDATES (uuid, where, kind, text):
 $cands

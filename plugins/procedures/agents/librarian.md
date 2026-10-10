@@ -75,22 +75,22 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 
    Every `log-record.sh` call (and the `commit-records.sh` call) is one Bash call that
    STARTS with `CODEX_ROOT=` followed by the root path written out in full. Use no
-   shell variable for the root or the plugin path (`${CLAUDE_PLUGIN_ROOT}` above is the
-   plugin's resolved path: write it out as resolved), no leading `cd`, no `;`, `&&` or
+   shell variable for the root or the plugin path, no leading `cd`, no `;`, `&&` or
    pipe before or after it, and no trailing `echo`. The headless allowlist matches the
-   command text literally, so any other form is denied and the row is lost. Quote both
-   assignments the same way (both bare, both single-quoted or both double-quoted) and
-   write the script path bare or double-quoted; the `${CLAUDE_PLUGIN_ROOT}` shown in the
-   command rows stands for that resolved path. Wrong:
+   command text literally, so any other form is denied and the row is lost. Write
+   `${CLAUDE_PLUGIN_ROOT}` out as the plugin's resolved path. Quote both assignments
+   the same way (both bare, both single-quoted or both double-quoted) and write the
+   script path bare or double-quoted. Wrong:
    `R=<root>; CODEX_ROOT=$R ... log-record.sh ...; echo rc=$?`. The exit status is
    already in the tool result.
 
    For `--source`, the uuid is the id in the batch's `=== <id> (<path>) ===` header and
    the range is the `[L<n>]` markers of the lines that show the mistake (never offsets
-   inside the batch file); give one narrow range per mistake. The range is the numbers
-   only, without the `L`: markers `[L10]` to `[L14]` give `--source <session-uuid>:10-14`. A `duplicate` note on
-   stderr means that mistake is already logged — it is not an error, and nothing was
-   appended.
+   inside the batch file); give one narrow range per mistake, and keep it narrow: a
+   range of 2000 lines or more is refused. The range is the numbers only, without the
+   `L`: markers `[L10]` to `[L14]` give `--source <session-uuid>:10-14`. A `duplicate`
+   note on stderr means that mistake is already logged — it is not an error, and
+   nothing was appended.
 
    As you write, capture — per store root — the four **reason fields** the commit
    gate records in git history (step 6): **what** (the kinds and counts written,
