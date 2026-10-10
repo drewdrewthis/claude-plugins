@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/drewdrewthis/claude-plugins/compare/worklog-v0.2.2...worklog-v0.2.3) (2026-10-10)
+
+
+### Bug Fixes
+
+* **worklog:** redact gitleaks-only tokens before punctuation ([#247](https://github.com/drewdrewthis/claude-plugins/issues/247)) ([84304ff](https://github.com/drewdrewthis/claude-plugins/commit/84304ff2b409d4fd308d3a91b557ea00ef825e20))
+
 ## [0.2.2](https://github.com/drewdrewthis/claude-plugins/compare/worklog-v0.2.1...worklog-v0.2.2) (2026-10-10)
 
 
