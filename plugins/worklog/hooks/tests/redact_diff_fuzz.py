@@ -42,7 +42,6 @@ import tempfile
 LIB_PATH = "plugins/worklog/hooks/lib/redact.py"
 ORIGIN_MAIN = "refs/remotes/origin/main"
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CANDIDATE_DIR = os.path.normpath(os.path.join(HERE, "..", "lib"))
 FIXTURE_DIR = os.path.join(HERE, "fixtures", "redact-regress")
 # Checked-in bad libs (PR 217 regressions) and their git blob ids. A planned
 # edit of a fixture must change the id here, in the open.
@@ -437,12 +436,23 @@ def mask_input(planted, text):
 
 # --------------------------------------------------------------- lib loading --
 
+# A GIT_DIR (or similar) in the caller's environment would point every git call
+# at another repository, so the reference would come from the wrong history.
+GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def _run_git(*args):
+    try:
+        return subprocess.run(["git"] + list(args), capture_output=True, env=GIT_ENV)
+    except OSError as e:
+        raise HarnessError("cannot run git (%s)" % type(e).__name__)
+
+
 def repo_root():
-    p = subprocess.run(["git", "-C", HERE, "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True)
+    p = _run_git("-C", HERE, "rev-parse", "--show-toplevel")
     if p.returncode != 0:
-        raise HarnessError("not inside a git clone: cannot read lib by sha")
-    return p.stdout.strip()
+        raise HarnessError("not inside a git clone")
+    return p.stdout.decode().strip()
 
 
 def _load_module(name, path):
@@ -460,7 +470,13 @@ def load_from_dir(name, directory):
 
 
 def _git(root, *args):
-    return subprocess.run(["git", "-C", root] + list(args), capture_output=True)
+    return _run_git("-C", root, *args)
+
+
+def blob_at(root, rev):
+    """Blob id of the lib at `rev`, or None when that commit has no lib file."""
+    p = _git(root, "rev-parse", "%s:%s" % (rev, LIB_PATH))
+    return p.stdout.strip() if p.returncode == 0 else None
 
 
 def lib_at(root, rev):
@@ -495,6 +511,19 @@ class Reference(object):
             self.sha, self.last_change)
 
 
+def live_path(root):
+    """The live lib is the working-tree file."""
+    return os.path.join(root, LIB_PATH)
+
+
+def read_file(path, what):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError as e:
+        raise HarnessError("%s not readable (%s)" % (what, type(e).__name__))
+
+
 def resolve_reference(root):
     """-> Reference, by the REFERENCE RULE in the header. Checks run in this fixed order."""
     no_earlier = HarnessError("no earlier version of the lib to use as the reference")
@@ -509,57 +538,48 @@ def resolve_reference(root):
     base_lib = lib_at(root, base)
     if base_lib is None:
         raise no_earlier
-    # The live lib is always the working-tree file next to this harness.
-    with open(os.path.join(DEFAULT_CANDIDATE_DIR, "redact.py"), "rb") as f:
-        live = f.read()
+    live = read_file(live_path(root), "live lib")
     if live != base_lib:
         return Reference(base, base_lib, True)
     # Path-limited rev-list also lists mode-only commits: compare bytes to skip them.
     for c in _git(root, "rev-list", "--first-parent", base, "--", LIB_PATH).stdout.decode().split():
-        before = lib_at(root, c + "^")
-        if before == lib_at(root, c):
+        before_id = blob_at(root, c + "^")
+        if before_id == blob_at(root, c):
             continue
-        if before is None:
+        if before_id is None:
             raise no_earlier
+        before = lib_at(root, c + "^")
         parent = _git(root, "rev-parse", c + "^").stdout.decode().strip()
         return Reference(parent, before, False, c)
     raise no_earlier
 
 
 def candidate_bytes(args, root):
-    """-> (candidate dir or None, its redact.py bytes). A sha or a fixture has no dir yet."""
+    """-> the candidate's redact.py bytes."""
     if args.candidate_sha:
         data = lib_at(root, args.candidate_sha)
         if data is None:
             raise HarnessError("candidate lib %s not found in this clone; run: git fetch --unshallow"
                                % args.candidate_sha)
-        return None, data
+        return data
     if args.candidate_fixture:
         name = "redact-%s.py.txt" % args.candidate_fixture
-        try:
-            with open(os.path.join(FIXTURE_DIR, name), "rb") as f:
-                data = f.read()
-        except OSError:
-            raise HarnessError("fixture %s not readable" % name)
+        data = read_file(os.path.join(FIXTURE_DIR, name), "fixture %s" % name)
         if git_blob_id(data) != FIXTURE_BLOBS[args.candidate_fixture]:
             raise HarnessError("fixture %s: blob id differs from the recorded blob id" % name)
-        return None, data
-    d = args.candidate_dir or DEFAULT_CANDIDATE_DIR
-    try:
-        with open(os.path.join(d, "redact.py"), "rb") as f:
-            return d, f.read()
-    except OSError as e:
-        raise HarnessError("candidate error: cannot load lib (%s)" % type(e).__name__)
+        return data
+    if args.candidate_dir:
+        return read_file(os.path.join(args.candidate_dir, "redact.py"), "candidate lib")
+    return read_file(live_path(root), "live lib")
 
 
 def load_libs(args, ref, root, tmp):
-    """-> (candidate, reference), loaded as two separate modules."""
-    cand_dir, data = candidate_bytes(args, root)
+    """-> (candidate, reference), loaded as two separate modules from staged copies."""
+    data = candidate_bytes(args, root)
     if data == ref.data:
         raise HarnessError("reference is identical to the candidate")
-    if cand_dir is None:
-        cand_dir = stage(tmp, "candidate", data)
-    return load_from_dir("candidate", cand_dir), load_from_dir("reference", stage(tmp, "reference", ref.data))
+    return (load_from_dir("candidate", stage(tmp, "candidate", data)),
+            load_from_dir("reference", stage(tmp, "reference", ref.data)))
 
 
 # ------------------------------------------------------------------- running --
@@ -810,7 +830,8 @@ def run(args):
         cand, ref_lib = load_libs(args, ref, root, tmp)
         session = start_session(mode, cand, ref_lib, tmp)
         lines, worse = (run_fuzz if args.cmd == "fuzz" else run_case)(args, session)
-    if worse and not ref.changed:
+    live_candidate = not (args.candidate_sha or args.candidate_dir or args.candidate_fixture)
+    if worse and not ref.changed and live_candidate:
         lines.insert(0, "not from this change: the library change %s on main is worse than its parent"
                      % ref.last_change)
     lines.insert(0, ref.line())

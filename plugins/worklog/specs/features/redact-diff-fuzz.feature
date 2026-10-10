@@ -38,10 +38,11 @@ Feature: The redact fuzz test catches a redaction that leaks more than the compu
       | 4    |
       | 5    |
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "gitleaks mode is clean on the first 1000 pairs texts"
+  # proves: hooks/tests/redact-diff-fuzz.bats "the pinned gitleaks version is installed on this runner", "gitleaks mode is clean on the first 1000 pairs texts"
   @integration
   Scenario: Gitleaks mode confirms each flagged text alone
     Given WORKLOG_GITLEAKS_TIMEOUT is 120 and gitleaks 8.30.1 is installed
+    And gitleaks version on the runner names 8.30.1
     When the helper scans the first 1000 texts of the pairs enumeration in one batch
     Then it prints mode=gitleaks gitleaks_present=True version=8.30.1 failed=False
     And it prints confirm_cap=40, the default cap
@@ -212,14 +213,16 @@ Feature: The redact fuzz test catches a redaction that leaks more than the compu
     Then it reports no leaks found
     And in every exit-1 run stdout and stderr hold no run of 8 or more consecutive chars of any planted piece
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "fuzz --help lists no option with reference in its name", "case --help lists no option with reference in its name", "a reference option is an unrecognized argument and exits 2", "no file under plugins or .github holds a stored reference constant", "an environment variable does not change the reference line"
+  # proves: hooks/tests/redact-diff-fuzz.bats "fuzz --help lists no option with reference in its name", "case --help lists no option with reference in its name", "a reference option is an unrecognized argument and exits 2", "no file under plugins or .github holds a stored reference constant", "a GIT_ environment pointing at another repo does not change the reference line"
   @integration
   Scenario: No reference is stored and none can be given
     Given the helper and the workflow
     Then no file under plugins or .github holds a stored reference constant
     And fuzz --help and case --help list no option with reference in its name
     And a reference option exits 2 with unrecognized arguments
-    And an environment variable naming a sha does not change the reference line
+    And the harness removes each GIT_ variable from the environment of its git calls
+    And a run with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE set to a second repo prints the same reference line as a run without them
+    And that sha is the merge base of the first repo and no commit of the second
 
   # proves: hooks/tests/redact-diff-fuzz.bats "reference is the merge base when a branch commit changes the lib", "reference is the merge base when only the working tree lib changed", "the reference subcommand prints one line"
   @integration
@@ -238,15 +241,15 @@ Feature: The redact fuzz test catches a redaction that leaks more than the compu
     And the reference is the first parent of the last commit that changed the lib bytes
     And a mode-only commit is not the last change
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "a candidate commit equal to the reference exits 2 with no worse line"
+  # proves: hooks/tests/redact-diff-fuzz.bats "a candidate commit equal to the reference exits 2 with no worse line", "a candidate dir with the reference bytes exits 2 with no worse line"
   @integration
   Scenario: The reference is never the candidate
-    Given a candidate commit equal to the resolved reference
+    Given a candidate commit, or a --candidate-dir with a redact.py of the same bytes, equal to the resolved reference
     When the helper runs a case
     Then it exits 2 with reference is identical to the candidate
     And stdout holds no worse= line
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "clone problem a: a depth 1 clone exits 2 and names git fetch --unshallow", "clone problem b: a missing origin/main exits 2 and names git fetch origin main", "clone problem c: unrelated histories exit 2 with no single merge base", "clone problem d: a criss-cross merge exits 2 with no single merge base", "clone problem e: a lib whose only commit is its first exits 2 with no earlier version", "clone problem e: a root commit that adds the lib exits 2 with no earlier version", "clone problem f: a base without the lib file exits 2 with no earlier version"
+  # proves: hooks/tests/redact-diff-fuzz.bats "clone problem a: a depth 1 clone exits 2 and names git fetch --unshallow", "clone problem b: a missing origin/main exits 2 and names git fetch origin main", "clone problem c: unrelated histories exit 2 with no single merge base", "clone problem d: a criss-cross merge exits 2 with no single merge base", "clone problem e: a lib whose only commit is its first exits 2 with no earlier version", "clone problem e: a mode-only commit after the first add exits 2 with no earlier version", "clone problem f: a base without the lib file exits 2 with no earlier version"
   @integration
   Scenario Outline: A clone that cannot give a reference exits 2 with the cure in stderr
     Given <clone>
@@ -261,6 +264,7 @@ Feature: The redact fuzz test catches a redaction that leaks more than the compu
       | unrelated histories                            | no single merge base     |
       | a criss-cross merge with 2 merge bases         | no single merge base     |
       | an unchanged lib added by the first commit     | no earlier version       |
+      | a mode-only commit after the first add         | no earlier version       |
       | a base without the lib file                    | no earlier version       |
 
   # proves: hooks/tests/redact-diff-fuzz.bats "a detached HEAD gives the same reference line as the branch", "a merge of origin/main and a commit outside origin uses the origin/main tip"
@@ -277,7 +281,7 @@ Feature: The redact fuzz test catches a redaction that leaks more than the compu
     Then it holds no skip call
     And the clean-run tests assert exit 0, so exit 2 reads not ok
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "a fuzz run prints the reference line first", "a case run prints the reference line first", "a planted weaker lib in the working tree is worse against the merge base", "a worse lib change already on main prints the not from this change line"
+  # proves: hooks/tests/redact-diff-fuzz.bats "a fuzz run prints the reference line first", "a case run prints the reference line first", "a planted weaker lib in the working tree is worse against the merge base", "a worse lib change already on main prints the not from this change line", "a fixture candidate that is worse prints no not from this change line"
   @integration
   Scenario: The derived reference is shown and a weaker lib is caught
     Given any fuzz or case run
@@ -286,6 +290,54 @@ Feature: The redact fuzz test catches a redaction that leaks more than the compu
     Then the run uses the merge base, prints worse=N above 0 and exits 1
     When the weaker lib is already the last change on main
     Then the run also prints a not from this change line naming that commit
+    When the candidate is a checked-in fixture and the library is unchanged
+    Then the run exits 1 and prints no not from this change line
+    # The line blames a commit on main, so it is printed only for the live library.
+
+  # proves: hooks/tests/redact-diff-fuzz.bats "reference exits 2 with one stderr line when the live lib file is missing", "reference exits 2 with no traceback when git is missing from PATH"
+  @integration
+  Scenario Outline: A harness error exits 2 with one stderr line and no traceback
+    Given <setup>
+    When the helper runs the reference subcommand
+    Then it exits 2
+    And stderr holds one line and no Traceback
+
+    Examples:
+      | setup                                          |
+      | the live library file is moved away            |
+      | PATH holds python3 and no git                  |
+
+  # proves: hooks/tests/redact-diff-fuzz.bats "a weaker lib already on main is accepted once the fuzz drops its kind"
+  @integration
+  Scenario: A weaker library on main is accepted when the fuzz no longer plants its kind
+    Given the planted weaker library is the last change on main and origin/main is on it
+    When the plain harness runs in builtin mode at seed 1 with N 1000
+    Then it exits 1 and prints a not from this change line
+    When a harness copy without the ghp entry of KINDS runs the same command
+    Then it exits 0 and prints worse=0
+
+  # proves: .github/workflows/worklog-tests.yml step "Check the fuzz reference"
+  @integration
+  Scenario: The workflow checks the reference against git itself
+    Given the workflow runs the reference subcommand and reads its rule
+    When the rule is merge-base
+    Then the reference equals git merge-base, and on a pull request it equals HEAD^1
+    When the rule is parent-of-last-change
+    Then the reference equals the first parent of last_change, and the last change keeps the library bytes at HEAD and differs from its parent
+    And an unknown rule fails the step
+
+  # proves: .github/workflows/worklog-tests.yml step "Install gitleaks 8.30.1 (Linux)", step "Install gitleaks 8.30.1 (macOS)"
+  @integration
+  Scenario Outline: The pinned gitleaks release is installed only if its checksum matches
+    Given the workflow downloads the gitleaks 8.30.1 release archive for <leg>
+    When it checks the archive against the recorded sha256
+    Then a mismatch fails the step before anything is extracted
+    And gitleaks 8.30.1 is the only gitleaks on PATH
+
+    Examples:
+      | leg           |
+      | ubuntu-latest |
+      | macos-latest  |
 
   # proves: hooks/tests/redact-diff-fuzz.bats "the fixture directory holds exactly the three bad libs", "fixture redact-cb0ab84 has its recorded blob id", "fixture redact-3854dc2 has its recorded blob id", "fixture redact-f1f1f8a has its recorded blob id", "no python file sits under the fixtures directory", "gitleaks finds no leak in the fixtures", "no fixture holds the gitleaks allow string", "failure mode 11 exits 2 when a fixture blob id differs"
   @integration
@@ -329,3 +381,9 @@ Feature: The redact fuzz test catches a redaction that leaks more than the compu
   # AC9 (#240)  : The derived reference is shown and a weaker lib is caught
   # AC12 (#240) : The bad libs are checked-in fixtures that are checked and inert
   # AC13 (#240) : No PR ref is needed
+  # AC1 (#240), amended : GIT_ variables do not change the reference (No reference is stored and none can be given)
+  # AC10 (#240) : A weaker library on main is accepted when the fuzz no longer plants its kind
+  # AC11 (#240) : The workflow checks the reference against git itself
+  # Gitleaks pin : The pinned gitleaks release is installed only if its checksum matches; Gitleaks mode confirms each flagged text alone
+  # Harness errors (#240) : A harness error exits 2 with one stderr line and no traceback
+  # not from this change (#240) : The derived reference is shown and a weaker lib is caught (live library only)
