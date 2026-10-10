@@ -68,6 +68,55 @@ stores_records_dir() {
 }
 export -f stores_records_dir 2>/dev/null || true
 
+# Filenames Claude Code auto-loads as instructions (code.claude.com/docs/en/memory):
+# a CLAUDE.md, CLAUDE.local.md or AGENTS.md in the session's cwd or above it
+# loads at launch, one in a subdirectory loads once Claude touches a file
+# there, and so does anything under a .claude/ dir (.claude/CLAUDE.md,
+# .claude/AGENTS.md, .claude/rules/**/*.md). A record store must never hold
+# one: the headless librarian writes from untrusted transcripts, and a later
+# session with its cwd in the store would read the file as instructions.
+STORES_MEMORY_NAMES="CLAUDE.md CLAUDE.local.md AGENTS.md"
+STORES_MEMORY_DIR=".claude"
+
+# stores_is_memory_path <path> — exit 0 when <path>'s basename is one of
+# STORES_MEMORY_NAMES, or any of its components is STORES_MEMORY_DIR,
+# compared case-insensitively (a case-insensitive filesystem loads
+# claude.md as CLAUDE.md).
+stores_is_memory_path() {
+    local p n c
+    p="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    for n in $STORES_MEMORY_NAMES; do
+        n="$(printf '%s' "$n" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        [ "${p##*/}" = "$n" ] && return 0
+    done
+    c="$(printf '%s' "$STORES_MEMORY_DIR" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    case "/$p/" in */"$c"/*) return 0 ;; esac
+    return 1
+}
+export -f stores_is_memory_path 2>/dev/null || true
+
+# stores_check_slug <slug> — exit 0 when <slug> is one safe filename stem:
+# only ASCII [A-Za-z0-9._-] (matched under LC_ALL=C, so no locale widens the
+# class to é or full-width letters), no `..`, not `.`, not starting with `-`
+# or `.`, not ending with `.`, and <slug>.md is not an auto-loaded memory
+# filename. On failure prints the reason to stdout and returns 1.
+stores_check_slug() {
+    local LC_ALL=C
+    case "$1" in
+        *..*) printf "must not contain '..'"; return 1 ;;
+        .) printf "must not be '.'"; return 1 ;;
+        -* | .*) printf "must not start with '-' or '.'"; return 1 ;;
+        *.) printf "must not end with '.'"; return 1 ;;
+    esac
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || { printf 'only ASCII [A-Za-z0-9._-] allowed'; return 1; }
+    if stores_is_memory_path "$1.md"; then
+        printf 'names a file Claude Code auto-loads as instructions (%s)' "$STORES_MEMORY_NAMES"
+        return 1
+    fi
+    return 0
+}
+export -f stores_check_slug 2>/dev/null || true
+
 # Append $1 to STORES if not already present. Bash-3.2-safe (no associative
 # arrays). Both discovery and REQUIRED_STORES funnel through this so a store
 # never lands in STORES twice — corpus_files() runs `find` per STORES entry,

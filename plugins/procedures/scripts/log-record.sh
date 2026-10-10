@@ -31,12 +31,22 @@
 # lint-frontmatter.sh's shape check).
 #
 # Env overrides (used by tests so a dry-run never mutates committed records):
-#   MISTAKES_JSONL        path to the jsonl (default: $HOME/.claude/mistakes.jsonl).
+#   MISTAKES_JSONL        path to the jsonl (default: $HOME/.claude/mistakes.jsonl,
+#                         or $CODEX_ROOT/mistakes.jsonl when CODEX_ROOT is set).
 #                         Also the corpus the failure-mode >=3 gate counts.
 #   DECISIONS_DIR / SOLUTIONS_DIR / FAILURE_MODES_DIR
 #                         override the target dirs (default: records/<kind>, or
 #                         references/<kind> — the legacy fallback — when $ROOT
 #                         has no records/ dir yet; see stores_records_dir).
+#   CODEX_RECORDS_DIR     forces that records dirname (see stores_records_dir).
+#
+# When CODEX_ROOT is set, every target is derived from it and these overrides
+# can no longer move a write: each one set must resolve (physically) to the
+# value derived from CODEX_ROOT, or the script refuses before writing. The
+# headless librarian pins CODEX_ROOT per call, but a `export DECISIONS_DIR=...
+# && <pinned call>` from another settings source's allow rule would otherwise
+# send its record anywhere, such as ~/.claude/agents. Unset CODEX_ROOT keeps
+# the overrides as they were (tests, interactive use).
 
 set -euo pipefail
 
@@ -49,16 +59,83 @@ source "$SCRIPT_DIR/lib/mistakes-lock.sh"
 # plugin install dir — upstream these scripts live inside the codex repo itself.
 ROOT="${CODEX_ROOT:-$HOME/.claude}"
 
-# --- paths (all overridable for tests) ---
+die() { printf 'log-record: %s\n' "$1" >&2; exit 1; }
+
+# _phys <path> — <path> made absolute and physical: its deepest existing
+# ancestor dir resolved with `pwd -P`, the not-yet-existing rest appended as
+# written. Two paths compare equal only when they name the same file.
+_phys() {
+    local p="$1" rest="" d
+    case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+    while [ ! -d "$p" ]; do
+        rest="/${p##*/}$rest"
+        p="${p%/*}"
+        [ -n "$p" ] || p=/
+    done
+    d="$(cd "$p" && pwd -P)" || return 1
+    printf '%s%s' "${d%/}" "$rest"
+}
+
+# _pin_to_root <var> <derived> — when CODEX_ROOT is set, refuse an override in
+# <var> that does not resolve to <derived>, the path CODEX_ROOT implies.
+_pin_to_root() {
+    local v="${!1:-}" got want
+    [ -n "${CODEX_ROOT:-}" ] && [ -n "$v" ] || return 0
+    got="$(_phys "$v")" || die "cannot resolve $1: $v"
+    want="$(_phys "$2")" || die "cannot resolve $2"
+    [ "$got" = "$want" ] \
+        || die "refusing $1='$v': with CODEX_ROOT set it must be $2"
+}
+
+# --- paths (overridable for tests; pinned to CODEX_ROOT when it is set) ---
 # Record-tree dirname is resolved per root: records/ canonical, references/ the
 # legacy fallback when $ROOT has not been renamed yet (see stores_records_dir).
-RECORDS_DIRNAME="$(stores_records_dir "$ROOT")"
-MISTAKES_JSONL="${MISTAKES_JSONL:-$HOME/.claude/mistakes.jsonl}"
-DECISIONS_DIR="${DECISIONS_DIR:-$ROOT/$RECORDS_DIRNAME/decisions}"
-SOLUTIONS_DIR="${SOLUTIONS_DIR:-$ROOT/$RECORDS_DIRNAME/solutions}"
-FAILURE_MODES_DIR="${FAILURE_MODES_DIR:-$ROOT/$RECORDS_DIRNAME/failure-modes}"
+if [ -n "${CODEX_ROOT:-}" ]; then
+    RECORDS_DIRNAME="$(CODEX_RECORDS_DIR='' stores_records_dir "$ROOT")"
+    [ -z "${CODEX_RECORDS_DIR:-}" ] || [ "$CODEX_RECORDS_DIR" = "$RECORDS_DIRNAME" ] \
+        || die "refusing CODEX_RECORDS_DIR='$CODEX_RECORDS_DIR': with CODEX_ROOT set it must be $RECORDS_DIRNAME"
+    _pin_to_root MISTAKES_JSONL "$ROOT/mistakes.jsonl"
+    _pin_to_root DECISIONS_DIR "$ROOT/$RECORDS_DIRNAME/decisions"
+    _pin_to_root SOLUTIONS_DIR "$ROOT/$RECORDS_DIRNAME/solutions"
+    _pin_to_root FAILURE_MODES_DIR "$ROOT/$RECORDS_DIRNAME/failure-modes"
+    # Use the derived values, not the (equivalent) overrides.
+    MISTAKES_JSONL="$ROOT/mistakes.jsonl"
+    DECISIONS_DIR="$ROOT/$RECORDS_DIRNAME/decisions"
+    SOLUTIONS_DIR="$ROOT/$RECORDS_DIRNAME/solutions"
+    FAILURE_MODES_DIR="$ROOT/$RECORDS_DIRNAME/failure-modes"
+else
+    RECORDS_DIRNAME="$(stores_records_dir "$ROOT")"
+    MISTAKES_JSONL="${MISTAKES_JSONL:-$HOME/.claude/mistakes.jsonl}"
+    DECISIONS_DIR="${DECISIONS_DIR:-$ROOT/$RECORDS_DIRNAME/decisions}"
+    SOLUTIONS_DIR="${SOLUTIONS_DIR:-$ROOT/$RECORDS_DIRNAME/solutions}"
+    FAILURE_MODES_DIR="${FAILURE_MODES_DIR:-$ROOT/$RECORDS_DIRNAME/failure-modes}"
+fi
 
-die() { printf 'log-record: %s\n' "$1" >&2; exit 1; }
+# Path-forming arguments. The headless librarian may call this script with
+# open arguments drawn from untrusted transcripts, so every value that becomes
+# part of a file path is checked here, not by the caller: a slug is one safe
+# filename component (see stores_check_slug: ASCII only, no `/`, no `..`, and
+# never a name Claude Code auto-loads as instructions, such as CLAUDE.md), a
+# date is exactly YYYY-MM-DD.
+_check_slug() {
+    local why
+    why="$(stores_check_slug "$1")" || die "invalid --slug '$1': $why"
+}
+_check_date() {
+    local LC_ALL=C
+    [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+        || die "invalid --date '$1': expected YYYY-MM-DD"
+}
+# _check_target <file> <dir> — defence in depth after the argument checks:
+# refuse unless <file>'s physical parent is exactly the physical <dir>, and
+# refuse to write through a symlink.
+_check_target() {
+    local want got
+    want="$(cd "$2" 2>/dev/null && pwd -P)" || die "cannot resolve records dir: $2"
+    got="$(cd "$(dirname -- "$1")" 2>/dev/null && pwd -P)" || die "cannot resolve output dir for: $1"
+    [ "$got" = "$want" ] || die "refusing to write outside $want: $1"
+    [ ! -L "$1" ] || die "refusing to write through a symlink: $1"
+}
 
 # ===========================================================================
 # mistake
@@ -127,6 +204,7 @@ cmd_mistake() {
     )"
 
     mkdir -p "$(dirname "$MISTAKES_JSONL")"
+    [ ! -L "$MISTAKES_JSONL" ] || die "refusing to append through a symlink: $MISTAKES_JSONL"
     mistakes_locked "$(mistakes_lock_path "$(dirname "$MISTAKES_JSONL")")" _append_row "$row" \
         || die "could not take the mistakes.jsonl lock; row not appended"
     printf 'log-record: appended mistake to %s\n' "$MISTAKES_JSONL" >&2
@@ -166,12 +244,14 @@ cmd_decision() {
     done
     [ -n "$slug" ]    || die "decision requires --slug"
     [ -n "$date" ]    || date="$(date -u +%Y-%m-%d)"
+    _check_slug "$slug"; _check_date "$date"
     [ -n "$title" ]   || title="$slug"
     [ -n "$summary" ] || summary="$title"
 
     local id="dec.${date}-${slug}"
     local file="$DECISIONS_DIR/${date}-${slug}.md"
     mkdir -p "$DECISIONS_DIR"
+    _check_target "$file" "$DECISIONS_DIR"
 
     if [ -f "$file" ]; then
         if [ -z "$force" ]; then
@@ -260,6 +340,7 @@ cmd_solution() {
     done
     [ -n "$slug" ]    || die "solution requires --slug"
     [ -n "$date" ]    || date="$(date -u +%Y-%m-%d)"
+    _check_slug "$slug"; _check_date "$date"
     [ -n "$title" ]   || title="$slug"
     [ -n "$summary" ] || summary="$title"
     [ -n "$resolve_after" ] || resolve_after="$(date -u -d '+3 months' +%Y-%m-%d 2>/dev/null || date -u +%Y-%m-%d)"
@@ -267,6 +348,7 @@ cmd_solution() {
     local id="sol.${date}-${slug}"
     local file="$SOLUTIONS_DIR/${date}-${slug}.md"
     mkdir -p "$SOLUTIONS_DIR"
+    _check_target "$file" "$SOLUTIONS_DIR"
 
     if [ -f "$file" ]; then
         if [ -z "$force" ]; then
@@ -343,10 +425,12 @@ cmd_failure_mode() {
     [ -n "$slug" ] || die "failure-mode requires --slug"
     [ -n "$rule" ] || die "failure-mode requires --rule"
     [ -n "$date" ] || date="$(date -u +%Y-%m-%d)"
+    _check_slug "$slug"; _check_date "$date"
 
     local id="fm.${slug}"
     local file="$FAILURE_MODES_DIR/${slug}.md"
     mkdir -p "$FAILURE_MODES_DIR"
+    _check_target "$file" "$FAILURE_MODES_DIR"
 
     if [ -f "$file" ]; then
         if [ -z "$force" ]; then

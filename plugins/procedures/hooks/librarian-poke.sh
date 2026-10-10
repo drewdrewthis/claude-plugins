@@ -346,6 +346,121 @@ lp_claim() {
     return 0
 }
 
+# lp_access_args <state-dir> — print the drain's permission flags, one argv
+# word per line, for lp_drain to read into an array.
+# PLUGIN ADAPTATION: the vendored upstream launches with --permission-mode
+# auto. Headless, auto mode is not always available (it needs a supported
+# model and server-side availability; when it is missing the session starts
+# in Manual), and in Manual every Bash call and every read outside the cwd is
+# denied because nobody is there to approve it. dontAsk plus this allowlist
+# behaves the same every time. Transcripts are untrusted input, so the list
+# is scoped to the agent's own commands rather than bypassPermissions:
+#   - --setting-sources user: only ~/.claude/settings.json (which enables
+#     this plugin) is read, never the project or local settings of whatever
+#     cwd the drain starts in. On a box where $HOME/.claude/settings.local.json
+#     allows Bash(export:*), a session with cwd $HOME would otherwise hand the
+#     agent `export X=... && <pinned call>`. --settings and managed settings
+#     still apply. lp_drain also starts claude with its cwd in the state dir.
+#   - --add-dir: reads of the state dir, this plugin, the transcripts, and each
+#     store root. Without it a read outside the cwd is denied.
+#   - Edit: the commit-gate tmp dir, the grooming queue, and per root only the
+#     record .md files the librarian writes (agents/librarian.md step 4): one
+#     level of *.md in decisions/, solutions/, failure-modes/, policies/ and
+#     standards/, and procedures/**/*.md (PROCEDURE.md and its EVOLUTION.md).
+#     Everything else under a root is unwritable: its scripts/ and git-hooks/
+#     (the commit gate runs them), and every non-.md file, since dontAsk
+#     denies whatever no allow rule matches. .git is a protected path.
+#   - --disallowedTools: deny wins over allow, so these hold even if an allow
+#     rule above is widened later. Per records dir: any scripts/ dir at any
+#     depth (procedures ship executable helpers there), invariants/ and
+#     common-mistakes.md (a user CLAUDE.md can @-import them into every
+#     session), and the script and config extensions in LP_DENY_EXTS. A rule
+#     cannot say "not .md" (a [!x] bracket is not a negation in these rules),
+#     so other non-.md files rely on the allow list's default deny. Per records
+#     dir and in the state dir: every filename Claude Code auto-loads as
+#     instructions (lp_memory_denies), which the *.md allow globs would match.
+#   - Bash: the state-dir lookup, and log-record.sh and commit-records.sh with
+#     each root's literal CODEX_ROOT= prefix; commit-records.sh also has its
+#     `--root '<root>'` pinned right after the script. A rule matches the
+#     command text as written, so each quoting the agent doc uses gets its own
+#     rule. An allow rule does not match past an unknown variable assignment,
+#     and a wildcard in place of the root would also match
+#     `CODEX_ROOT=x <any program> ...`. The trailing `*` stays open, so each
+#     script validates its own arguments: log-record.sh refuses a slug or date
+#     that could leave the records dir, and commit-records.sh refuses a --root
+#     other than $CODEX_ROOT (or a second --root).
+#   - No mkdir and no rm: Write creates the tmp dir's parents itself, and the
+#     poke removes <state-dir>/tmp/commit-* after the drain (lp_clean_tmp).
+# Record kinds the librarian writes one level deep, and extensions denied
+# under every records dir.
+LP_EDIT_KINDS="decisions solutions failure-modes policies standards"
+LP_DENY_EXTS="sh bash zsh py js mjs cjs ts rb pl json jsonl yml yaml toml"
+lp_access_args() {
+    local sd="$1" pr r q q2 e rd k roots=()
+    pr="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)" || return 0
+    declare -p STORE_ROOTS >/dev/null 2>&1 && roots=(${STORE_ROOTS[@]+"${STORE_ROOTS[@]}"})
+    printf '%s\n' --setting-sources user --permission-mode dontAsk \
+        --add-dir "$sd" --add-dir "$pr" \
+        --add-dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
+    for r in ${roots[@]+"${roots[@]}"}; do printf '%s\n' --add-dir "$r"; done
+    printf '%s\n' --allowedTools \
+        "Bash(bash -c 'source \"$pr/scripts/lib/stores.sh\" && procedures_state_dir')" \
+        "Edit(/$sd/tmp/**)" "Edit(/$sd/grooming-queue.md)"
+    for r in ${roots[@]+"${roots[@]}"}; do
+        rd="$(stores_records_dir "$r")"
+        case "$rd" in /*) ;; *) rd="$r/$rd" ;; esac
+        for k in $LP_EDIT_KINDS; do printf '%s\n' "Edit(/$rd/$k/*.md)"; done
+        printf '%s\n' "Edit(/$rd/procedures/**/*.md)"
+        for q in '' "'" '"'; do
+            for e in "CODEX_ROOT=$q$r$q" "CODEX_ROOT=$q$r$q MISTAKES_JSONL=$q$r/mistakes.jsonl$q"; do
+                printf '%s\n' "Bash($e bash $pr/scripts/log-record.sh *)" \
+                    "Bash($e bash \"$pr/scripts/log-record.sh\" *)"
+                for q2 in '' "'" '"'; do
+                    printf '%s\n' "Bash($e bash $pr/scripts/commit-records.sh --root $q2$r$q2 *)" \
+                        "Bash($e bash \"$pr/scripts/commit-records.sh\" --root $q2$r$q2 *)"
+                done
+            done
+        done
+    done
+    printf '%s\n' --disallowedTools
+    for r in ${roots[@]+"${roots[@]}"}; do
+        rd="$(stores_records_dir "$r")"
+        case "$rd" in /*) ;; *) rd="$r/$rd" ;; esac
+        printf '%s\n' "Edit(/$rd/**/scripts/**)" "Edit(/$rd/invariants/**)" \
+            "Edit(/$rd/common-mistakes.md)"
+        for k in $LP_DENY_EXTS; do printf '%s\n' "Edit(/$rd/**/*.$k)"; done
+        lp_memory_denies "$rd"
+    done
+    lp_memory_denies "$sd"
+}
+
+# lp_memory_denies <dir> — deny rules for every file Claude Code auto-loads as
+# instructions (stores.sh STORES_MEMORY_NAMES, and anything under a
+# STORES_MEMORY_DIR dir) at any depth under <dir>, including <dir> itself.
+# The decisions/*.md and procedures/**/*.md allow globs match CLAUDE.md, and a
+# session whose cwd is the store root, $HOME or that dir would load one.
+lp_memory_denies() {
+    local n
+    for n in ${STORES_MEMORY_NAMES:-CLAUDE.md CLAUDE.local.md AGENTS.md}; do
+        printf '%s\n' "Edit(/$1/$n)" "Edit(/$1/**/$n)"
+    done
+    n="${STORES_MEMORY_DIR:-.claude}"
+    printf '%s\n' "Edit(/$1/$n/**)" "Edit(/$1/**/$n/**)"
+}
+
+# lp_clean_tmp <state-dir> — remove the commit gate's metadata dirs
+# (<state-dir>/tmp/commit-*) once the drain returns, whatever its exit. The
+# agent has no rm rule, so the cleanup is the poke's. Nothing outside
+# <state-dir>/tmp/ is touched; a symlink is removed as a link, not followed.
+lp_clean_tmp() {
+    local d
+    [ -n "$1" ] && [ -d "$1/tmp" ] || return 0
+    for d in "$1"/tmp/commit-*; do
+        [ -e "$d" ] || [ -L "$d" ] || continue
+        rm -rf -- "$d" 2>/dev/null || lp_log "librarian-poke: could not remove $d"
+    done
+}
+
 # lp_drain — under the claim: issue this drain's batch, then run the librarian
 # only when the batch issued something. The poke, not the agent, runs
 # librarian-batch.sh, so the agent cannot re-issue itself a bigger batch; an
@@ -356,6 +471,13 @@ lp_claim() {
 lp_drain() {
     local out rc=0 st manifest issued
     lp_cooled_down || return 0
+    # No store roots means no write rule at all: the drain would exit 0 having
+    # written nothing, the cursors would advance, and the batch would be lost.
+    # Skip before issuing anything, so the lines wait for a configured root.
+    if ! declare -p STORE_ROOTS >/dev/null 2>&1 || [ "${#STORE_ROOTS[@]}" -eq 0 ]; then
+        lp_log "librarian-poke: no store roots resolved, drain skipped; lines kept for the next drain"
+        return 0
+    fi
     if ! out="$(bash "$SCRIPT_DIR/../scripts/librarian-batch.sh" 2>&1)"; then
         lp_log "librarian-poke: batch failed, drain skipped: $(printf '%s' "$out" | tr '\n' ' ')"
         return 0
@@ -374,7 +496,27 @@ lp_drain() {
         || { lp_log "librarian-poke: cannot snapshot the manifest, drain skipped"; return 0; }
     lp_store_status | LC_ALL=C sort > "$st/store-status.before" 2>/dev/null || true
     date +%s > "$st/last-drain-start" 2>/dev/null || true
-    $LP_TIMEOUT $LP_NICE claude -p --permission-mode auto --agent procedures:librarian "Drain the transcript queue." || rc=$?
+    local access=() word roots
+    # A read loop, not mapfile: macOS ships bash 3.2.
+    while IFS= read -r word; do access+=("$word"); done < <(lp_access_args "$st")
+    roots="$(IFS=:; printf '%s' "${STORE_ROOTS[*]-}")"
+    # The roots and state dir go in the prompt and env, so the agent never
+    # has to list a parent dir that is outside its allowed reads.
+    # The drain runs in a subshell with its cwd in the state dir, so no
+    # project or local settings of the session's cwd ride along (lp_access_args
+    # also passes --setting-sources user), and without log-record.sh's path
+    # overrides: every allowed log-record.sh call pins CODEX_ROOT, and with it
+    # set the script derives each target, <root>/mistakes.jsonl included, and
+    # refuses an override that points anywhere else. An inherited
+    # MISTAKES_JSONL for one root would make every call for another refuse.
+    (
+        cd -- "$st" || exit 1
+        unset MISTAKES_JSONL DECISIONS_DIR SOLUTIONS_DIR FAILURE_MODES_DIR CODEX_RECORDS_DIR
+        export CODEX_STORE_ROOTS="$roots"
+        exec $LP_TIMEOUT $LP_NICE claude -p "${access[@]}" --agent procedures:librarian \
+            "Drain the transcript queue. State dir: $st. Store roots (CODEX_STORE_ROOTS): $roots."
+    ) || rc=$?
+    lp_clean_tmp "$st"
     # Cursors still advance past a gate block: re-issuing would loop on a
     # persistent block, and the gate already queued its reason.
     lp_note_store_writes "$st/store-status.before"

@@ -22,7 +22,11 @@ setup() {
   export LIBRARIAN_SETTLE_SECS=0
   export LIBRARIAN_LOCK="$TURN_STATE_DIR/librarian.lock"
   unset PROCEDURES_ENABLE_LIBRARIAN CLAUDE_CODE_ENTRYPOINT LIBRARIAN_SYNC LIBRARIAN_NO_FLOCK
-  unset LIBRARIAN_MIN_INTERVAL_SECS LIBRARIAN_CLAIM_TTL_SECS LIBRARIAN_MAX_RUNTIME_SEC CODEX_STORE_ROOTS
+  unset LIBRARIAN_MIN_INTERVAL_SECS LIBRARIAN_CLAIM_TTL_SECS LIBRARIAN_MAX_RUNTIME_SEC CODEX_STORE_ROOTS CODEX_ROOT
+  # A drain with no store root is skipped (no write rules), so every test gets
+  # one by default; a test that needs none unsets it.
+  mkdir -p "$HOME/default-store/records"
+  export CODEX_STORE_ROOTS="$HOME/default-store"
   # Pin a calm load so a busy box cannot defer the worker; an exported
   # LP_LOADAVG_FILE (e.g. /proc/loadavg) still wins for a real-load run.
   if [ -z "${LP_LOADAVG_FILE:-}" ]; then
@@ -42,6 +46,10 @@ setup() {
 #!/usr/bin/env bash
 echo ran >> "$CLAUDE_LOG"
 printf '%s\n' "\$*" > "$STUB_BIN/last-claude-args"
+printf '%s\n' "\$@" > "$STUB_BIN/last-claude-argv"
+printf '%s\n' "\${MISTAKES_JSONL-UNSET}" > "$STUB_BIN/last-claude-mistakes"
+printf '%s\n' "\${DECISIONS_DIR-UNSET}" "\${SOLUTIONS_DIR-UNSET}" "\${FAILURE_MODES_DIR-UNSET}" "\${CODEX_RECORDS_DIR-UNSET}" > "$STUB_BIN/last-claude-overrides"
+pwd -P > "$STUB_BIN/last-claude-cwd"
 exit 0
 EOF
   chmod +x "$STUB_BIN/claude"
@@ -145,7 +153,173 @@ unread_line() { user_prompt; }
   [ "$status" -eq 0 ]
   marker_present
   [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
-  grep -q -- '-p --permission-mode auto --agent procedures:librarian Drain the transcript queue.' "$STUB_BIN/last-claude-args"
+  grep -q -- '-p --setting-sources user --permission-mode dontAsk ' "$STUB_BIN/last-claude-args"
+  grep -q -- ' --agent procedures:librarian Drain the transcript queue. State dir: ' "$STUB_BIN/last-claude-args"
+}
+
+@test "worker: the drain is scoped to its own commands, per store root, never auto or bypass" {
+  ROOT="$HOME/store"; mkdir -p "$ROOT/records"
+  export CODEX_STORE_ROOTS="$ROOT"
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  argv="$STUB_BIN/last-claude-argv"
+  PR="$(cd "$HOOKS/.." && pwd)"
+  ! grep -qx -- 'auto' "$argv"
+  ! grep -q -- 'bypassPermissions\|dangerously' "$argv"
+  grep -qx -- 'dontAsk' "$argv"
+  # Reads: the root and the plugin are added dirs; writes: only record .md
+  # files in the root's records dir (see the narrowed-Edit test below).
+  grep -qxF -- "$ROOT" "$argv"
+  grep -qxF -- "$PR" "$argv"
+  grep -qxF -- "Edit(/$ROOT/records/decisions/*.md)" "$argv"
+  ! grep -qxF -- "Edit(/$ROOT/records/**)" "$argv"
+  ! grep -qxF -- "Edit(/$ROOT/**)" "$argv"
+  # The quoting the agent doc uses for the commit gate matches a literal rule,
+  # with --root pinned to the same root; no commit-gate rule leaves --root open.
+  grep -qxF -- "Bash(CODEX_ROOT='$ROOT' bash \"$PR/scripts/commit-records.sh\" --root '$ROOT' *)" "$argv"
+  ! grep -xF -- "Bash(CODEX_ROOT='$ROOT' bash \"$PR/scripts/commit-records.sh\" *)" "$argv"
+  [ -z "$(grep -F 'commit-records.sh' "$argv" | grep -vF -- "commit-records.sh\" --root " | grep -vF -- "commit-records.sh --root ")" ]
+  grep -qxF -- "Bash(CODEX_ROOT=$ROOT MISTAKES_JSONL=$ROOT/mistakes.jsonl bash $PR/scripts/log-record.sh *)" "$argv"
+  # No mkdir rule (Write creates the tmp dir) and no rm rule (the poke cleans up).
+  ! grep -q -- 'Bash(mkdir' "$argv"
+  ! grep -q -- 'Bash(rm' "$argv"
+  # No rule leaves the root to a wildcard, and the agent cannot move cursors.
+  ! grep -q -- 'CODEX_ROOT=\*' "$argv"
+  ! grep -q -- 'librarian-advance' "$argv"
+  # The prompt names the roots.
+  grep -q -- "Store roots (CODEX_STORE_ROOTS): $ROOT\." "$argv"
+}
+
+# _argv_section <argv-file> <flag> — the argv words after <flag> up to the
+# next word starting with "--".
+_argv_section() {
+  awk -v f="$2" '$0 == f { on = 1; next } on && /^--/ { on = 0 } on' "$1"
+}
+
+@test "worker: Edit allows only record .md kinds; scripts, invariants, common-mistakes, non-.md are denied" {
+  ROOT="$HOME/store"; mkdir -p "$ROOT/records"
+  export CODEX_STORE_ROOTS="$ROOT"
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  argv="$STUB_BIN/last-claude-argv"
+  RD="$ROOT/records"
+  _argv_section "$argv" --allowedTools > "$STUB_BIN/allow"
+  _argv_section "$argv" --disallowedTools > "$STUB_BIN/deny"
+  # Allowed: exactly the record kinds the librarian writes, .md only.
+  for k in decisions solutions failure-modes policies standards; do
+    grep -qxF -- "Edit(/$RD/$k/*.md)" "$STUB_BIN/allow"
+  done
+  grep -qxF -- "Edit(/$RD/procedures/**/*.md)" "$STUB_BIN/allow"
+  # Every Edit allow under the records dir ends in *.md, and none is the old
+  # catch-all or names invariants/ or common-mistakes.md.
+  [ -z "$(grep -F "Edit(/$RD/" "$STUB_BIN/allow" | grep -v '\*\.md)$')" ]
+  ! grep -qxF -- "Edit(/$RD/**)" "$STUB_BIN/allow"
+  ! grep -q -- 'invariants\|common-mistakes' "$STUB_BIN/allow"
+  # Denied (deny wins over allow), inside the --disallowedTools list.
+  grep -qxF -- "Edit(/$RD/**/scripts/**)" "$STUB_BIN/deny"
+  grep -qxF -- "Edit(/$RD/invariants/**)" "$STUB_BIN/deny"
+  grep -qxF -- "Edit(/$RD/common-mistakes.md)" "$STUB_BIN/deny"
+  for e in sh py js json jsonl yml yaml; do
+    grep -qxF -- "Edit(/$RD/**/*.$e)" "$STUB_BIN/deny"
+  done
+  # The deny list ends before --agent, so the prompt is not swallowed as a rule.
+  [ "$(grep -n -x -- '--disallowedTools' "$argv" | cut -d: -f1)" -lt "$(grep -n -x -- '--agent' "$argv" | cut -d: -f1)" ]
+  grep -qx -- 'procedures:librarian' "$argv"
+}
+
+@test "worker: every auto-loaded memory filename is denied under each records dir and the state dir" {
+  A="$HOME/store-a"; B="$HOME/store-b"; mkdir -p "$A/records" "$B/records"
+  export CODEX_STORE_ROOTS="$A:$B"
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  argv="$STUB_BIN/last-claude-argv"
+  _argv_section "$argv" --allowedTools > "$STUB_BIN/allow"
+  _argv_section "$argv" --disallowedTools > "$STUB_BIN/deny"
+  SD="$(sed -n 's|^Edit(/\(.*\)/tmp/\*\*)$|\1|p' "$STUB_BIN/allow")"
+  [ -n "$SD" ]
+  # The allow glob does match the name, so only the deny keeps it out.
+  grep -qxF -- "Edit(/$A/records/decisions/*.md)" "$STUB_BIN/allow"
+  for d in "$A/records" "$B/records" "$SD"; do
+    for n in CLAUDE.md CLAUDE.local.md AGENTS.md; do
+      grep -qxF -- "Edit(/$d/$n)" "$STUB_BIN/deny"
+      grep -qxF -- "Edit(/$d/**/$n)" "$STUB_BIN/deny"
+    done
+    grep -qxF -- "Edit(/$d/.claude/**)" "$STUB_BIN/deny"
+    grep -qxF -- "Edit(/$d/**/.claude/**)" "$STUB_BIN/deny"
+  done
+  # None of them leaked into the allow list.
+  ! grep -q -- 'CLAUDE\|AGENTS\|\.claude/' "$STUB_BIN/allow"
+}
+
+@test "worker: the drain env carries none of log-record.sh's path overrides" {
+  A="$HOME/store-a"; B="$HOME/store-b"; mkdir -p "$A/records" "$B/records"
+  export CODEX_STORE_ROOTS="$A:$B"
+  # Inherited from the session: each would move or refuse a pinned call.
+  export MISTAKES_JSONL="$A/mistakes.jsonl" DECISIONS_DIR="$HOME/.claude/agents" \
+    SOLUTIONS_DIR="$HOME/x" FAILURE_MODES_DIR="$HOME/y" CODEX_RECORDS_DIR="../z"
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_BIN/last-claude-mistakes")" = "UNSET" ]
+  [ "$(sort -u "$STUB_BIN/last-claude-overrides")" = "UNSET" ]
+}
+
+@test "worker: the drain reads user settings only, with its cwd in the state dir" {
+  LIBRARIAN_SYNC=1 run_poke
+  [ "$status" -eq 0 ]
+  argv="$STUB_BIN/last-claude-argv"
+  # --setting-sources user, as two argv words, before --agent.
+  n="$(grep -n -x -- '--setting-sources' "$argv" | cut -d: -f1)"
+  [ -n "$n" ]
+  [ "$(sed -n "$((n + 1))p" "$argv")" = "user" ]
+  [ "$n" -lt "$(grep -n -x -- '--agent' "$argv" | cut -d: -f1)" ]
+  [ "$(grep -c -x -- '--setting-sources' "$argv")" -eq 1 ]
+  ! grep -qx -- 'project\|local\|user,project\|user,project,local' "$argv"
+  # The cwd is the state dir (the Edit(<sd>/tmp/**) rule names it), not the
+  # session's cwd.
+  _argv_section "$argv" --allowedTools > "$STUB_BIN/allow"
+  SD="$(sed -n 's|^Edit(/\(.*\)/tmp/\*\*)$|\1|p' "$STUB_BIN/allow")"
+  [ -n "$SD" ]
+  [ "$(cat "$STUB_BIN/last-claude-cwd")" = "$(cd "$SD" && pwd -P)" ]
+  [ "$(cat "$STUB_BIN/last-claude-cwd")" != "$(pwd -P)" ]
+}
+
+@test "worker: no store roots resolved => drain skipped and logged, nothing issued, cursors kept" {
+  unset CODEX_STORE_ROOTS CODEX_ROOT
+  [ ! -e "$HOME/.knowledge" ]
+  unread_line
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  local st="$HOME/.local/state/procedures/librarian"
+  grep -q 'librarian-poke: no store roots resolved, drain skipped' "$st/librarian-poke.log"
+  [ ! -s "$st/batch.manifest" ]
+  [ ! -e "$st/cursors/$SID.line" ]
+  # With a root back, the same line is issued and the drain runs.
+  export CODEX_STORE_ROOTS="$HOME/default-store"
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ "$(cat "$st/cursors/$SID.line")" = "1" ]
+}
+
+@test "worker: the poke removes <state-dir>/tmp/commit-* after the drain, and nothing else" {
+  unread_line
+  local st="$HOME/.local/state/procedures/librarian"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+mkdir -p "$st/tmp/commit-a" "$st/tmp/keep"
+echo w > "$st/tmp/commit-a/why.txt"; echo k > "$st/tmp/keep/x"
+echo o > "$HOME/outside"; ln -s "$HOME/outside" "$st/tmp/commit-link"
+exit 1
+EOF
+  LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ ! -e "$st/tmp/commit-a" ]
+  [ ! -L "$st/tmp/commit-link" ]
+  [ -f "$HOME/outside" ]
+  [ -f "$st/tmp/keep/x" ]
 }
 
 @test "worker: a pre-seeded claim (concurrent holder) is never stolen — claude never invoked" {

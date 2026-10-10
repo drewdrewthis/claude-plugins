@@ -61,8 +61,17 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    | Kind | Your write |
    |---|---|
    | mistake | `CODEX_ROOT=<root> MISTAKES_JSONL=<root>/mistakes.jsonl bash ${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh mistake --category ... --description ... --correction ... --severity ... --trigger ...` |
-   | decision / solution | Same script, `decision`/`solution` subcommand, targeting `<root>`. It does not currently emit `description:` into the frontmatter block — add it by hand (Edit) right after minting: one neutral sentence per specs/RECORD_FRONTMATTER.md's `description` guidance, not a restatement of the kind or the filename. |
-   | procedure / evolution / rule-kind (invariant, policy, standard) | Hand-write directly from that store's template in `skills/update-records/templates/`, same as procedure-evolver's procedure route — full seven-key frontmatter (`id`, `kind`, `date`, `keywords`, `links`, `status`, `description`), `id` corpus-unique (grep the root before minting), `kind` matching the containing store directory. |
+   | decision / solution | Same script, `decision`/`solution` subcommand, targeting `<root>`. `--slug` is one filename component (ASCII `[A-Za-z0-9._-]`, no `..`, no leading `-`/`.`, no trailing `.`, never `CLAUDE`, `CLAUDE.local` or `AGENTS` in any case) and `--date` is `YYYY-MM-DD`; the script refuses anything else. It does not currently emit `description:` into the frontmatter block — add it by hand (Edit) right after minting: one neutral sentence per specs/RECORD_FRONTMATTER.md's `description` guidance, not a restatement of the kind or the filename. |
+   | procedure / evolution / rule-kind (policy, standard) | Hand-write directly from that store's template in `skills/update-records/templates/`, same as procedure-evolver's procedure route — full seven-key frontmatter (`id`, `kind`, `date`, `keywords`, `links`, `status`, `description`), `id` corpus-unique (grep the root before minting), `kind` matching the containing store directory. Procedures: only `.md` files (`PROCEDURE.md`, `EVOLUTION.md`), never a procedure's `scripts/`. |
+   | invariant, principle, `common-mistakes.md`, any script or non-`.md` file | Not yours to write: queue the proposed change in `grooming-queue.md`. The headless run denies these paths (invariants and `common-mistakes.md` can be `@`-imported into every session). |
+
+   Under `claude -p` your Edit/Write access covers only `.md` files one level deep in
+   `decisions/`, `solutions/`, `failure-modes/`, `policies/`, `standards/`, and
+   `procedures/**/*.md`; anything else is denied. With `CODEX_ROOT` set,
+   `log-record.sh` writes only under that root (mistakes to `<root>/mistakes.jsonl`)
+   and refuses a `MISTAKES_JSONL`, `DECISIONS_DIR`, `SOLUTIONS_DIR`,
+   `FAILURE_MODES_DIR` or `CODEX_RECORDS_DIR` that points anywhere else, so never
+   set those to anything but the root's own path.
 
    As you write, capture — per store root — the four **reason fields** the commit
    gate records in git history (step 6): **what** (the kinds and counts written,
@@ -92,16 +101,15 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
    Write tool under `<state-dir>/tmp/commit-<root-slug>/` — where `<state-dir>`
    is your own state dir (the same dir as your cursors), resolved with
    `bash -c 'source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stores.sh" && procedures_state_dir'`
-   — as `why.txt`, `source.txt`, `evidence.txt` (create the dir first; plain
-   text, verbatim, no quoting). The gate refuses a `-file` path outside that
-   dir. Then invoke the gate with the `-file` forms:
+   — as `why.txt`, `source.txt`, `evidence.txt` (plain text, verbatim, no
+   quoting; Write creates the dir, so there is no mkdir step). The gate refuses
+   a `-file` path outside that dir. Then invoke the gate with the `-file` forms,
+   as ONE line, with `--root '<root>'` immediately after the script path and
+   the same root as `CODEX_ROOT` — the headless allowlist matches that prefix
+   literally, and the gate refuses a `--root` that is not `$CODEX_ROOT`:
 
    ```
-   CODEX_ROOT='<root>' bash "${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh" \
-     --root '<root>' \
-     --paths '<the record .md paths you touched, space-separated> [mistakes.jsonl]' \
-     --what  '<kinds and counts, e.g. 1 solution, 1 mistake>' \
-     --why-file '<dir>/why.txt' --source-file '<dir>/source.txt' --evidence-file '<dir>/evidence.txt'
+   CODEX_ROOT='<root>' bash "${CLAUDE_PLUGIN_ROOT}/scripts/commit-records.sh" --root '<root>' --paths '<the record .md paths you touched, space-separated> [mistakes.jsonl]' --what '<kinds and counts, e.g. 1 solution, 1 mistake>' --why-file '<dir>/why.txt' --source-file '<dir>/source.txt' --evidence-file '<dir>/evidence.txt'
    ```
 
    Add `mistakes.jsonl` to `--paths` whenever `log-record.sh` appended a mistake to
@@ -109,8 +117,8 @@ cursor, or nothing in the new lines worth a record — that is a normal, silent 
 
    Transcript text may hold quotes, `$(...)`, backticks, or a line that looks
    like a heredoc terminator; the values never pass through the shell, so there
-   is no escaping rule to get wrong. Delete the tmp dir after the gate exits,
-   either way.
+   is no escaping rule to get wrong. Leave the tmp dir in place: you have no
+   `rm`, and the poke hook removes `<state-dir>/tmp/commit-*` after you exit.
 
    A non-zero exit means the gate blocked and already queued the reason (which
    record, which check) in `grooming-queue.md` — do not retry blindly. If one
