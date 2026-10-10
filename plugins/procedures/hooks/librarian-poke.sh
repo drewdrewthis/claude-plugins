@@ -3,9 +3,10 @@
 #
 # SINGLE RESPONSIBILITY: once per qualifying turn, wake the librarian agent to
 # drain whatever transcript backlog has built up. This hook decides WHEN to
-# poke (cooldown, load gate) and owns the per-transcript cursors (advanced
-# only after a clean wake); agents/librarian.md decides WHAT is worth
-# extracting, and is safe to poke more often than it has new work.
+# poke (cooldown, load gate, mid-batch pressure re-check) and owns the
+# per-transcript cursors (advanced only after a clean wake);
+# agents/librarian.md decides WHAT is worth extracting, and is safe to poke
+# more often than it has new work.
 #
 # DIVERGES FROM evolve-sweep.sh ON PURPOSE: no per-turn classifier call, no
 # digest of the final message, no asyncRewake wake-the-caller trick. The
@@ -83,6 +84,12 @@ lp_log() {
     printf '%s %s\n' "$(date -Is 2>/dev/null || true)" "${1:-}" >>"$logf" 2>/dev/null || true
 }
 
+# Quiet mode (set for the --load-ok re-entry): it runs every few seconds
+# mid-scan, and the spawn check of this same drain already logged any invalid
+# tunable or blind fail-open, so logging again would grow the log unbounded.
+LP_QUIET=0
+[ "${1:-}" = "--load-ok" ] && LP_QUIET=1
+
 # lp_num_or_default <name> <value> <default> <ere> — echo <value> when it
 # matches the (anchored) ERE, else log one line and echo <default>. The value
 # is passed in directly (not via ${!name}) so set -u never trips on an unset
@@ -94,7 +101,7 @@ lp_num_or_default() {
     if [[ "$val" =~ $re ]]; then
         printf '%s' "$val"
     else
-        lp_log "librarian-poke: invalid $name=$val, using $def"
+        [ "$LP_QUIET" = 1 ] || lp_log "librarian-poke: invalid $name=$val, using $def"
         printf '%s' "$def"
     fi
 }
@@ -106,16 +113,19 @@ case "$LIBRARIAN_SETTLE_SECS" in ''|*[!0-9]*) LIBRARIAN_SETTLE_SECS=3 ;; esac
 # Wall-clock cap on one drain; see LP_TIMEOUT below.
 LIBRARIAN_MAX_RUNTIME_SEC="$(lp_num_or_default LIBRARIAN_MAX_RUNTIME_SEC "${LIBRARIAN_MAX_RUNTIME_SEC:-1800}" 1800 '^[0-9]+$')"
 
-# The claim TTL must outlive a drain at its cap plus timeout's 60s kill-after,
-# or a live drain's claim is stolen and two librarians write at once.
+# The batch scan and the drain share this one cap, so the claim TTL must
+# outlive it plus timeout's 60s kill-after, or a live drain's claim is stolen
+# and two librarians write at once.
 LP_TTL_DEFAULT=$(( LIBRARIAN_MAX_RUNTIME_SEC + 120 ))
 LIBRARIAN_CLAIM_TTL_SECS="${LIBRARIAN_CLAIM_TTL_SECS:-$LP_TTL_DEFAULT}"
 case "$LIBRARIAN_CLAIM_TTL_SECS" in ''|*[!0-9]*|0) LIBRARIAN_CLAIM_TTL_SECS=$LP_TTL_DEFAULT ;; esac
 
 # LIBRARIAN_MIN_INTERVAL_SECS (default 1800, 0 disables) — minimum gap between
-# the STARTS of two drains that ran claude, because every wake is a fresh
-# session whose prompt is a cache write. A deferred poke loses nothing: the
-# cursors stay put, so the next drain issues the whole backlog in one batch.
+# the STARTS of two drains that ran claude, or whose scan was aborted mid-batch
+# by the pressure re-check (that back-off is disabled by 0 too), because every
+# wake is a fresh session whose prompt is a cache write. A deferred poke loses
+# nothing: the cursors stay put, so the next drain issues the whole backlog in
+# one batch.
 LIBRARIAN_MIN_INTERVAL_SECS="$(lp_num_or_default LIBRARIAN_MIN_INTERVAL_SECS "${LIBRARIAN_MIN_INTERVAL_SECS:-1800}" 1800 '^[0-9]+$')"
 
 LIBRARIAN_LOCK="${LIBRARIAN_LOCK:-$(lp_state_dir)/librarian.lock}"
@@ -134,11 +144,17 @@ LIBRARIAN_LOCK_DIR="${LIBRARIAN_LOCK_DIR:-${LIBRARIAN_LOCK}.d}"
 #   (a) run the drain at idle I/O + lowest CPU priority (ionice -c3 nice -n19),
 #       so even when it does run it yields to real work — see LP_NICE below;
 #   (b) refuse to start it at all when the box is already under pressure —
-#       1-min loadavg over LIBRARIAN_LOAD_CEILING (default 8 = one core-worth
-#       per core on this 8-core box), or iowait over LIBRARIAN_IOWAIT_CEILING
-#       (default 30%) sampled over a ~1s /proc/stat window. On a defer the
-#       poke exits 0 without draining; the next qualifying turn retries, so no
-#       backlog is lost, only postponed until the box can afford it.
+#       1-min loadavg at or over LIBRARIAN_LOAD_CEILING (default 8 = one
+#       core-worth per core on this 8-core box), or iowait at or over
+#       LIBRARIAN_IOWAIT_CEILING (default 30%) sampled over a ~1s /proc/stat
+#       window. A ceiling of 0 defers every drain (load and iowait are never
+#       below 0). On a defer the poke exits 0 without draining; the next
+#       qualifying turn retries, so no backlog is lost, only postponed until
+#       the box can afford it.
+# The scan itself can run long, so pressure can rise after (b) passed: the
+# batch re-runs this check (--load-ok) every LIBRARIAN_RECHECK_SECS (default 5)
+# and aborts on a defer; lp_drain then leaves cursors alone and backs off for
+# the cooldown.
 # Load is a decimal (loadavg), iowait an integer percent. Strict-validate
 # both: anything not matching the anchored pattern falls back to the default
 # AND logs, so a fat-fingered ceiling can never silently coerce the drain into
@@ -180,14 +196,17 @@ lp_iowait_pct() {
 # lp_log_failopen <signal> — record a blind fail-open: a pressure signal was
 # unreadable (empty /proc read), so the gate RELEASES rather than blocks — an
 # unreadable /proc must never wedge the drain shut. Distinct message from
-# lp_log_defer (which records an intentional over-ceiling defer) so a silently
-# degraded gate is visible in the log. Best-effort: an unwritable log never
-# blocks the poke.
+# lp_log_defer (which records an intentional at-or-over-ceiling defer) so a
+# silently degraded gate is visible in the log. Silent under LP_QUIET: a line
+# per mid-batch re-check would grow the log without bound where /proc is
+# absent (macOS). Best-effort: an unwritable log never blocks the poke.
 lp_log_failopen() {
+    [ "$LP_QUIET" = 1 ] && return 0
     lp_log "librarian-poke: fail-open, ${1:-} unreadable — proceeding without that signal"
 }
 
-# lp_load_ok — 0 to proceed with the drain, 1 to defer (and log the reason).
+# lp_load_ok — 0 to proceed with the drain, 1 to defer (and log the reason);
+# a reading at or over its ceiling defers, so a ceiling of 0 always defers.
 # Fail-open: an unreadable /proc never blocks the drain — but every blind
 # release is logged (lp_log_failopen), so a gate degraded to always-open is
 # not silent.
@@ -199,8 +218,8 @@ lp_load_ok() {
     local l iw
     l="$(awk '{print $1}' "${LP_LOADAVG_FILE:-/proc/loadavg}" 2>/dev/null)"
     if [ -n "$l" ]; then
-        if awk -v x="$l" -v y="$LIBRARIAN_LOAD_CEILING" 'BEGIN{exit !(x+0>y+0)}'; then
-            lp_log_defer "load=$l > ceiling=$LIBRARIAN_LOAD_CEILING"
+        if awk -v x="$l" -v y="$LIBRARIAN_LOAD_CEILING" 'BEGIN{exit !(x+0>=y+0)}'; then
+            lp_log_defer "load=$l >= ceiling=$LIBRARIAN_LOAD_CEILING"
             return 1
         fi
     else
@@ -208,8 +227,8 @@ lp_load_ok() {
     fi
     iw="$(lp_iowait_pct)" || iw=""
     if [ -n "$iw" ]; then
-        if [ "$iw" -gt "$LIBRARIAN_IOWAIT_CEILING" ] 2>/dev/null; then
-            lp_log_defer "iowait=${iw}% > ceiling=${LIBRARIAN_IOWAIT_CEILING}%"
+        if [ "$iw" -ge "$LIBRARIAN_IOWAIT_CEILING" ] 2>/dev/null; then
+            lp_log_defer "iowait=${iw}% >= ceiling=${LIBRARIAN_IOWAIT_CEILING}%"
             return 1
         fi
     else
@@ -226,17 +245,22 @@ LP_NICE=""
 command -v ionice >/dev/null 2>&1 && LP_NICE="ionice -c3"
 command -v nice   >/dev/null 2>&1 && LP_NICE="${LP_NICE:+$LP_NICE }nice -n19"
 
-# LP_TIMEOUT — a wall-clock cap on the drain. Under `ionice -c3` (idle I/O)
-# the drain can be starved indefinitely on a busy box while it still HOLDS the
-# single-writer lock, so every later poke finds the lock taken and no drain
-# ever runs again. Bounding the run at LIBRARIAN_MAX_RUNTIME_SEC (default 30m)
-# guarantees the lock is released: a starved drain is TERMed, KILLed 60s later
-# if it ignores that, and the next qualifying turn retries. Guarded on the
-# binary — `timeout` is absent on macOS/BSD, where it simply drops out of the
-# prefix (the drain then runs unbounded, exactly as it does today).
-LP_TIMEOUT=""
-command -v timeout >/dev/null 2>&1 && \
-    LP_TIMEOUT="timeout --signal=TERM --kill-after=60 $LIBRARIAN_MAX_RUNTIME_SEC"
+# lp_timeout_prefix <secs> — print the `timeout` prefix for a run capped at
+# <secs>, or nothing when `timeout` is absent (macOS/BSD: the run is then
+# unbounded, as it always was).
+lp_timeout_prefix() {
+    command -v timeout >/dev/null 2>&1 || return 0
+    printf 'timeout --signal=TERM --kill-after=60 %s' "$1"
+}
+
+# LP_TIMEOUT — the wall-clock cap on the batch scan. Under `ionice -c3` (idle
+# I/O) a drain can be starved indefinitely on a busy box while it still HOLDS
+# the single-writer lock, so every later poke finds the lock taken and no
+# drain ever runs again. Bounding the run at LIBRARIAN_MAX_RUNTIME_SEC
+# (default 30m) guarantees the lock is released: a starved run is TERMed,
+# KILLed 60s later if it ignores that, and the next qualifying turn retries.
+# The scan and the drain share one cap: the drain gets what the scan left.
+LP_TIMEOUT="$(lp_timeout_prefix "$LIBRARIAN_MAX_RUNTIME_SEC")"
 
 # lp_note_timeout <rc> — log one line, and return 0, when the drain was killed
 # by the runtime cap. `timeout` exits 124 on TERM, or 137 (128+SIGKILL) when
@@ -252,8 +276,17 @@ lp_note_timeout() {
     return 1
 }
 
+# lp_stamp_drain — record now as the start of a drain, for lp_cooled_down.
+lp_stamp_drain() {
+    local st; st="$(lp_state_dir)"
+    mkdir -p "$st" 2>/dev/null || true
+    date +%s > "$st/last-drain-start" 2>/dev/null || true
+}
+
 # lp_cooled_down [quiet] — 0 when no drain started within
-# LIBRARIAN_MIN_INTERVAL_SECS, 1 otherwise (logged unless quiet: the gating
+# LIBRARIAN_MIN_INTERVAL_SECS, 1 otherwise. A drain counts if it ran claude or
+# its scan was aborted mid-batch by the pressure re-check or killed by the
+# runtime cap (logged unless quiet: the gating
 # half checks every turn, and one log line per turn is noise). An absent or
 # unreadable stamp never blocks a drain.
 lp_cooled_down() {
@@ -461,15 +494,25 @@ lp_clean_tmp() {
     done
 }
 
+# EX_TEMPFAIL: the --load-ok exit that means "pressure, stop". Any other exit
+# from the check means proceed, so a broken check can never wedge the drain.
+# Must match DEFER_RC in scripts/librarian-batch.sh.
+LP_DEFER_RC=75
+
 # lp_drain — under the claim: issue this drain's batch, then run the librarian
 # only when the batch issued something. The poke, not the agent, runs
 # librarian-batch.sh, so the agent cannot re-issue itself a bigger batch; an
 # empty manifest (or a failed batch, which leaves none) spends no tokens.
+# The batch re-checks pressure mid-scan (--pressure-check, rc 75 = EX_TEMPFAIL
+# in LP_DEFER_RC): then the cursors stay put and the cooldown stamp is written
+# so the next turns back off instead of repeating the scan. The scan is capped
+# by LP_TIMEOUT too: a killed scan (124/137) leaves the cursors, releases the
+# lock and stamps the cooldown the same way.
 # Exit 0 means the batch counts as read (agents/librarian.md step 7), so only
 # then are the cursors advanced; a crash or timeout leaves them, and the next
 # drain re-issues the same lines (at-least-once).
 lp_drain() {
-    local out rc=0 st manifest issued
+    local out rc=0 st manifest issued scan_start scan_secs left
     lp_cooled_down || return 0
     # No store roots means no write rule at all: the drain would exit 0 having
     # written nothing, the cursors would advance, and the batch would be lost.
@@ -478,7 +521,24 @@ lp_drain() {
         lp_log "librarian-poke: no store roots resolved, drain skipped; lines kept for the next drain"
         return 0
     fi
-    if ! out="$(bash "$SCRIPT_DIR/../scripts/librarian-batch.sh" 2>&1)"; then
+    scan_start=$SECONDS
+    out="$($LP_TIMEOUT $LP_NICE bash "$SCRIPT_DIR/../scripts/librarian-batch.sh" --pressure-check "$SELF" 2>&1)" || rc=$?
+    if [ "$rc" -eq "$LP_DEFER_RC" ]; then
+        lp_stamp_drain
+        lp_log "librarian-poke: batch deferred, pressure rose mid-scan; cursors not advanced, next drain waits for the cooldown"
+        return 0
+    fi
+    scan_secs=$(( SECONDS - scan_start ))
+    # 124/137 below the cap is some other death (e.g. an outside SIGKILL), not an overrun.
+    if [ -n "$LP_TIMEOUT" ] && { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; } \
+        && [ "$scan_secs" -ge "$LIBRARIAN_MAX_RUNTIME_SEC" ]; then
+        st="$(lp_state_dir)"
+        rm -f "$st/batch.manifest.tmp" "$st/batch.txt.part" 2>/dev/null
+        lp_stamp_drain
+        lp_log "librarian-poke: batch scan exceeded ${LIBRARIAN_MAX_RUNTIME_SEC}s cap, killed; cursors not advanced, lock released, next drain waits for the cooldown"
+        return 0
+    fi
+    if [ "$rc" -ne 0 ]; then
         lp_log "librarian-poke: batch failed, drain skipped: $(printf '%s' "$out" | tr '\n' ' ')"
         return 0
     fi
@@ -495,8 +555,11 @@ lp_drain() {
     cp "$manifest" "$issued" 2>/dev/null \
         || { lp_log "librarian-poke: cannot snapshot the manifest, drain skipped"; return 0; }
     lp_store_status | LC_ALL=C sort > "$st/store-status.before" 2>/dev/null || true
-    date +%s > "$st/last-drain-start" 2>/dev/null || true
-    local access=() word roots
+    lp_stamp_drain
+    local access=() word roots drain_timeout
+    left=$(( LIBRARIAN_MAX_RUNTIME_SEC - scan_secs ))
+    [ "$left" -ge 1 ] || left=1
+    drain_timeout="$(lp_timeout_prefix "$left")"
     # A read loop, not mapfile: macOS ships bash 3.2.
     while IFS= read -r word; do access+=("$word"); done < <(lp_access_args "$st")
     roots="$(IFS=:; printf '%s' "${STORE_ROOTS[*]-}")"
@@ -513,7 +576,7 @@ lp_drain() {
         cd -- "$st" || exit 1
         unset MISTAKES_JSONL DECISIONS_DIR SOLUTIONS_DIR FAILURE_MODES_DIR CODEX_RECORDS_DIR
         export CODEX_STORE_ROOTS="$roots"
-        exec $LP_TIMEOUT $LP_NICE claude -p "${access[@]}" --agent procedures:librarian \
+        exec $drain_timeout $LP_NICE claude -p "${access[@]}" --agent procedures:librarian \
             "Drain the transcript queue. State dir: $st. Store roots (CODEX_STORE_ROOTS): $roots."
     ) || rc=$?
     lp_clean_tmp "$st"
@@ -539,8 +602,8 @@ lp_worker() {
     sleep "$LIBRARIAN_SETTLE_SECS" 2>/dev/null || true
     command -v claude >/dev/null 2>&1 || return 0
 
-    # Load gate: read pressure fresh, immediately before draining. Over the
-    # ceiling => defer (logged) and exit without touching the corpus. The next
+    # Load gate: read pressure fresh, immediately before draining. At or over
+    # the ceiling => defer (logged) and exit without touching the corpus. The next
     # qualifying turn pokes again, so nothing is dropped, only postponed.
     lp_load_ok || return 0
 
@@ -564,6 +627,15 @@ lp_worker() {
     fi
     return 0
 }
+
+# --- pressure check re-entry --------------------------------------------
+# librarian-batch.sh calls back with --load-ok mid-scan. Before migration and
+# stdin: the check runs every few seconds mid-scan, so it must not migrate
+# state or read the pipe.
+if [ "${1:-}" = "--load-ok" ]; then
+    lp_load_ok && exit 0
+    exit "$LP_DEFER_RC"
+fi
 
 # --- one-time state migration ----------------------------------------------
 # Move librarian runtime state (cursors, grooming queue) out of the git-tracked

@@ -23,6 +23,9 @@ setup() {
   export LIBRARIAN_LOCK="$TURN_STATE_DIR/librarian.lock"
   unset PROCEDURES_ENABLE_LIBRARIAN CLAUDE_CODE_ENTRYPOINT LIBRARIAN_SYNC LIBRARIAN_NO_FLOCK
   unset LIBRARIAN_MIN_INTERVAL_SECS LIBRARIAN_CLAIM_TTL_SECS LIBRARIAN_MAX_RUNTIME_SEC CODEX_STORE_ROOTS CODEX_ROOT
+  # Path-resolving variables: an inherited one would point the hook at the
+  # developer's real state dir or transcripts instead of this test's $HOME.
+  unset CLAUDE_CONFIG_DIR PROCEDURES_STATE_DIR KNOWLEDGE_HOME XDG_STATE_HOME XDG_CACHE_HOME
   # A drain with no store root is skipped (no write rules), so every test gets
   # one by default; a test that needs none unsets it.
   mkdir -p "$HOME/default-store/records"
@@ -498,8 +501,7 @@ lp_gate_setup() {
   LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
   [ "$status" -eq 0 ]
   claude_never_ran
-  grep -q "librarian-poke: deferred, load=50.00 > ceiling=8" \
-    "$HOME/.local/state/procedures/librarian/librarian-poke.log"
+  grep -q "librarian-poke: deferred, load=50.00 >= ceiling=8" "$(lp_log_file)"
 }
 
 @test "load gate: over the iowait ceiling (two fixtures swapped between samples) defers — claude never runs, defer logged" {
@@ -511,8 +513,7 @@ lp_gate_setup() {
   LIBRARIAN_NO_FLOCK=1 run bash "$HOOKS/librarian-poke.sh" --worker
   [ "$status" -eq 0 ]
   claude_never_ran
-  grep -q "librarian-poke: deferred, iowait=100% > ceiling=30%" \
-    "$HOME/.local/state/procedures/librarian/librarian-poke.log"
+  grep -q "librarian-poke: deferred, iowait=100% >= ceiling=30%" "$(lp_log_file)"
 }
 
 @test "load gate: unreadable loadavg AND stat fail open — claude runs, both fail-opens logged" {
@@ -697,4 +698,515 @@ EOF
   GIT_CONFIG_SYSTEM="$BATS_TEST_TMPDIR/system.gitconfig" run git -C "$BATS_TEST_TMPDIR" config --get push.default
   [ "$status" -eq 1 ]   # 1 = key not set; any other code means git itself failed
   [ -z "$output" ]
+}
+
+# ---------- pressure gate: >= at spawn, re-check during the batch (#166) -----
+#
+# Every test pins BOTH pressure files and the sample sleep, so none depends on
+# the runner's real load and none sleeps 1s against a live /proc/stat.
+#
+# lp_plan drives a per-check pressure schedule through LP_STAT_SAMPLE_SLEEP,
+# which the hook evals once per pressure check, between the two iowait
+# samples. The step script it installs appends a line to the sample counter
+# (so the counter's line count = checks that reached the iowait sample), then
+# does two things from the plan file ("<load> <iowait%>", one line per check;
+# line 1 = the spawn check, line 2 = the first batch re-check, ...; e.g.
+# lp_plan "1.00 9" "8.00 9" = calm at the spawn check, load 8.00 at re-check 1):
+#   - rewrites LP_STAT_FILE so THIS check's second sample shows the planned
+#     iowait (total delta 100, so iowait delta = the percentage);
+#   - rewrites LP_LOADAVG_FILE with the NEXT check's planned load.
+# The load check runs before the sample, so a load planned for check N must be
+# written by step N-1. A check that defers on load never reaches the sample;
+# that ends the batch anyway. Lines past the plan keep the last load and use 9%.
+lp_plan() {
+  export LIBRARIAN_LOAD_CEILING=8 LIBRARIAN_IOWAIT_CEILING=30
+  export LP_LOADAVG_FILE="$BATS_TEST_TMPDIR/loadavg" LP_STAT_FILE="$BATS_TEST_TMPDIR/stat"
+  export LP_PLAN="$BATS_TEST_TMPDIR/plan" LP_COUNTER="$BATS_TEST_TMPDIR/samples"
+  : > "$LP_COUNTER"
+  printf '%s\n' "$@" > "$LP_PLAN"
+  printf 'cpu 1000 0 1000 8000 100 0 0 0\n' > "$LP_STAT_FILE"
+  set -- $(sed -n 1p "$LP_PLAN")
+  printf '%s 0.50 0.10 1/200 123\n' "$1" > "$LP_LOADAVG_FILE"
+  cat > "$BATS_TEST_TMPDIR/step" <<'STEP'
+#!/usr/bin/env bash
+echo x >> "$LP_COUNTER"
+n=$(wc -l < "$LP_COUNTER" | tr -d ' ')
+set -- $(sed -n "${n}p" "$LP_PLAN"); iw="${2:-9}"
+awk -v iw="$iw" '/^cpu /{printf "cpu %d %d %d %d %d 0 0 0\n",$2,$3,$4,$5+100-iw,$6+iw}' "$LP_STAT_FILE" > "$LP_STAT_FILE.new"
+mv "$LP_STAT_FILE.new" "$LP_STAT_FILE"
+set -- $(sed -n "$((n + 1))p" "$LP_PLAN")
+[ -z "${1:-}" ] || printf '%s 0.50 0.10 1/200 123\n' "$1" > "$LP_LOADAVG_FILE"
+STEP
+  export LP_STAT_SAMPLE_SLEEP="bash '$BATS_TEST_TMPDIR/step'"
+}
+
+# Both pressure files absent for the whole run (the macOS shape). The iowait
+# sample is never reached, so no sleep command is needed.
+lp_no_pressure_files() {
+  export LP_LOADAVG_FILE="$BATS_TEST_TMPDIR/absent-loadavg" LP_STAT_FILE="$BATS_TEST_TMPDIR/absent-stat"
+  export LP_STAT_SAMPLE_SLEEP="true" LIBRARIAN_LOAD_CEILING=8 LIBRARIAN_IOWAIT_CEILING=30
+}
+
+# lp_extra <slug> <lines> <days-old> — another transcript in the corpus.
+lp_extra() {
+  local f="$PROJ/$1.jsonl" i
+  for i in $(seq 1 "$2"); do
+    printf '{"type":"user","message":{"content":"%s msg %d"}}\n' "$1" "$i"
+  done > "$f"
+  _touch_ago "$f" $(( $3 * 86400 ))
+}
+
+lp_log_file()  { printf '%s' "$(lp_state)/librarian-poke.log"; }
+lp_log_count() { if [ -f "$(lp_log_file)" ]; then grep -c -- "$1" "$(lp_log_file)" || true; else echo 0; fi; }
+samples()      { wc -l < "$LP_COUNTER" | tr -d ' '; }
+
+# ---- AC 1-3: the spawn gate defers at >= and still drains just under -------
+
+@test "spawn gate: load equal to the ceiling defers — exit 0, claude never runs, one '>=' defer line, no last-drain-start" {
+  unread_line
+  lp_plan "8.00 9"
+  wake; [ "$status" -eq 0 ]
+  claude_never_ran
+  [ "$(lp_log_count 'deferred, load=8.00 >= ceiling=8')" -eq 1 ]
+  [ ! -e "$(lp_state)/last-drain-start" ]
+}
+
+@test "spawn gate: load far over the ceiling logs the '>=' defer line" {
+  unread_line
+  lp_plan "50.00 9"
+  wake
+  [ "$(lp_log_count 'deferred, load=50.00 >= ceiling=8')" -eq 1 ]
+}
+
+@test "spawn gate: iowait equal to the ceiling defers — exit 0, claude never runs, one '>=' defer line" {
+  unread_line
+  lp_plan "1.00 30"
+  wake; [ "$status" -eq 0 ]
+  claude_never_ran
+  [ "$(lp_log_count 'deferred, iowait=30% >= ceiling=30%')" -eq 1 ]
+}
+
+@test "spawn gate: just under both ceilings drains — claude runs once and the cursor reaches the line count" {
+  unread_line
+  lp_plan "7.99 29"
+  wake; [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+}
+
+# ---- --load-ok: the pressure check the batch calls --------------------------
+
+@test "load-ok mode: load at the ceiling exits 75 and logs the defer line" {
+  lp_plan "8.00 9"
+  run bash "$HOOKS/librarian-poke.sh" --load-ok </dev/null
+  [ "$status" -eq 75 ]
+  [ "$(lp_log_count 'deferred, load=8.00 >= ceiling=8')" -eq 1 ]
+}
+
+@test "load-ok mode: iowait at the ceiling exits 75 and logs the defer line" {
+  lp_plan "1.00 30"
+  run bash "$HOOKS/librarian-poke.sh" --load-ok </dev/null
+  [ "$status" -eq 75 ]
+  [ "$(lp_log_count 'deferred, iowait=30% >= ceiling=30%')" -eq 1 ]
+}
+
+@test "load-ok mode: calm pressure exits 0" {
+  lp_plan "1.00 9"
+  run bash "$HOOKS/librarian-poke.sh" --load-ok </dev/null
+  [ "$status" -eq 0 ]
+}
+
+@test "load-ok mode: an invalid ceiling falls back silently — exit 0, the log gains no line" {
+  lp_plan "1.00 9"
+  mkdir -p "$(lp_state)"; : > "$(lp_log_file)"
+  LIBRARIAN_LOAD_CEILING=bogus run bash "$HOOKS/librarian-poke.sh" --load-ok </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -s "$(lp_log_file)" ]
+}
+
+# ---- AC 4: pressure that rises during the batch defers the drain ------------
+
+# Two unread transcripts, RECHECK_SECS=0 (re-check at every iteration), calm at
+# the spawn check, then the planned pressure at re-check 1 (and 2).
+lp_mid_batch_defer() {
+  unread_line
+  lp_extra other 2 1
+  lp_plan "$@"
+  LIBRARIAN_RECHECK_SECS=0 wake
+  claude_never_ran                            # premise of every follow-on assertion
+}
+
+@test "mid-batch defer on load: exit 0, nothing issued or advanced, claim released, logged as a defer not a failure" {
+  lp_mid_batch_defer "1.00 9" "8.00 9"
+  [ "$status" -eq 0 ]
+  [ ! -e "$(lp_state)/batch.manifest" ]
+  [ ! -e "$(lp_state)/batch.manifest.tmp" ]
+  [ ! -e "$(lp_state)/batch.txt.part" ]
+  [ -z "$(ls "$(lp_state)/cursors" 2>/dev/null)" ]
+  [ ! -d "$LIBRARIAN_LOCK.d" ]
+  [ "$(lp_log_count 'deferred, load=8.00 >= ceiling=8')" -eq 1 ]
+  [ "$(lp_log_count 'batch deferred')" -eq 1 ]
+  [ "$(lp_log_count 'batch failed')" -eq 0 ]
+}
+
+@test "mid-batch defer on iowait: claude never starts and the iowait defer is logged once" {
+  lp_mid_batch_defer "1.00 9" "1.00 30"
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  [ "$(lp_log_count 'deferred, iowait=30% >= ceiling=30%')" -eq 1 ]
+  [ "$(lp_log_count 'batch deferred')" -eq 1 ]
+}
+
+@test "mid-batch defer at re-check 2: no manifest, no cursor, claude never starts" {
+  lp_mid_batch_defer "1.00 9" "1.00 9" "8.00 9"
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  [ ! -e "$(lp_state)/batch.manifest" ]
+  [ -z "$(ls "$(lp_state)/cursors" 2>/dev/null)" ]
+  [ "$(lp_log_count 'batch deferred')" -eq 1 ]
+}
+
+# ---- AC 5: a deferred drain loses nothing -----------------------------------
+
+@test "after a mid-batch defer, the next calm drain issues one range per transcript from 0 and advances both cursors" {
+  lp_mid_batch_defer "1.00 9" "8.00 9"
+  lp_plan "1.00 9"
+  wake
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ "$(wc -l < "$(lp_state)/batch.manifest" | tr -d ' ')" -eq 2 ]
+  [ "$(awk -F'\t' '$2 == 0' "$(lp_state)/batch.manifest" | wc -l | tr -d ' ')" -eq 2 ]
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+  [ "$(cat "$(lp_state)/cursors/other.line")" = "2" ]
+}
+
+# ---- AC 6: a mid-batch defer backs off --------------------------------------
+
+@test "a mid-batch defer writes last-drain-start; the next drain inside the cooldown runs no scan and logs one cooldown defer" {
+  lp_mid_batch_defer "1.00 9" "8.00 9"
+  [ -s "$(lp_state)/last-drain-start" ]
+  local before; before="$(lp_log_count 'deferred, cooldown')"
+  lp_plan "1.00 9"
+  LIBRARIAN_MIN_INTERVAL_SECS=1800 LIBRARIAN_RECHECK_SECS=0 LIBRARIAN_NO_FLOCK=1 \
+    run bash "$HOOKS/librarian-poke.sh" --worker
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  [ "$(samples)" -eq 1 ]                      # the spawn check only; the batch never ran
+  [ "$(( $(lp_log_count 'deferred, cooldown') - before ))" -eq 1 ]
+}
+
+# ---- AC 7: a running drain is never signalled -------------------------------
+
+# claude traps TERM/INT, raises the load fixture over the ceiling, and runs 2s.
+# The gate only decides before a drain starts, so nothing may signal it.
+lp_slow_claude() {
+  MARK="$BATS_TEST_TMPDIR/marks"; mkdir -p "$MARK"
+  cat > "$STUB_BIN/claude" <<STUB
+#!/usr/bin/env bash
+echo ran >> "$CLAUDE_LOG"
+trap 'echo > "$MARK/signalled"' TERM INT
+printf '50.00 0.50 0.10 1/200 123\n' > "$LP_LOADAVG_FILE"
+sleep 2 & wait \$!
+echo > "$MARK/finished"
+exit 0
+STUB
+  chmod +x "$STUB_BIN/claude"
+}
+
+@test "running drain: claude finishes unsignalled, cursors advance and no defer is logged when pressure rises mid-run" {
+  unread_line
+  lp_plan "1.00 9"
+  lp_slow_claude
+  wake
+  [ -e "$MARK/finished" ]
+  [ ! -e "$MARK/signalled" ]
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+  [ "$(lp_log_count 'deferred')" -eq 0 ]
+}
+
+# ---- AC 8: unreadable pressure fails open, quietly --------------------------
+
+@test "load-ok mode: both pressure files absent exits 0 and adds no log line" {
+  lp_no_pressure_files
+  mkdir -p "$(lp_state)"; : > "$(lp_log_file)"
+  run bash "$HOOKS/librarian-poke.sh" --load-ok </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -s "$(lp_log_file)" ]
+}
+
+@test "fail-open drain: with re-checks on and no pressure files, both ranges are issued, claude runs once, one fail-open line each" {
+  unread_line
+  lp_extra other 2 1
+  lp_no_pressure_files
+  LIBRARIAN_RECHECK_SECS=0 wake
+  [ "$(wc -l < "$(lp_state)/batch.manifest" | tr -d ' ')" -eq 2 ]
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ "$(lp_log_count 'fail-open, loadavg unreadable')" -eq 1 ]
+  [ "$(lp_log_count 'fail-open, iowait unreadable')" -eq 1 ]
+}
+
+# ---- AC 9: the re-check is time-triggered, not per file ---------------------
+
+# 20 fully-read transcripts (cursor = their one line) plus 3 unread ones: the
+# $SID transcript and two extras.
+lp_corpus_23() {
+  unread_line
+  lp_extra unread-a 1 2
+  lp_extra unread-b 1 3
+  mkdir -p "$(lp_state)/cursors"
+  local i
+  for i in $(seq 1 20); do
+    lp_extra "read-$i" 1 4
+    echo 1 > "$(lp_state)/cursors/read-$i.line"
+  done
+}
+
+@test "re-check timing: with a long interval only the spawn check samples" {
+  lp_corpus_23
+  lp_plan "1.00 9"
+  LIBRARIAN_RECHECK_SECS=3600 wake
+  [ "$(samples)" -eq 1 ]
+}
+
+@test "re-check timing: with interval 0 the spawn check and one re-check per corpus file sample" {
+  lp_corpus_23
+  lp_plan "1.00 9"
+  LIBRARIAN_RECHECK_SECS=0 wake
+  [ "$(samples)" -eq 24 ]
+}
+
+# ---- AC 12: a failed batch is still a failure --------------------------------
+
+@test "failed batch: one 'batch failed, drain skipped' line, no defer line, no last-drain-start" {
+  unread_line
+  lp_plan "1.00 9"
+  LIBRARIAN_BATCH_BYTES=nope wake
+  [ "$(lp_log_count 'batch failed, drain skipped')" -eq 1 ]
+  [ "$(lp_log_count 'deferred')" -eq 0 ]
+  [ ! -e "$(lp_state)/last-drain-start" ]
+}
+
+# ---- AC 13: the batch runs at idle priority ----------------------------------
+
+# Shims record "$*" then run the rest of the command line. A shim on PATH makes
+# `command -v ionice` succeed on macOS too, which has no ionice binary.
+lp_priority_shims() {
+  local d="$BATS_TEST_TMPDIR/shims" t
+  mkdir -p "$d"
+  for t in ionice nice; do
+    printf '#!/usr/bin/env bash\necho "$*" >> "%s/%s.rec"\nshift\nexec "$@"\n' "$BATS_TEST_TMPDIR" "$t" > "$d/$t"
+    chmod +x "$d/$t"
+  done
+  export PATH="$d:$PATH"
+}
+
+@test "idle priority: ionice -c3 and nice -n19 each wrap librarian-batch.sh exactly once" {
+  unread_line
+  lp_plan "1.00 9"
+  lp_priority_shims
+  wake
+  [ "$(grep -F -e librarian-batch.sh "$BATS_TEST_TMPDIR/ionice.rec" | grep -cF -e -c3)" -eq 1 ]
+  [ "$(grep -F -e librarian-batch.sh "$BATS_TEST_TMPDIR/nice.rec" | grep -cF -e -n19)" -eq 1 ]
+}
+
+# ---- AC 15: a bad re-check interval cannot stop the drain --------------------
+
+# One drain from a clean slate (no state, no claude log, fresh transcripts) under
+# LIBRARIAN_RECHECK_SECS=$1, so a second call really drains again.
+bad_interval_drain() {
+  rm -rf "$(lp_state)" "$CLAUDE_LOG" "$PROJ"/*.jsonl
+  unread_line
+  lp_extra other 2 1
+  lp_plan "1.00 9"
+  LIBRARIAN_RECHECK_SECS="$1" wake
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+  [ "$(cat "$(lp_state)/cursors/other.line")" = "2" ]
+  [ "$(lp_log_count 'batch failed')" -eq 0 ]
+}
+
+@test "bad re-check interval: a non-numeric or empty value still drains once, advances both cursors, and is no batch failure" {
+  bad_interval_drain nope
+  bad_interval_drain ""
+}
+
+# ---- AC 17: a batch scan killed by the runtime cap is a quiet defer ---------
+
+# Shims for the batch scan's external commands, first on PATH (idempotent).
+#   wc:   SLOW_WC=1 sleeps 5s on every call (the original AC 17 mechanism);
+#         SLOW_WC_ONCE=N sleeps N s on the first call made inside the batch script;
+#         KILL_WC=1 SIGKILLs the librarian-batch.sh bash (the topmost ancestor
+#         whose argv is `bash .../librarian-batch.sh`, found via /proc, never by
+#         name) so `timeout` reports 137 long before any cap.
+#   tail: SLOW_TAIL_PART=1 sleeps on a `tail ... <file>.part` call once
+#         batch.manifest.tmp exists, i.e. while both it and batch.txt.part exist.
+#         The sleep is bounded by the cap: `timeout` TERMs its whole group.
+lp_batch_shims() {
+  command -v timeout >/dev/null 2>&1 || skip "timeout not on PATH"
+  local rwc rtail; rwc="$(command -v wc)"; rtail="$(command -v tail)"
+  mkdir -p "$STUB_BIN/shim"
+  cat > "$STUB_BIN/shim/wc" <<SHIM
+#!/usr/bin/env bash
+in_batch() {
+  local p=\$\$ top="" cmd
+  while [ "\${p:-0}" -gt 1 ]; do
+    cmd="\$(tr '\\0' ' ' < /proc/\$p/cmdline 2>/dev/null)"
+    case "\$cmd" in bash\ *librarian-batch.sh*) top=\$p ;; esac
+    p="\$(sed 's/.*) //' /proc/\$p/stat 2>/dev/null | cut -d' ' -f2)"
+  done
+  echo "\$top"
+}
+[ -n "\${SLOW_WC:-}" ] && sleep 5
+if [ -n "\${SLOW_WC_ONCE:-}\${KILL_WC:-}" ]; then
+  b="\$(in_batch)"
+  if [ -n "\$b" ]; then
+    if [ -n "\${SLOW_WC_ONCE:-}" ] && [ ! -e "$BATS_TEST_TMPDIR/wc-once" ]; then
+      : > "$BATS_TEST_TMPDIR/wc-once"; sleep "\$SLOW_WC_ONCE"
+    fi
+    [ -n "\${KILL_WC:-}" ] && kill -KILL "\$b"
+  fi
+fi
+exec "$rwc" "\$@"
+SHIM
+  cat > "$STUB_BIN/shim/tail" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do last="\$a"; done
+case "\$last" in
+  *.part)
+    [ -n "\${SLOW_TAIL_PART:-}" ] && [ -e "\${last%batch.txt.part}batch.manifest.tmp" ] && sleep 60 ;;
+esac
+exec "$rtail" "\$@"
+SHIM
+  chmod +x "$STUB_BIN/shim/wc" "$STUB_BIN/shim/tail"
+  case ":$PATH:" in *":$STUB_BIN/shim:"*) ;; *) PATH="$STUB_BIN/shim:$PATH" ;; esac
+}
+
+# A wc shim that sleeps 5s (bounded, and only when SLOW_WC is set) makes the
+# scan outlive a 1s cap deterministically. Needs GNU/BSD `timeout` on PATH.
+lp_slow_scan() {
+  lp_batch_shims
+  unread_line
+  SLOW_WC=1 LIBRARIAN_MAX_RUNTIME_SEC=1 wake
+}
+
+@test "scan cap: a batch scan killed by the runtime cap exits 0, claude never starts, nothing issued or advanced, claim released" {
+  lp_slow_scan
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  [ ! -e "$(lp_state)/batch.manifest" ]
+  [ ! -e "$(lp_state)/batch.manifest.issued" ]
+  [ -z "$(ls "$(lp_state)/cursors" 2>/dev/null)" ]
+  [ ! -d "$LIBRARIAN_LOCK.d" ]
+}
+
+@test "scan cap: the log gains one 'batch scan exceeded' line naming the 1s cap and killed, and no failed or deferred line" {
+  lp_slow_scan
+  [ "$(lp_log_count 'batch scan exceeded 1s.*killed')" -eq 1 ]
+  [ "$(lp_log_count 'batch failed')" -eq 0 ]
+  [ "$(lp_log_count 'batch deferred')" -eq 0 ]
+}
+
+@test "scan cap: a killed scan writes last-drain-start; the next drain inside the cooldown runs no scan and logs one cooldown defer" {
+  lp_slow_scan
+  [ -s "$(lp_state)/last-drain-start" ]
+  local before; before="$(lp_log_count 'deferred, cooldown')"
+  LIBRARIAN_MAX_RUNTIME_SEC=1 wake 1800
+  [ "$status" -eq 0 ]
+  claude_never_ran
+  [ "$(lp_log_count 'batch scan exceeded')" -eq 1 ]
+  [ "$(( $(lp_log_count 'deferred, cooldown') - before ))" -eq 1 ]
+}
+
+# AC 17 (cleanup): two transcripts, so the kill lands while the second range's
+# batch.txt.part exists and the first range's batch.manifest.tmp is already written.
+lp_kill_with_partials() {
+  lp_batch_shims
+  lp_extra other 2 1
+  unread_line
+  SLOW_TAIL_PART=1 LIBRARIAN_MAX_RUNTIME_SEC=20 wake
+}
+
+@test "scan cap: a scan killed mid-range leaves no batch.manifest.tmp" {
+  lp_kill_with_partials
+  [ ! -e "$(lp_state)/batch.manifest.tmp" ]
+}
+
+@test "scan cap: a scan killed mid-range leaves no batch.txt.part" {
+  lp_kill_with_partials
+  [ ! -e "$(lp_state)/batch.txt.part" ]
+}
+
+# ---- AC 18: scan and drain share one runtime cap ----------------------------
+
+# Records every `timeout` argv, then runs the real timeout by absolute path.
+lp_timeout_recorder() {
+  lp_batch_shims
+  local real; real="$(command -v timeout)"
+  mkdir -p "$BATS_TEST_TMPDIR/tshim"
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/timeout.rec"\nexec "%s" "$@"\n' "$BATS_TEST_TMPDIR" "$real" > "$BATS_TEST_TMPDIR/tshim/timeout"
+  chmod +x "$BATS_TEST_TMPDIR/tshim/timeout"
+  PATH="$BATS_TEST_TMPDIR/tshim:$PATH"
+}
+
+# lp_cap_of <grep-regex> — the duration argument of the one recorded timeout line matching it.
+lp_cap_of() {
+  grep -E -e "$1" "$BATS_TEST_TMPDIR/timeout.rec" | sed -E 's/.*--kill-after=[0-9]+ ([0-9.]+) .*/\1/'
+}
+
+lp_shared_cap_run() {
+  lp_timeout_recorder
+  unread_line
+  SLOW_WC_ONCE="$1" LIBRARIAN_MAX_RUNTIME_SEC=120 wake
+}
+
+@test "shared cap: after a scan slowed by 3s, claude runs under a timeout of at least 1s and under the full 120s" {
+  lp_shared_cap_run 3
+  awk -v d="$(lp_cap_of ' claude( |$)')" 'BEGIN { exit !(d != "" && d < 120 && d >= 1) }'
+}
+
+@test "shared cap: the scan's own timeout still shows the full 120s cap" {
+  lp_shared_cap_run 3
+  [ "$(lp_cap_of 'librarian-batch\.sh')" = "120" ]
+}
+
+@test "shared cap: a slowed scan still lets the drain run claude exactly once" {
+  lp_shared_cap_run 3
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+}
+
+@test "shared cap: a slowed scan still advances the cursor" {
+  lp_shared_cap_run 3
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+}
+
+@test "shared cap: a fast scan leaves claude a timeout within 2s of the full 120s cap" {
+  lp_shared_cap_run 0
+  awk -v d="$(lp_cap_of ' claude( |$)')" 'BEGIN { exit !(d != "" && d >= 118 && d <= 120) }'
+}
+
+# ---- AC 19: only a real cap overrun is called one ---------------------------
+
+lp_scan_dies_early() {
+  lp_batch_shims
+  unread_line
+  KILL_WC=1 LIBRARIAN_MAX_RUNTIME_SEC=600 wake
+}
+
+@test "early scan death: a scan SIGKILLed far below the cap logs one 'batch failed, drain skipped' line" {
+  lp_scan_dies_early
+  [ "$(lp_log_count 'batch failed, drain skipped')" -eq 1 ]
+}
+
+@test "early scan death: a scan SIGKILLed far below the cap is not logged as 'batch scan exceeded'" {
+  lp_scan_dies_early
+  [ "$(lp_log_count 'batch scan exceeded')" -eq 0 ]
+}
+
+@test "early scan death: a scan SIGKILLed far below the cap writes no last-drain-start" {
+  lp_scan_dies_early
+  [ ! -e "$(lp_state)/last-drain-start" ]
+}
+
+@test "early scan death: a scan SIGKILLed far below the cap starts no claude" {
+  lp_scan_dies_early
+  claude_never_ran
 }
