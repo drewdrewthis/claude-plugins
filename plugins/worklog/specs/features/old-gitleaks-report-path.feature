@@ -86,14 +86,6 @@ Feature: Old gitleaks versions redact on Linux and are refused elsewhere
     When the suite and the differential fuzz run
     Then the real-binary test reads ok, not skip, and the redacted fuzz output is byte-identical to main
 
-  # AC5: grep evidence
-  # proves: git log -1 --format=%H origin/main -- plugins/worklog/hooks/lib/redact.py equals PINNED_SHA and the split string in the pin test
-  Scenario: The fuzz pin moves in both places
-    Given the redact library changed on main
-    When the PR is marked ready
-    Then both pins hold the newest main commit that changed the library
-    And git grep for the old pin prints nothing outside the changelogs
-
   # AC6
   # proves: hooks/tests/worklog-record.bats "the old binary under test reports version 8.21.2"
   # proves: CI log line ok for that test on both legs, and a local run with CI=1 and WORKLOG_TEST_OLD_GITLEAKS unset reading not ok

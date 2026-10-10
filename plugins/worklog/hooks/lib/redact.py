@@ -39,7 +39,7 @@ https://github.com/drewdrewthis/claude-plugins/issues/219). The glued-prefix
 limit leaves the WHOLE usable token raw. With gitleaks present it still holds
 for some shapes (npm, AWS key id); gitleaks finds others (Shopify). The
 differential fuzz (hooks/tests/redact_diff_fuzz.py) compares each change of
-this file with the pinned reference.
+this file with the version on main before the change.
 
 What the gitleaks layer does (issue #238,
 https://github.com/drewdrewthis/claude-plugins/issues/238): gitleaks is called
