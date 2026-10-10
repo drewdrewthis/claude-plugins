@@ -407,9 +407,13 @@ checkout; absent on a box whose `~/.claude` is not one, e.g. drew-sweatshop —
 the skill's prose loads and reads, but these do not run until installed
 separately):
 
-- Scripts: `~/.claude/scripts/session-truth`, `scripts/pr-ready-check.sh`,
-  `scripts/verify-ci-shard-tally.sh`, `scripts/lib/gh-checks-rest.sh`,
-  `~/.claude/tooling/orchardist-watch/pr.sh`, `records/procedures/github/scripts/tag.sh`.
+- Scripts: `~/.claude/scripts/session-truth`, `scripts/verify-ci-shard-tally.sh`,
+  `~/.claude/tooling/orchardist-watch/pr.sh` (the skill names a `gh pr checks --watch`
+  fallback for boxes without it), `records/procedures/github/scripts/tag.sh`.
+- Readiness check: `~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh`
+  and its `lib/gh-checks-rest.sh`, from the
+  https://github.com/drewdrewthis/langwatch-sweatshop toolkit. The skill calls it by
+  that path.
 - Hook: `~/.claude/hooks/ship-flow-stop.sh` (the Stop hook that blocks premature
   `done`). Config: `~/.claude/fleet.env`.
 - Knowledge records: the `~/.knowledge/modules/shared/records/**` deep-dive
