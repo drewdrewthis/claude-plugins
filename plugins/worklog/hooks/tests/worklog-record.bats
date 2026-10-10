@@ -2366,12 +2366,14 @@ _$(fake_do)"
   done
 }
 
-# gitleaks 8.30.1 finds a Pulumi token only when whitespace, a quote, a
-# backtick, a semicolon, a literal \n or \r escape or the end of the text
-# follows it and no word character is glued in front. No built-in rule covers
-# Pulumi, so in every other position the whole token stays raw, unless a
-# secret keyword stands in front of it. Accepted for now in issue 219.
-# The fix is issue 238.
+# The gitleaks 8.30.1 pulumi-api-token rule finds the token only when no
+# ASCII word character is directly in front of it and an ASCII space, tab,
+# newline, carriage return or form feed, a straight quote, a backtick, a
+# semicolon, a literal \n or \r escape or the end of the text directly
+# follows it. No built-in rule covers Pulumi, so anywhere else the whole
+# token stays raw, unless another rule matches around it (for example a
+# secret keyword in front). Accepted for now in issue 219. The fix is
+# issue 238.
 @test "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
@@ -2390,6 +2392,13 @@ _$(fake_do)"
   input="see $KEY: bad"
   [ "$(real_redact_texts "$input")" = "$input" ]
   input="see https://app.example.com/x?key=$KEY&a=1 ok"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  nbsp=$'\xc2\xa0'
+  input="see $KEY${nbsp}now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  lq=$'\xe2\x80\x9c'
+  rq=$'\xe2\x80\x9d'
+  input="say $lq$KEY$rq now"
   [ "$(real_redact_texts "$input")" = "$input" ]
   [ "$(real_redact_texts "open https://app.example.com/$KEY")" = "open https://app.example.com/<redacted:pulumi-api-token>" ]
   [ "$(real_redact_texts "open https://app.example.com/x?t=$KEY")" = "open https://app.example.com/x?t=<redacted:pulumi-api-token>" ]

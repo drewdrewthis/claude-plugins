@@ -267,6 +267,8 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     And a Pulumi token in round brackets
     And a Pulumi token followed by a colon
     And a Pulumi token in a query string after key=
+    And a Pulumi token followed by a no-break space
+    And a Pulumi token in curly double quotes
     When the real gitleaks runs
     Then each output equals its input
     And the same token at the end of the URL path is redacted

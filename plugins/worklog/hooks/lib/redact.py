@@ -39,11 +39,14 @@ https://github.com/drewdrewthis/claude-plugins/issues/219). The glued-prefix
 limit leaves the WHOLE usable token raw. With gitleaks present it still holds
 for some shapes (npm, AWS key id); gitleaks finds others (Shopify). It is
 looked at again when the differential fuzz from issue #218 exists. Also
-accepted for now: gitleaks 8.30.1 finds a Pulumi token only when whitespace,
-a quote, a backtick, a semicolon, a literal "\\n" or "\\r" escape or the end
-of the text directly follows it and no letter, digit or underscore is glued in
-front of it. No built-in rule covers Pulumi, so in any other position (before
-a period, a comma, "/", "&", or after "x") the whole usable token stays raw.
+accepted for now: the gitleaks 8.30.1 pulumi-api-token rule finds a Pulumi
+token only when no ASCII letter, digit or underscore is directly in front of
+it and an ASCII space, tab, newline, carriage return or form feed, a straight
+quote, a backtick, a semicolon, a literal "\\n" or "\\r" escape or the end of
+the text directly follows it. No built-in rule covers Pulumi, so anywhere else
+(before a period, a comma, "/", "&", a no-break space, or after "x") the whole
+usable token stays raw unless another rule matches around it (for example a
+secret keyword such as "token" in front of it).
 The fix is issue #238
 (https://github.com/drewdrewthis/claude-plugins/issues/238).
 Because the two stages above have separate step caps, a body can settle where
