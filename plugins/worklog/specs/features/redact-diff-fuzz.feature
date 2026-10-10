@@ -204,11 +204,11 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
   @integration
   Scenario: The helper header states the pin rule
     Given the helper file header
-    Then it says the pinned sha is one constant and appears once in the repo
+    Then it says the pinned sha is one constant and the only place the full sha stands outside the release-please CHANGELOG.md files
     And it says to move the sha after each merged change to redact.py
     And it says that after a move the named-case and teeth runs must give the same exit codes
     And it says a PR that makes a text worse on purpose must change the score or the corpus and give the reason in the PR body
-    And git grep -c 0da91ef40956 prints one file with count 1
+    And git grep -c <the full pinned sha> -- . ':(exclude)*CHANGELOG.md' prints the helper with count 1
 
   # proves: gh pr view --json title
   @integration

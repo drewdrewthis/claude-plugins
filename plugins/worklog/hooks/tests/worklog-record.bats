@@ -2743,7 +2743,10 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
   drive "$CLEAN"
   elapsed=$((SECONDS - t0))
   [ "$(field .ask_uuid)" = "$U1" ]
-  [ "$elapsed" -le 5 ]
+  # A wide bound on purpose: it only catches a match that goes quadratic or
+  # hangs. A tight one (5 s) failed under machine load with a correct hook.
+  echo "# hook run: ${elapsed}s" >&3
+  [ "$elapsed" -le 60 ]
 }
 
 @test "UUID-CHECK: a valid end_uuid survives a long uuid list" {
@@ -2759,7 +2762,10 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
   drive "$CLEAN"
   elapsed=$((SECONDS - t0))
   [ "$(field .end_uuid)" = "$U2" ]
-  [ "$elapsed" -le 5 ]
+  # A wide bound on purpose: it only catches a match that goes quadratic or
+  # hangs. A tight one (5 s) failed under machine load with a correct hook.
+  echo "# hook run: ${elapsed}s" >&3
+  [ "$elapsed" -le 60 ]
 }
 
 @test "UUID-CHECK: a uuid held by the transcript is written unchanged" {

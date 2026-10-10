@@ -8,7 +8,8 @@ more. Exit 2: the harness could not run (one stderr line names the cause).
 
 PIN RULE
   (a) The reference is one constant, PINNED_SHA below. It is the only place the
-      full sha appears in the repo. Do not copy it anywhere else.
+      full sha stands outside the release-please CHANGELOG.md files. Do not copy
+      it anywhere else.
   (b) Move PINNED_SHA to the new commit after each merged change to redact.py.
   (c) After a move, the named-case runs and the teeth runs in
       redact-diff-fuzz.bats must give the same exit codes as before.

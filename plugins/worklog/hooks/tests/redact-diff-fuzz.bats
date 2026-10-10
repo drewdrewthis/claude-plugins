@@ -33,10 +33,10 @@ SHA_TEETH=05b246073138548869adc73427eed69f980c9567  # AC5 builtin teeth
 # Absent from any clone. Rows 1 and 2.
 SHA_ABSENT=0000000000000000000000000000000000000001
 
-# TODO(coder): once the generator exists, run
-#   python3 redact_diff_fuzz.py fuzz --mode builtin --seed 1 --n 200
-# and paste the printed corpus_sha256 here. Until then the AC1 pin test is red
-# on purpose. The value must be the same on ubuntu-latest and macos-latest.
+# Regenerate with
+#   python3 plugins/worklog/hooks/tests/redact_diff_fuzz.py fuzz --mode builtin --seed 1 --n 200
+# and read corpus_sha256. A changed value means the corpus changed; it must be
+# the same on ubuntu-latest and macos-latest.
 EXPECTED_CORPUS_SHA256=bdbfeb56828bcf0ff713a7d5a47e993778865188b05d1f8651cf4c483c40aa16
 
 setup() {
@@ -382,10 +382,11 @@ PY
 
 # --- AC9: pin rule ----------------------------------------------------------
 
-@test "the pinned sha appears once in the repo tree and that is the helper" {
+@test "the pinned sha appears once outside the changelogs and that is the helper" {
   # Split so this file does not hold the sha it counts.
   local pin="0da91ef40956""fb99b0b78da59d3cb2dfb8e809cf"
-  run git grep -c --untracked -e "$pin"
+  # release-please writes commit links with full shas into CHANGELOG.md.
+  run git grep -c --untracked -e "$pin" -- . ':(exclude)*CHANGELOG.md'
   printf '# %s\n' "$output" >&3
   [ "$status" -eq 0 ]
   [ "$output" = "plugins/worklog/hooks/tests/redact_diff_fuzz.py:1" ]
