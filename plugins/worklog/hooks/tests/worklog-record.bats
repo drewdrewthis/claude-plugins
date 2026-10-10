@@ -1968,6 +1968,13 @@ builtin_out() {
   python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.stdout.write(redact.builtin(sys.argv[2]))" "$HOOKS/lib" "$1"
 }
 
+# glued_chain <pairs> <tail> — <pairs> times a grafana then a shopify token,
+# then <tail>.
+glued_chain() {
+  python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * int(sys.argv[3]) + sys.argv[4])' \
+    "$(fake_grafana)" "$(fake_shopify)" "$1" "$2"
+}
+
 @test "an sk-lw key with a dot in the middle never lands in the worklog file" {
   KEY="$(fake_key "sk-""lw-" "aB3dE5gH7j" 10).$(fake_key "" "kL7mN9pQ1sT3vX5zA7cD9fG1hJ3" 30)"
   fixture_secret_prompt "$KEY"
@@ -2214,14 +2221,14 @@ if bad:
 # A chain still changing on the 8th pass fails closed.
 @test "a chain of glued tokens that needs more than 8 passes fails closed to one marker" {
   # 7 pairs is the shortest chain still changing on the 8th pass.
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 7)' "$(fake_grafana)" "$(fake_shopify)")"
+  chain="$(glued_chain 7 "")"
   out="$(builtin_out "$chain")"
   [ "$out" = "<redacted:glued-secrets>" ] || { echo "got: ${out:0:200}" >&2; return 1; }
 }
 
 @test "a chain of glued tokens that settles within the cap is redacted token by token" {
   # 6 pairs is the longest chain that settles within the cap.
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6)' "$(fake_grafana)" "$(fake_shopify)")"
+  chain="$(glued_chain 6 "")"
   out="$(builtin_out "$chain")"
   want="$(python3 -c 'import sys; sys.stdout.write("<redacted:grafana-token><redacted:shopify-token>" * 6)')"
   [ "$out" = "$want" ] || { echo "got: ${out:0:200}" >&2; return 1; }
@@ -2343,9 +2350,134 @@ _$(fake_do)"
   [ "$(builtin_out "$input")" = "$input" ]
 }
 
+# gitleaks 8.30.1 does not find these glued shapes either (npm, aws key id), but
+# it does find others (Shopify). Accepted in issue 219; looked at again when the
+# fuzz from issue 218 exists.
+@test "known limit: with gitleaks, a word character glued in front of an npm token or aws key id still keeps it raw" {
+  require_real_gitleaks
+  [ "$(real_redact_texts "$(fake_npm)")" = "<redacted:npm-token>" ]
+  [ "$(real_redact_texts "$(fake_aws)")" = "<redacted:aws-access-key>" ]
+  shopify="x$(fake_shopify)"
+  out="$(real_redact_texts "$shopify")"
+  [ "$out" != "$shopify" ]
+  [[ "$out" != *"$(fake_shopify | cut -c7-)"* ]]
+  for input in "x$(fake_npm)" "FOO_$(fake_npm)" "A$(fake_aws)"; do
+    [ "$(real_redact_texts "$input")" = "$input" ]
+  done
+}
+
+# No built-in rule covers Pulumi, and the gitleaks pulumi-api-token rule needs
+# a terminator directly after the token. Measured with gitleaks 8.30.1: the
+# whole token stays raw before the characters pinned below and directly after
+# an ASCII word character. In the same measurement it was found before an ASCII
+# space, tab, newline, carriage return or form feed, a straight quote, a
+# backtick, a semicolon, a literal \n or \r escape, a percent or \u escape of
+# one of these, or the end of the text, and when another rule matches around it
+# (for example a secret keyword in front). It was not found when a gitleaks
+# allow comment stood on the same line as the token, or stood on an earlier
+# line (or in an earlier text of the batch) while the token was on the last
+# line of all the scanned text with no newline after it. With a further line
+# after the token's line, an earlier comment did not hide it; a comment on a
+# later line did not hide it. The tests pin a sample of these lists, which are
+# measured, not complete. Accepted for now in issue 219. The fix is issue 238.
+@test "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front" {
+  require_real_gitleaks
+  KEY="$(fake_pulumi)"
+  input="open https://app.example.com/$KEY/stacks/production to check"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see $KEY."
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see $KEY, ok"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see https://app.example.com/x?t=$KEY&a=1 ok"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see x$KEY now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see ($KEY) now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see $KEY: bad"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see https://app.example.com/x?key=$KEY&a=1 ok"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  nbsp=$'\xc2\xa0'
+  input="see $KEY${nbsp}now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  lq=$'\xe2\x80\x9c'
+  rq=$'\xe2\x80\x9d'
+  input="say $lq$KEY$rq now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  [ "$(real_redact_texts "open https://app.example.com/$KEY")" = "open https://app.example.com/<redacted:pulumi-api-token>" ]
+  [ "$(real_redact_texts "open https://app.example.com/x?t=$KEY")" = "open https://app.example.com/x?t=<redacted:pulumi-api-token>" ]
+  [ "$(real_redact_texts "see $KEY now")" = "see <redacted:pulumi-api-token> now" ]
+  [ "$(real_redact_texts "say \"$KEY\" now")" = "say \"<redacted:pulumi-api-token>\" now" ]
+  [ "$(real_redact_texts "see $KEY. and again $KEY now")" = "see <redacted:pulumi-api-token>. and again <redacted:pulumi-api-token> now" ]
+  [ "$(real_redact_texts 'see '"$KEY"'\nmore')" = 'see <redacted:pulumi-api-token>\nmore' ]
+  [ "$(real_redact_texts 'see '"$KEY"'%20more')" = 'see <redacted:pulumi-api-token>%20more' ]
+  [ "$(real_redact_texts 'see '"$KEY"'\u0020more')" = 'see <redacted:pulumi-api-token>\u0020more' ]
+  allow="gitleaks"":allow"
+  input="see $KEY now # $allow"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  nl=$'\n'
+  input="# $allow${nl}plain words here${nl}plain words here${nl}see $KEY now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  [ "$(real_redact_texts "see $KEY now${nl}# $allow")" = "see <redacted:pulumi-api-token> now${nl}# $allow" ]
+  [ "$(real_redact_texts "# $allow${nl}see $KEY now${nl}trailer")" = "# $allow${nl}see <redacted:pulumi-api-token> now${nl}trailer" ]
+  input="# $allow see $KEY now${nl}trailer"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  [ "$(real_redact_texts "see $KEY now # other note")" = "see <redacted:pulumi-api-token> now # other note" ]
+  [ "$(real_redact_texts "PULUMI_ACCESS_TOKEN=$KEY")" = "PULUMI_ACCESS_<redacted:generic-secret>" ]
+}
+
+# The quote path runs redact.builtin once; the body path runs two stages, each
+# with its own step cap. The two paths differ for these chains. A quote of the
+# text is then either only the bare marker (chain 1) or not in the body at all
+# (chain 2). No raw text is kept either way.
+@test "known limit: a body can settle where the same text as a quote hits the step cap" {
+  chain="$(glued_chain 6 "$(fake_ghp)$(fake_ghp2)")"
+  [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
+  body="$(builtin_redact_texts "$chain")"
+  [ "$body" != "<redacted:glued-secrets>" ]
+  [[ "$body" == "<redacted:grafana-token><redacted:shopify-token>"* ]]
+  [[ "$body" == *"<redacted:github-pat><redacted:glued-secrets>" ]]
+  body_free "$body" "$(fake_grafana | cut -c5-)" "$(fake_shopify | cut -c7-)" \
+    "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
+
+  chain="$(glued_chain 6 " $(fake_aws2)$(fake_asia)")"
+  [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
+  body="$(builtin_redact_texts "$chain")"
+  [[ "$body" != *"<redacted:glued-secrets>"* ]]
+  [[ "$body" == *"<redacted:shopify-token> <redacted:aws-access-key>" ]]
+  body_free "$body" "$(fake_grafana | cut -c5-)" "$(fake_shopify | cut -c7-)" \
+    "$(fake_aws2 | cut -c5-)" "$(fake_asia | cut -c5-)"
+}
+
+# The hook cuts a redacted body to 200 characters, so a quote of a chain this
+# long is dropped with or without the budget difference. It fails closed.
+@test "known limit: a quote of a long glued chain is dropped by the hook and nothing raw is stored" {
+  chain="$(glued_chain 6 "$(fake_ghp)$(fake_ghp2)")"
+  user_line "$U1" "$chain" > "$TX"
+  reply="$(jq -nc --arg u "$U1" --arg q "$chain" \
+    '{requests:[{text:"user saw a chain",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$reply"
+  [ "$(field '.requests|length')" -eq 0 ]
+  body_free "$(cat "$WORKLOG_JSONL")" "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
+  body_free "$(cat "$CLAUDE_STDIN_LOG")" "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
+
+  # Control: the same drive with a short chain keeps its request, so the 0
+  # above comes from the long chain and not from another failure.
+  : > "$WORKLOG_JSONL"
+  chain="$(glued_chain 1 "")"
+  # Its own turn uuid: the claim marker is keyed on the turn and would skip a repeat.
+  user_line "$U7" "$chain" > "$TX"
+  reply="$(jq -nc --arg u "$U7" --arg q "$chain" \
+    '{requests:[{text:"user saw a chain",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$reply"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [ "$(field '.requests[0].quote')" = "<redacted:grafana-token><redacted:shopify-token>" ]
+}
+
 @test "six grafana shopify pairs then a glued ghp pair fail closed to one marker" {
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6 + sys.argv[3] + sys.argv[4])' \
-    "$(fake_grafana)" "$(fake_shopify)" "$(fake_ghp)" "$(fake_ghp2)")"
+  chain="$(glued_chain 6 "$(fake_ghp)$(fake_ghp2)")"
   [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
 }
 
@@ -2522,6 +2654,18 @@ assert_glued_stored() {
     "$(jq -nc --arg u "$U1" --arg t "leaked $KEY" \
       '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
   [ "$(field '.requests[0].text')" = "leaked <redacted:npm-token>" ]
+}
+
+# builtin_redact_texts <text> — the text through redact_texts with gitleaks
+# absent, so only the built-in rules run (the body path).
+builtin_redact_texts() {
+  PATH="$(path_without_gitleaks)" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+texts, failed = redact.redact_texts([sys.argv[2]])
+sys.stdout.write(texts[0])
+' "$HOOKS/lib" "$1"
 }
 
 # real_redact_texts <text> — the text through redact_texts with the REAL

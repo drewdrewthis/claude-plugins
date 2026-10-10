@@ -34,6 +34,36 @@ all-uppercase word of 20 or more characters that starts with AKIA or ASIA is
 redacted as a key id; that over-redaction is accepted. gitleaks scans the
 rules' output, where its generic rule covers some of these and misses others.
 
+These limits are ACCEPTED (owner decision, issue #219:
+https://github.com/drewdrewthis/claude-plugins/issues/219). The glued-prefix
+limit leaves the WHOLE usable token raw. With gitleaks present it still holds
+for some shapes (npm, AWS key id); gitleaks finds others (Shopify). It is
+looked at again when the differential fuzz from issue #218 exists. Also
+accepted for now: no built-in rule covers Pulumi, and the gitleaks
+pulumi-api-token rule needs a terminator directly after the token. Measured
+with gitleaks 8.30.1, the whole usable token stays raw before a period, a
+comma, "/", "&", a no-break space or a curly quote, and directly after an
+ASCII letter, digit or underscore. In the same measurement it was found when
+no such character was directly in front of it and directly after it came an
+ASCII space, tab, newline, carriage return or form feed, a straight quote, a
+backtick, a semicolon, a literal "\\n" or "\\r" escape, a percent or "\\u"
+escape of one of these, or the end of the text, but not when a gitleaks allow
+comment (the word gitleaks, a colon, then allow) stood on the same line as the
+token, or stood on an earlier line or in an earlier text of the batch while the
+token was on the last line of all the scanned text with no newline after it:
+gitleaks then skipped the finding and the whole token stayed raw. A comment on
+a later line did not hide it. This exception is not specific to Pulumi: it
+applies to every token shape that only gitleaks finds; a token that a built-in
+rule finds is still redacted. Without the comment it was also redacted when
+another rule matched around it (for example a secret keyword such as "token" in
+front of it with a separator). These lists are measured, not complete; the
+"known limit:" tests pin a sample of them.
+The fix is issue #238
+(https://github.com/drewdrewthis/claude-plugins/issues/238).
+Because the two stages above have separate step caps, a body can settle where
+the same text as a quote hits the cap; the quote is then dropped or matches
+only as the bare glued-secrets marker. No raw text either way.
+
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.
 """
