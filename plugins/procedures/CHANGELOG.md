@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.6](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.5...procedures-v0.17.6) (2026-10-10)
+
+
+### Bug Fixes
+
+* **procedures:** how-do-i refuses an index with no record line ([#241](https://github.com/drewdrewthis/claude-plugins/issues/241)) ([6d3405e](https://github.com/drewdrewthis/claude-plugins/commit/6d3405eb3248c95b062e7a96ec9b3f91200b14a8))
+
 ## [0.17.5](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.4...procedures-v0.17.5) (2026-10-10)
 
 
