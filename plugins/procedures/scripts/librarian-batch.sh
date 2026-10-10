@@ -4,7 +4,7 @@
 # librarian drain, so a backlog is read in full across drains instead of being
 # sampled in one.
 #
-#   bash librarian-batch.sh [--out FILE]
+#   bash librarian-batch.sh [--out FILE] [--pressure-check PATH]
 #
 # Picks transcripts under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/*/*.jsonl the
 # same way the librarian always has: mtime within 7 days, line count greater
@@ -20,7 +20,12 @@
 # truncated, so the librarian Reads the file) and the issued ranges to
 # <state-dir>/batch.manifest, one `slug<TAB>start<TAB>end` per transcript: lines
 # start+1..end were issued. Cursors are advanced by the poke hook via
-# librarian-advance.sh, only within the range issued here. Prints a one-line summary; exit 0 with an empty manifest
+# librarian-advance.sh, only within the range issued here.
+#
+# --pressure-check PATH: every LIBRARIAN_RECHECK_SECS (default 5; 0 = every
+# iteration) run `bash PATH --load-ok`; when it exits 75 the batch removes its
+# partial output and exits 75 (pressure-check abort), so no manifest is left.
+# Any other exit means proceed. Prints a one-line summary; exit 0 with an empty manifest
 # means there is nothing to drain.
 set -euo pipefail
 
@@ -37,10 +42,14 @@ rm -f "$MANIFEST"
 OUT="$STATE/batch.txt"
 BUDGET="${LIBRARIAN_BATCH_BYTES:-200000}"
 CLIP=300
+CHECK=""
+RECHECK="${LIBRARIAN_RECHECK_SECS:-5}"
+case "$RECHECK" in ''|*[!0-9]*) RECHECK=5 ;; esac
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) OUT="$2"; shift 2 ;;
+        --pressure-check) CHECK="$2"; shift 2 ;;
         *) printf 'librarian-batch: unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
 done
@@ -109,7 +118,18 @@ try (
 ) catch ""'
 
 used=0
+last_check=$SECONDS
 while IFS=$'\t' read -r _ f; do
+    if [ -n "$CHECK" ] && [ $(( SECONDS - last_check )) -ge "$RECHECK" ]; then
+        last_check=$SECONDS
+        # </dev/null: the check must not eat the file list this loop reads.
+        rc=0; bash "$CHECK" --load-ok </dev/null || rc=$?
+        if [ "$rc" -eq 75 ]; then
+            rm -f "$OUT.part" "$MANIFEST.tmp"
+            printf 'librarian-batch: deferred, pressure check asked to stop\n' >&2
+            exit 75
+        fi
+    fi
     [ "$used" -lt "$BUDGET" ] || break
     slug="$(basename "$f" .jsonl)"
     first="$(_first_line "$f")" || first=""

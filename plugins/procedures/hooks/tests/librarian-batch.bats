@@ -274,4 +274,158 @@ _judge_enqueue() {
   local h='CANDIDATES (uuid, where, kind, text):'
   grep -qF "$h" "$SCRIPTS/librarian-batch.sh"
   grep -qF "$h" "$w"
+
+# ---------- --pressure-check: abort the batch under pressure (#166) ----------
+#
+# The batch runs `bash <path> --load-ok </dev/null` at the top of a corpus-loop
+# iteration once LIBRARIAN_RECHECK_SECS have passed (0 = every iteration, the
+# first included). Exit 75 aborts the batch; every other exit means proceed.
+
+HOOK="$BATS_TEST_DIRNAME/../librarian-poke.sh"
+
+# _check <name> <body> — a check script that records each call, then runs <body>.
+_check() {
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/%s.calls"\n%s\n' "$HOME" "$1" "$2" > "$HOME/$1"
+  chmod +x "$HOME/$1"
+}
+_calls() { if [ -f "$HOME/$1.calls" ]; then wc -l < "$HOME/$1.calls" | tr -d " "; else echo 0; fi; }
+_pc() { LIBRARIAN_RECHECK_SECS="${RECHECK-0}" run bash "$SCRIPTS/librarian-batch.sh" --pressure-check "$1"; }
+
+@test "no --pressure-check: the batch ignores pressure and issues both ranges" {
+  _transcript a 2 2
+  _transcript b 2 1
+  printf '50.00 0.50 0.10 1/200 123\n' > "$HOME/loadavg"
+  export LP_LOADAVG_FILE="$HOME/loadavg" LP_STAT_FILE="$HOME/absent-stat"
+  _batch
+  [ "$(_issued a)" = "0 2" ]
+  [ "$(_issued b)" = "0 2" ]
+}
+
+@test "check exits 75: the batch exits 75" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c75 'exit 75'
+  _pc "$HOME/c75"
+  [ "$status" -eq 75 ]
+}
+
+@test "check exits 75: no manifest, manifest.tmp or batch.txt.part is left" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c75 'exit 75'
+  _pc "$HOME/c75"
+  [ "$status" -eq 75 ]                           # a real defer, not an argument error
+  [ ! -e "$PROCEDURES_STATE_DIR/batch.manifest" ]
+  [ ! -e "$PROCEDURES_STATE_DIR/batch.manifest.tmp" ]
+  [ ! -e "$PROCEDURES_STATE_DIR/batch.txt.part" ]
+}
+
+@test "check exits 75: the batch prints a 'librarian-batch: deferred' line" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c75 'exit 75'
+  _pc "$HOME/c75"
+  [[ "$output" == *"librarian-batch: deferred"* ]]
+}
+
+@test "check exits 75: a manifest from an earlier batch is gone, not left to be advanced" {
+  _transcript a 2 2; _transcript b 2 1
+  _batch
+  _check c75 'exit 75'
+  _pc "$HOME/c75"
+  [ "$status" -eq 75 ]                           # a real defer, not an argument error
+  [ ! -e "$PROCEDURES_STATE_DIR/batch.manifest" ]
+}
+
+@test "check exits 1: the batch proceeds and issues both ranges" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c1 'exit 1'
+  _pc "$HOME/c1"
+  [ "$status" -eq 0 ]
+  [ "$(_issued a)" = "0 2" ]
+  [ "$(_issued b)" = "0 2" ]
+}
+
+@test "check exits 127: the batch proceeds and issues both ranges" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c127 'exit 127'
+  _pc "$HOME/c127"
+  [ "$status" -eq 0 ]
+  [ "$(_issued a)" = "0 2" ]
+  [ "$(_issued b)" = "0 2" ]
+}
+
+@test "check path missing: the batch proceeds and issues both ranges" {
+  _transcript a 2 2; _transcript b 2 1
+  _pc "$HOME/does-not-exist"
+  [ "$status" -eq 0 ]
+  [ "$(_issued a)" = "0 2" ]
+  [ "$(_issued b)" = "0 2" ]
+}
+
+@test "check that drains stdin and exits 0: the corpus list is untouched, both ranges issued" {
+  _transcript a 2 2; _transcript b 2 1
+  _check cat0 'cat > /dev/null; exit 0'
+  _pc "$HOME/cat0"
+  [ "$status" -eq 0 ]
+  [ "$(_issued a)" = "0 2" ]
+  [ "$(_issued b)" = "0 2" ]
+}
+
+@test "interval 0: the check runs at every iteration, the first included" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c0 'exit 0'
+  _pc "$HOME/c0"
+  [ "$(_calls c0)" -eq 2 ]
+}
+
+@test "interval 0: the check is invoked as '--load-ok'" {
+  _transcript a 2 2
+  _check c0 'exit 0'
+  _pc "$HOME/c0"
+  [ "$(head -n 1 "$HOME/c0.calls")" = "--load-ok" ]
+}
+
+@test "a long interval: the check never runs in a fast batch" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c0 'exit 75'
+  RECHECK=3600 _pc "$HOME/c0"
+  [ "$status" -eq 0 ]
+  [ "$(_calls c0)" -eq 0 ]
+}
+
+@test "a non-numeric interval falls back to 5s: no check in a fast batch, exit 0" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c0 'exit 75'
+  RECHECK=nope _pc "$HOME/c0"
+  [ "$status" -eq 0 ]
+  [ "$(_calls c0)" -eq 0 ]
+}
+
+@test "an empty interval falls back to 5s: no check in a fast batch, exit 0" {
+  _transcript a 2 2; _transcript b 2 1
+  _check c0 'exit 75'
+  RECHECK= _pc "$HOME/c0"
+  [ "$status" -eq 0 ]
+  [ "$(_calls c0)" -eq 0 ]
+}
+
+@test "the check also runs for fully-read transcripts, not only unread ones" {
+  _transcript a 2 2; _transcript b 2 1
+  mkdir -p "$PROCEDURES_STATE_DIR/cursors"
+  echo 2 > "$PROCEDURES_STATE_DIR/cursors/a.line"
+  echo 2 > "$PROCEDURES_STATE_DIR/cursors/b.line"
+  _check c0 'exit 0'
+  _pc "$HOME/c0"
+  [ "$(_calls c0)" -eq 2 ]
+}
+
+# AC 8, batch level: the real hook as the check, with no pressure files at all
+# (the macOS shape), still lets the batch finish.
+@test "hook as the check with both pressure files absent: re-checks run per file and both ranges are issued" {
+  _transcript a 2 2; _transcript b 2 1
+  export LP_LOADAVG_FILE="$HOME/absent-loadavg" LP_STAT_FILE="$HOME/absent-stat" LP_STAT_SAMPLE_SLEEP=true
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/wrap.calls"\nexec bash "%s" "$@"\n' "$HOME" "$HOOK" > "$HOME/wrap"
+  _pc "$HOME/wrap"
+  [ "$status" -eq 0 ]
+  [ "$(_calls wrap)" -eq 2 ]
+  [ "$(_issued a)" = "0 2" ]
+  [ "$(_issued b)" = "0 2" ]
 }
