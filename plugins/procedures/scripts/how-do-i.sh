@@ -363,6 +363,14 @@ stage_json() {
 # stage1-system.txt for the real calls and printed by --dry-run. The index is
 # streamed from the file (not via a shell variable) so the bytes are exactly
 # index.txt's, which keeps the file byte-identical per index for the API cache.
+# A usable index is a regular, readable file with at least one
+# "<number> :: " line, the form build-record-index.sh writes. -f first: grep
+# would block forever on a FIFO. C locale so BSD and GNU grep treat invalid
+# UTF-8 the same.
+index_has_record() {
+    [ -f "$1" ] && [ -r "$1" ] && LC_ALL=C grep -qE '^[0-9]+ :: ' "$1"
+}
+
 build_stage1_system_prompt() {
     printf '%s\n\nIndex:\n' "$SELECT_INSTRUCTION"
     cat "$INDEX_TXT"
@@ -582,10 +590,8 @@ fi
 
 # An empty, unreadable, whitespace-only or record-less index would select
 # nothing and print a confident NOT FOUND — the same symptom class as issue
-# #198 — so refuse to use it. A usable index has at least one
-# "<number> :: " line, the form build-record-index.sh writes; C locale so
-# BSD and GNU grep treat invalid UTF-8 the same.
-if ! { [ -r "$INDEX_TXT" ] && LC_ALL=C grep -qE '^[0-9]+ :: ' "$INDEX_TXT"; }; then
+# #198 — so refuse to use it.
+if ! index_has_record "$INDEX_TXT"; then
     # --rebuild next to --dry-run is a usage error, and a run without
     # --dry-run reuses a present-but-bad index, so the dry-run hint names both.
     if $DRY_RUN; then

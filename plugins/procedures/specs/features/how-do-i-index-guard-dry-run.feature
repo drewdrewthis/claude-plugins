@@ -81,7 +81,7 @@ Feature: how-do-i refuses an index without a record, and --dry-run leaves nothin
     When --dry-run and --dry-run --json each succeed
     Then TMPDIR holds no how-do-i entry after either
 
-  # proves: how-do-i.bats "--dry-run --json system prompt is byte-equal to the real call on a 3000-line index", "--dry-run --json system prompt is byte-equal to the real call on a 4 KB multibyte line, offset 0", "... offset 1", "... offset 2"
+  # proves: how-do-i.bats "--dry-run --json system prompt is byte-equal to the real call on a 3000-line index", "--dry-run --json system prompt is byte-equal to the real call on a 4 KB multibyte line, offset 0", "--dry-run --json system prompt is byte-equal to the real call on a 4 KB multibyte line, offset 1", "--dry-run --json system prompt is byte-equal to the real call on a 4 KB multibyte line, offset 2"
   @integration
   Scenario: The dry-run system prompt equals the real one byte for byte
     Given a 3000-line index, or a line over 4096 bytes of a multibyte character at offsets 0, 1 and 2

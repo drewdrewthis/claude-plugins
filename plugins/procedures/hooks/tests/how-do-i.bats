@@ -1614,15 +1614,21 @@ assert_refused() {
   [[ "$output" == *"the stub answer"* ]]
 }
 
-# A jq wrapper that stalls on EVERY call, so a signal can land while the
-# --dry-run --json render is in flight. It records its pid (exec keeps it) and a
-# "started" marker, waits, then execs the real jq with the same arguments.
+# A jq wrapper that stalls ONLY on the render call (the one with --rawfile), so
+# a signal can land while the --dry-run --json render is in flight. Any other jq
+# call execs the real jq at once, so an earlier call cannot trip the marker. The
+# render call records its pid (exec keeps it) and a "started" marker, waits,
+# then execs the real jq with the same arguments.
 make_slow_jq() {
   local dir="$1" real_jq
   real_jq="$(command -v jq)"
   mkdir -p "$dir"
   cat > "$dir/jq" <<WRAP
 #!/usr/bin/env bash
+case " \$* " in
+  *" --rawfile "*) ;;
+  *) exec "$real_jq" "\$@" ;;
+esac
 echo \$\$ > "$dir/pid"
 : > "$dir/started"
 sleep 2
@@ -1787,12 +1793,14 @@ assert_dry_accepts() {
   # Built in two halves so this file does not match its own grep.
   old="missing, unreadable or"" empty"
 
-  run grep -rnF -- "$old" "$BATS_TEST_DIRNAME/../.."
+  # CHANGELOG.md is excluded: a release note may quote the old text.
+  run grep -rnF --exclude=CHANGELOG.md -- "$old" "$BATS_TEST_DIRNAME/../.."
 
   [ -z "$output" ]
 }
 
 @test "neither the script nor the skills tell a --dry-run user to put --rebuild on the same command" {
+  # Matches only the adjacent forms; prose lines may name both flags legitimately.
   run grep -rnE -- '--dry-run +--rebuild|--rebuild +--dry-run' \
       "$SCRIPT" "$BATS_TEST_DIRNAME/../../skills"
 
