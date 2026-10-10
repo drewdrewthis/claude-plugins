@@ -393,7 +393,10 @@ run_claude_call() {
     time_file="$(mktemp "$WORK/time.XXXXXX")"
     # Measured: the default harness (tool defs + default system prompt) costs
     # ~49k tokens/call; --tools "" + --exclude-dynamic-system-prompt-sections
-    # cuts that to ~6k (8x). Both stages here are pure text-in/text-out, so
+    # cuts that to ~6k (8x). The CLI ignores the exclude flag whenever a system
+    # prompt is given, so it now only takes effect for stage 2 (stage 1 passes
+    # --system-prompt-file); the ~49k -> ~6k figure applies to stage 2.
+    # Both stages here are pure text-in/text-out, so
     # neither needs tools. MAX_THINKING_TOKENS=0 is exported at top of file.
     # --no-session-persistence: no stage resumes anything, so keep no transcript.
     # HOWDOI_CLAUDE_BIN may be multi-word (e.g. "orwrap claude" for an
@@ -508,9 +511,8 @@ fi
 [ -n "$(printf '%s' "$QUESTION" | tr -d '[:space:]')" ] || die "question text is empty"
 
 export MAX_THINKING_TOKENS=0
-# The user's instruction files were injected into every call's messages
-# (measured 23.7k tokens re-written per query, 1.65k with this set); neither
-# stage should be steered by them.
+# Neither stage should be steered by, or pay for, the user's instruction
+# files (see the header for the measurement).
 export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
 
 INDEX_TXT="$INDEX_DIR/index.txt"
@@ -569,25 +571,39 @@ else
         printf '%s\n%s\n' "$CURRENT_ROOTS" "$(date +%s 2>/dev/null || echo 0)" > "$ROOTS_STAMP_TMP"
         mv "$ROOTS_STAMP_TMP" "$ROOTS_STAMP_FILE"
     fi
-    # Files left by <= 0.17.3, which resumed a stored session; nothing reads
-    # them now, so drop them rather than leave stale state behind.
+    # Legacy session state from releases up to 0.17.3; nothing reads it now
+    # and it is safe to delete. Drop this line once no install older than
+    # that remains.
     rm -f "$INDEX_DIR/session.id" "$INDEX_DIR/session.fingerprint"
 fi
 
+# An empty or unreadable index would select nothing and print a confident
+# NOT FOUND — the same symptom class as issue #198 — so refuse to use it.
+[ -r "$INDEX_TXT" ] && [ -s "$INDEX_TXT" ] \
+    || die "index at $INDEX_TXT is missing, unreadable or empty — re-run with --rebuild"
+
 # Stage 1 keeps no session, so there is no cold/warm distinction to report.
+# The field stays so the --json/--timing output shape is stable.
 MODE_LABEL="n/a"
 
 if $DRY_RUN; then
     if $JSON_OUT; then
+        # The system prompt (~234 KB on a real index) exceeds Linux's 128 KB
+        # single-argument limit, so jq must read it from a file, not --arg.
+        DRY_SYSTEM_FILE="$(mktemp "${TMPDIR:-/tmp}/how-do-i-dry.XXXXXX")" || die "could not create a temp file"
+        build_stage1_system_prompt > "$DRY_SYSTEM_FILE" || { rm -f "$DRY_SYSTEM_FILE"; die "could not write the stage 1 system prompt"; }
         jq -n \
             --argjson dry_run true \
             --arg mode "$MODE_LABEL" \
             --arg select_model "$SELECT_MODEL" \
             --arg answer_model "$ANSWER_MODEL" \
-            --arg stage1_system_prompt "$(build_stage1_system_prompt)" \
+            --rawfile stage1_system_prompt "$DRY_SYSTEM_FILE" \
             --arg stage1_prompt "$(build_stage1_prompt "$QUESTION" 1)" \
             --arg stage2_prompt_template "$(build_stage2_prompt "$QUESTION" "<compiled records go here — depend on stage 1 live selection, not available in --dry-run>")" \
             '{dry_run: $dry_run, mode: $mode, select_model: $select_model, answer_model: $answer_model, stage1_system_prompt: $stage1_system_prompt, stage1_prompt: $stage1_prompt, stage2_prompt_template: $stage2_prompt_template}'
+        dry_status=$?
+        rm -f "$DRY_SYSTEM_FILE"
+        [ "$dry_status" -eq 0 ] || die "could not render the --dry-run JSON (jq exit $dry_status)"
     else
         echo "=== how-do-i --dry-run ==="
         echo "index-dir: $INDEX_DIR"
