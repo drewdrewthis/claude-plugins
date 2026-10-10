@@ -620,7 +620,10 @@ hatch_global() { printf 'just --justfile %s -d . wrap "<your command>"' "$(print
   printf 'wrap +cmd:\n    @echo w\n' > "$ALT/justfile"
   t="$(hook_text "$CMD" "" "$EMPTYDIR" "$STUB" JUST_GLOBAL_JUSTFILE="$ALT/justfile")"
   has "$t" "$(hatch_global "$ALT/justfile")"
-  has "$t" "--justfile $(printf '%q' "$ALT/justfile") --list"
+  has "$t" "just --justfile $(printf '%q' "$ALT/justfile") --list"
+  lacks "$t" "'just --justfile"
+  # literal pin, independent of printf %q: bash 5 and bash 3.2 both escape this way
+  has "$t" 'we\$ird\"lib/justfile -d . wrap'
 }
 
 @test "global hatch: a project justfile without wrap and a global with wrap -> the global form is named" {
@@ -708,6 +711,7 @@ hatch_global() { printf 'just --justfile %s -d . wrap "<your command>"' "$(print
 @test "list hint: only the global file resolves -> 'just --justfile <path> --list' is named" {
   t="$(hook_text "$CMD" "" "$EMPTYDIR")"
   has "$t" "just --justfile $FAKE_HOME/.claude/just/justfile --list"
+  lacks "$t" "'just --justfile"
 }
 
 @test "list hint: nothing resolves -> 'just --list' is not named" {

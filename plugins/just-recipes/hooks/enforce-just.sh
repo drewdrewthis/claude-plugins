@@ -353,7 +353,7 @@ global_q=$(printf '%q' "$global_jf")
 if [ "$have_project" -eq 1 ]; then
   list_hint="Run 'just --list' to find a recipe."
 elif [ "$global_listed" -eq 1 ]; then
-  list_hint="Run 'just --justfile $global_q --list' to find a recipe."
+  list_hint="Run: just --justfile $global_q --list (to find a recipe)."
 else
   list_hint=""
 fi
