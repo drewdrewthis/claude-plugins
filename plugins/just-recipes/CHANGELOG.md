@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/drewdrewthis/claude-plugins/compare/just-recipes-v0.4.0...just-recipes-v0.4.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **just-recipes:** name the wrap escape hatch only when it resolves ([#225](https://github.com/drewdrewthis/claude-plugins/issues/225)) ([48953ac](https://github.com/drewdrewthis/claude-plugins/commit/48953ac46b6ea57282a0b330ddde635a062df66f))
+
 ## [0.4.0](https://github.com/drewdrewthis/claude-plugins/compare/just-recipes-v0.3.0...just-recipes-v0.4.0) (2026-09-09)
 
 
