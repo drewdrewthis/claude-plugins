@@ -550,35 +550,39 @@ _clone() {
   # A shim first on PATH reproduces the newer behaviour on any git version. It
   # marks any `git add` naming .index, not one exact spelling, so a respelled
   # call (--update, -A) cannot slip past it.
-  git_shim '
-: > "'"$FIX"'/shim-invoked"
+  git_shim "$(cat <<'SNIP'
 if [ "${args[0]:-}" = "add" ]; then
   for a in "${args[@]:1}"; do
     case "$a" in
       .index|.index/|.index/*)
         if [ -z "$("$real" -C "$dir" ls-files -- .index)" ]; then
-          : > "'"$FIX"'/shim-add-index"
-          echo "error: pathspec '"'"'.index'"'"' did not match any file(s) known to git" >&2
+          : > "$shim_dir/add-index"
+          echo "error: pathspec '.index' did not match any file(s) known to git" >&2
           exit 128
         fi ;;
     esac
   done
-fi'
+fi
+SNIP
+)"
   printf '.index/\n' > "$ROOT/.gitignore"
   git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index
   _fm "$ROOT/records/failure-modes/local.md" fm.local LOCAL
   PATH="$GIT_SHIM_DIR:$PATH" _run_gate --root "$ROOT" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
-  [ -f "$FIX/shim-invoked" ]       # the shim was on PATH, so the next line cannot pass vacuously
-  [ ! -f "$FIX/shim-add-index" ]   # the guard kept git add away from the untracked .index
+  [ -f "$GIT_SHIM_DIR/invoked" ]       # the shim was on PATH, so the next line cannot pass vacuously
+  [ ! -f "$GIT_SHIM_DIR/add-index" ]   # the guard kept git add away from the untracked .index
   [ "$status" -eq 0 ]
 }
 
 @test "AC26: a failing git ls-files on an ignored .index aborts the commit instead of skipping the restage" {
   # A failed ls-files must not read as "nothing tracked": a tracked index would go unstaged.
-  git_shim 'if [ "${args[*]:-}" = "ls-files -- .index" ]; then
+  git_shim "$(cat <<'SNIP'
+if [ "${args[*]:-}" = "ls-files -- .index" ]; then
   echo "fatal: ls-files broke" >&2
   exit 128
-fi'
+fi
+SNIP
+)"
   printf '.index/\n' > "$ROOT/.gitignore"
   git -C "$ROOT" add .gitignore; git -C "$ROOT" commit -qm ignore-index
   local before; before="$(git -C "$ROOT" rev-parse HEAD)"

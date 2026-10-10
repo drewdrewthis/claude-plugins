@@ -40,9 +40,9 @@ git_no_auto_maintenance() {
 }
 
 # A system gitconfig (/etc/gitconfig, or GIT_CONFIG_SYSTEM) can change fixture
-# behaviour: measured, a system `push.default = nothing` fails three
-# commit-records tests. GIT_CONFIG_NOSYSTEM wins over GIT_CONFIG_SYSTEM and,
-# unlike GIT_CONFIG_SYSTEM=/dev/null, also works on git older than 2.32.
+# behaviour (e.g. push.default). GIT_CONFIG_NOSYSTEM wins over
+# GIT_CONFIG_SYSTEM and, unlike GIT_CONFIG_SYSTEM=/dev/null, also works on git
+# older than 2.32.
 git_fixture_env() {
   git_no_auto_maintenance
   export GIT_CONFIG_NOSYSTEM=1
@@ -59,15 +59,22 @@ _inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
 #   $real     absolute path of the real git
 #   $dir      the -C directory ("." when no -C was given)
 #   ${args[@]} the arguments with a leading `-C <dir>` stripped
+#   $shim_dir  GIT_SHIM_DIR; a place for the snippet's own marker files
 # and may `exit` to swallow the call. One shared body keeps each test to just
 # the behaviour it fakes, so a respelled git call cannot slip past a copy.
+# Every call touches $GIT_SHIM_DIR/invoked, so a test can prove the shim was on
+# PATH; without that, a "never called" assertion passes vacuously.
+# Limit: only ONE leading `-C <dir>` is parsed (the only global-option shape
+# scripts/commit-records.sh uses); a call with other leading global options
+# (`-c k=v`) reaches the snippet with those still in args.
 git_shim() {
   local real; real="$(command -v git)"
   GIT_SHIM_DIR="${BATS_TEST_TMPDIR:?}/git-shim"
   mkdir -p "$GIT_SHIM_DIR"
   {
-    printf '#!/usr/bin/env bash\nreal=%q\n' "$real"
+    printf '#!/usr/bin/env bash\nreal=%q\nshim_dir=%q\n' "$real" "$GIT_SHIM_DIR"
     cat <<'HEAD'
+: > "$shim_dir/invoked"
 args=("$@")
 dir=.
 if [ "${args[0]:-}" = "-C" ]; then dir="${args[1]}"; args=("${args[@]:2}"); fi
