@@ -332,13 +332,13 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the real gitleaks runs
     Then the last output has the token replaced and the other two outputs are unchanged
 
-  # proves: hooks/tests/worklog-record.bats "pulumi token shapes that were redacted before keep the same output"
-  Scenario: Pulumi token shapes that were redacted before keep the same output
+  # proves: hooks/tests/worklog-record.bats "pulumi token shapes keep the exact pinned output"
+  Scenario: Pulumi token shapes keep the exact pinned output
     Given a token before a space, in quotes, in backticks, before a semicolon, at the end of a URL, twice in one text, before a literal backslash n, a percent 20 and a backslash u 0020 escape
     And a token before a later line holding the gitleaks allow string, and after an allow string line with a line following
     And a token before a note that is not the allow string, and a token after PULUMI_ACCESS_TOKEN=
     When the real gitleaks runs
-    Then each output equals the output the redaction gave before issue 238
+    Then each output keeps the exact output pinned in the test
     And the PULUMI_ACCESS_TOKEN= value is redacted as a generic secret
 
   # proves: hooks/tests/worklog-record.bats "known limit: a pulumi token stays raw when a word character is glued in front or a hyphen, equals sign, plus sign or underscore follows it"
@@ -372,6 +372,12 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the real gitleaks runs
     Then the output equals the input
 
+  # proves: hooks/tests/worklog-record.bats "a batch part end of curl does not complete a curl match with the next part"
+  Scenario: A curl word at the end of one scanned part does not reach the next part
+    Given a text of a line starting with -u, a name, a colon and a value, then a line of plain words, then a last line ending in "then run curl"
+    When the real gitleaks runs
+    Then the output equals the input
+
   # proves: hooks/tests/worklog-record.bats "a finding that exists only in a spaced copy changes nothing"
   Scenario: A finding that only a spaced copy holds changes nothing
     Given a stub gitleaks that reports a secret containing a space that only a spaced copy of the text holds
@@ -388,48 +394,61 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
   Scenario: A built-in marker before a Pulumi token and period stays closed and unnested
     Given an npm token glued directly before a Pulumi token and a period, and one separated by a space
     When the real gitleaks runs
-    Then every opening of a redaction marker in each output is closed
-    And no marker is nested in another
+    Then the outputs are exactly the npm marker and the generic-api-key marker, with the space kept in the second
+    And no marker is nested in another and no raw token is left
 
-  # proves: hooks/tests/worklog-record.bats "a batch with a text over the byte budget sends the 512-space separator line"
-  Scenario: Parts of the scanned text are separated by a line of 512 spaces
-    Given a batch of a text of 1,000,001 bytes and a small text with a period
+  # proves: hooks/tests/worklog-record.bats "a batch with a text over the byte budget sends the separator line"
+  Scenario: Parts of the scanned text are separated by 12 newlines, a line of 512 "(" characters and 12 newlines
+    Given a batch of a text of 100,001 bytes and a small text with a period
     When a stub gitleaks stores its stdin
-    Then the stored stdin holds a line of exactly 512 spaces
+    Then the stored stdin holds a line of exactly 512 "(" characters
 
   # proves: hooks/tests/worklog-record.bats "a batch with a text over the byte budget sends a spaced copy of the small text"
   Scenario: A small text beside an over-budget text still gets its spaced copy
-    Given a batch of a text of 1,000,001 bytes and a small text with a period
+    Given a batch of a text of 100,001 bytes and a small text with a period
     When a stub gitleaks stores its stdin
     Then the stored stdin holds the small text with a space in front of the period
 
-  # proves: hooks/tests/worklog-record.bats "a batch with a text over the byte budget sends no spaced copy of that text"
-  Scenario: A text over the 1,000,000 byte budget gets no spaced copy
-    Given a batch of a text of 1,000,001 bytes with commas and a small text
+  # proves: hooks/tests/worklog-record.bats "known limit: a batch with a text over the byte budget sends no spaced copy of that text"
+  Scenario: A text over the 100,000 byte budget gets no spaced copy
+    Given a batch of a text of 100,001 bytes with commas and a small text
     When a stub gitleaks stores its stdin
     Then the stored stdin holds no copy of the large text with a space in front of a comma
 
-  # proves: hooks/tests/worklog-record.bats "one text over the byte budget sends no 512-space separator line"
+  # proves: hooks/tests/worklog-record.bats "known limit: one text over the byte budget sends no separator line"
   Scenario: One over-budget text alone is scanned without a separator
-    Given a single text of 1,000,001 bytes
+    Given a single text of 100,001 bytes
     When a stub gitleaks stores its stdin
-    Then the stored stdin holds no line of 512 spaces
+    Then the stored stdin holds no line of 512 "(" characters
 
-  # proves: hooks/tests/worklog-record.bats "one text over the byte budget sends the text and at most one final newline"
+  # proves: hooks/tests/worklog-record.bats "one text over the byte budget sends the text and no more"
   Scenario: One over-budget text alone is sent as it is
-    Given a single text of 1,000,001 bytes
+    Given a single text of 100,001 bytes
     When a stub gitleaks stores its stdin
-    Then the stored stdin is at most one byte longer than the text
+    Then the stored stdin is exactly the text
 
-  # proves: hooks/tests/worklog-record.bats "a text under the budget in characters and over it in bytes gets no spaced copy"
+  # proves: hooks/tests/worklog-record.bats "one text of exactly the byte budget sends the separator line"
+  Scenario: A text of exactly 100,000 bytes still gets its copies
+    Given a single text of exactly 100,000 bytes
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds a line of exactly 512 "(" characters
+
+  # proves: hooks/tests/worklog-record.bats "known limit: the smallest texts get the copies first and a text that no longer fits gets none"
+  Scenario: The smallest texts get the copies first
+    Given a batch of a text A of 60,000 bytes, a text B of 60,000 bytes and a small text, in that order
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds a spaced copy of the small text and of A
+    And the stored stdin holds no spaced copy of B
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a text under the budget in characters and over it in bytes gets no spaced copy"
   Scenario: The byte budget counts UTF-8 bytes, not characters
-    Given a text of 333,334 fullwidth commas, under 1,000,000 characters and over 1,000,000 bytes, and a small text
+    Given a text of 33,334 fullwidth commas, under 100,000 characters and over 100,000 bytes, and a small text
     When a stub gitleaks stores its stdin
     Then the stored stdin holds no copy of the large text with a space in front of a fullwidth comma
 
   # proves: hooks/tests/worklog-record.bats "a text under the budget in characters and over it in bytes leaves the small text its copy"
   Scenario: The small text beside a byte-over-budget text still gets its copy
-    Given a text of 333,334 fullwidth commas and a small text with a period
+    Given a text of 33,334 fullwidth commas and a small text with a period
     When a stub gitleaks stores its stdin
     Then the stored stdin holds the small text with a space in front of the period
 

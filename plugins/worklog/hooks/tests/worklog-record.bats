@@ -2387,8 +2387,8 @@ _$(fake_do)"
 
 # assert_only_token_replaced <row>... — real gitleaks, ONE batch: each output
 # equals its row with only $KEY replaced by the marker of $RULE (default
-# pulumi-api-token), and the batch did not fail. Rows are separate texts, so they must not hold an allow string
-# unless the test is about that.
+# pulumi-api-token), and the batch did not fail. Rows are separate texts, so
+# they must not hold an allow string unless the test is about that.
 assert_only_token_replaced() {
   local out i=0 row want got rule="${RULE:-pulumi-api-token}"
   out="$(PATH="$(dirname "$(real_gitleaks)"):$PATH" redact_batch "$@")"
@@ -2456,9 +2456,8 @@ assert_only_token_replaced() {
   RULE=sentry-user-token assert_only_token_replaced "see $KEY." "see $KEY, ok"
 }
 
-# The old known-limit test pinned these as raw. They are redacted now: the
-# gitleaks allow string, on the same line before or after the token, with and
-# without a hash sign, and next to a period.
+# The gitleaks allow string, on the same line before or after the token, with
+# and without a hash sign, and next to a period, does not hide the token.
 @test "a pulumi token on the same line as a gitleaks allow string is redacted" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
@@ -2492,9 +2491,9 @@ assert_only_token_replaced() {
   [ "$(jq -c .texts <<<"$out")" = "$(jq -nc --arg a "$allow" '[$a, "plain words", "see <redacted:pulumi-api-token> now"]')" ]
 }
 
-# Shapes that were redacted before issue 238 keep their exact output. Also the
-# allow string AFTER or BEFORE a token on another line, which never hid it.
-@test "pulumi token shapes that were redacted before keep the same output" {
+# These shapes keep the exact output pinned here. It includes the allow string
+# AFTER or BEFORE a token on another line.
+@test "pulumi token shapes keep the exact pinned output" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
   allow="gitleaks"":allow"
@@ -2508,8 +2507,7 @@ assert_only_token_replaced() {
   [ "$(real_redact_texts "PULUMI_ACCESS_TOKEN=$KEY")" = "PULUMI_ACCESS_<redacted:generic-secret>" ]
 }
 
-# Still raw after issue 238: a word character glued in front is accepted limit 2
-# of issue 219. A token directly followed by a hyphen, an equals sign, a plus
+# Still raw: a word character glued in front is accepted limit 2 of issue 219. A token directly followed by a hyphen, an equals sign, a plus
 # sign or an underscore stays raw because no spaced copy puts a space in front
 # of those four (they sit inside many tokens).
 @test "known limit: a pulumi token stays raw when a word character is glued in front or a hyphen, equals sign, plus sign or underscore follows it" {
@@ -2527,8 +2525,8 @@ stub_batch() { PATH="$STUB:$PATH" redact_batch "$@"; }
 
 # big_text <file> <unit> <bytes-wanted> — <unit> repeated into <file> until it
 # holds exactly <bytes-wanted> UTF-8 bytes (the unit must divide it, or end in a
-# one-byte tail added by the caller). A megabyte does not fit in argv, so big
-# texts travel by file.
+# one-byte tail added by the caller). A big text does not fit in argv, so it
+# travels by file.
 big_text() {
   python3 -c '
 import sys
@@ -2556,11 +2554,20 @@ open(sys.argv[1], "wb").write(b * (n // len(b)) + b"a" * (n % len(b)))
 }
 
 # The scan text joins the original and the copies. A match must not cross from
-# the end of one part into the start of the next: with an empty line between
-# them, the word before a final "my token:" would have been read as its value.
+# the end of one part into the start of the next. A final "my token:" must not
+# take the first word of the next part as its value (a plain blank line lets it).
 @test "a batch part end does not complete a keyword match with the next part" {
   require_real_gitleaks
   input=$'Zx9Qw7Er5Ty3Ui1Op8As6Df4 is the build id\nnotes follow\nmy token:'
+  [ "$(real_redact_texts "$input")" = "$input" ]
+}
+
+# A curl rule reads any text on up to 5 following lines, so the end "curl" of
+# one part must not reach the "-u name:value" that starts the next part (a line
+# of 512 spaces lets it).
+@test "a batch part end of curl does not complete a curl match with the next part" {
+  require_real_gitleaks
+  input=$'-u alice:Zx9Qw7Er5Ty3Ui1Op8As6Df4 http://h.example/x\nplain words here\nthen run curl'
   [ "$(real_redact_texts "$input")" = "$input" ]
 }
 
@@ -2577,62 +2584,98 @@ open(sys.argv[1], "wb").write(b * (n // len(b)) + b"a" * (n % len(b)))
 }
 
 # The npm token is a built-in marker before the pulumi token's period is
-# scanned, so the pulumi finding must not land inside a marker. Every marker
-# stays closed and none is nested.
+# scanned, so the pulumi finding must not land inside a marker. The output holds
+# the npm marker and the generic-api-key marker (gitleaks reads the pulumi token
+# and its period as one generic key), each closed and none nested, with no raw
+# token.
 @test "a built-in marker directly before a pulumi token and period leaves every marker closed and unnested" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
+  [ "$(real_redact_texts "see $(fake_npm)$KEY.")" = "see <redacted:npm-token><redacted:generic-api-key>" ]
+  [ "$(real_redact_texts "see $(fake_npm) $KEY.")" = "see <redacted:npm-token> <redacted:generic-api-key>" ]
   for input in "see $(fake_npm)$KEY." "see $(fake_npm) $KEY."; do
     out="$(real_redact_texts "$input")"
-    [ "$(grep -o '<redacted:' <<<"$out" | wc -l)" -eq "$(grep -oE '<redacted:[a-z0-9-]+>' <<<"$out" | wc -l)" ]
-    ! grep -qE '<redacted:[^>]*<redacted:' <<<"$out"
+    if grep -qE '<redacted:[^>]*<redacted:' <<<"$out"; then return 1; fi
+    if grep -qF -- "$KEY" <<<"$out"; then return 1; fi
   done
 }
 
 # --- byte budget: only texts that fit get spaced copies ----------------------
 
-# A text of 1,000,001 bytes does not fit the 1,000,000 byte budget, so it is
+# sep_line — the middle line of the scan separator: 512 "(" characters. Built
+# with printf because BSD grep on macOS rejects a {512} repeat.
+sep_line() { printf '(%.0s' $(seq 1 512); }
+
+# has_sep_line <file> — the file holds the separator line. Status 1 means the
+# line is absent; a grep error (status 2) fails the test.
+has_sep_line() {
+  run grep -qxF -- "$(sep_line)" "$1"
+  [ "$status" -le 1 ] || return 2
+  return "$status"
+}
+
+# A text of 100,001 bytes does not fit the 100,000 byte budget, so it is
 # scanned once and a small text beside it still gets its copies.
-@test "a batch with a text over the byte budget sends the 512-space separator line" {
-  big_text "$SCRATCH/big.txt" "ab, " 1000001
+@test "a batch with a text over the byte budget sends the separator line" {
+  big_text "$SCRATCH/big.txt" "ab, " 100001
   GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
-  grep -qxE ' {512}' "$SCRATCH/stdin.txt"
+  has_sep_line "$SCRATCH/stdin.txt"
 }
 
 @test "a batch with a text over the byte budget sends a spaced copy of the small text" {
-  big_text "$SCRATCH/big.txt" "ab, " 1000001
+  big_text "$SCRATCH/big.txt" "ab, " 100001
   GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
   grep -qF -- "see Q ." "$SCRATCH/stdin.txt"
 }
 
-@test "a batch with a text over the byte budget sends no spaced copy of that text" {
-  big_text "$SCRATCH/big.txt" "ab, " 1000001
+@test "known limit: a batch with a text over the byte budget sends no spaced copy of that text" {
+  big_text "$SCRATCH/big.txt" "ab, " 100001
   GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
-  ! grep -qF -- "ab , " "$SCRATCH/stdin.txt"
+  run grep -qF -- "ab , " "$SCRATCH/stdin.txt"
+  [ "$status" -eq 1 ]
 }
 
-@test "one text over the byte budget sends no 512-space separator line" {
-  big_text "$SCRATCH/big.txt" "ab, " 1000001
+@test "known limit: one text over the byte budget sends no separator line" {
+  big_text "$SCRATCH/big.txt" "ab, " 100001
   GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" >/dev/null
-  ! grep -qxE ' {512}' "$SCRATCH/stdin.txt"
+  run has_sep_line "$SCRATCH/stdin.txt"
+  [ "$status" -eq 1 ]
 }
 
-@test "one text over the byte budget sends the text and at most one final newline" {
-  big_text "$SCRATCH/big.txt" "ab, " 1000001
+@test "one text over the byte budget sends the text and no more" {
+  big_text "$SCRATCH/big.txt" "ab, " 100001
   GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" >/dev/null
-  [ "$(wc -c < "$SCRATCH/stdin.txt")" -le 1000002 ]
+  [ "$(wc -c < "$SCRATCH/stdin.txt")" -eq 100001 ]
 }
 
-# 333,334 fullwidth commas are under 1,000,000 characters and over 1,000,000
+@test "one text of exactly the byte budget sends the separator line" {
+  big_text "$SCRATCH/big.txt" "ab, " 100000
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" >/dev/null
+  has_sep_line "$SCRATCH/stdin.txt"
+}
+
+# The budget is a running sum over the texts taken smallest first: the small
+# text and A (60,006 bytes) fit, B would make 120,006 and does not.
+@test "known limit: the smallest texts get the copies first and a text that no longer fits gets none" {
+  big_text "$SCRATCH/a.txt" "alpha, " 60000
+  big_text "$SCRATCH/b.txt" "bravo, " 60000
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/a.txt" "@$SCRATCH/b.txt" "see Q." >/dev/null
+  [ "$(grep -oF -- "see Q ." "$SCRATCH/stdin.txt" | wc -l)" -ge 1 ]
+  [ "$(grep -oF -- "alpha ," "$SCRATCH/stdin.txt" | wc -l)" -ge 1 ]
+  [ "$(grep -oF -- "bravo ," "$SCRATCH/stdin.txt" | wc -l)" -eq 0 ]
+}
+
+# 33,334 fullwidth commas are under 100,000 characters and over 100,000
 # UTF-8 bytes. The budget counts bytes.
-@test "a text under the budget in characters and over it in bytes gets no spaced copy" {
-  big_text "$SCRATCH/big.txt" "，" 1000002
+@test "known limit: a text under the budget in characters and over it in bytes gets no spaced copy" {
+  big_text "$SCRATCH/big.txt" "，" 100002
   GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
-  ! grep -qF -- " ，" "$SCRATCH/stdin.txt"
+  run grep -qF -- " ，" "$SCRATCH/stdin.txt"
+  [ "$status" -eq 1 ]
 }
 
 @test "a text under the budget in characters and over it in bytes leaves the small text its copy" {
-  big_text "$SCRATCH/big.txt" "，" 1000002
+  big_text "$SCRATCH/big.txt" "，" 100002
   GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/big.txt" "see Q." >/dev/null
   grep -qF -- "see Q ." "$SCRATCH/stdin.txt"
 }
@@ -2893,32 +2936,24 @@ assert_glued_stored() {
 # builtin_redact_texts <text> — the text through redact_texts with gitleaks
 # absent, so only the built-in rules run (the body path).
 builtin_redact_texts() {
-  PATH="$(path_without_gitleaks)" python3 -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import redact
-texts, failed = redact.redact_texts([sys.argv[2]])
-sys.stdout.write(texts[0])
-' "$HOOKS/lib" "$1"
+  local out
+  out="$(PATH="$(path_without_gitleaks)" redact_batch "$1")" || return
+  jq -j '.texts[0]' <<<"$out"
 }
 
 # real_redact_texts <text> — the text through redact_texts with the REAL
-# gitleaks first on PATH (the stub dir otherwise leads it).
+# gitleaks first on PATH (the stub dir otherwise leads it). Status 3 when the
+# batch failed.
 real_redact_texts() {
-  PATH="$(dirname "$(real_gitleaks)"):$PATH" python3 -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import redact
-texts, failed = redact.redact_texts([sys.argv[2]])
-if failed:
-    sys.exit(3)
-sys.stdout.write(texts[0])
-' "$HOOKS/lib" "$1"
+  local out
+  out="$(PATH="$(dirname "$(real_gitleaks)"):$PATH" redact_batch "$1")" || return
+  [ "$(jq -r .failed <<<"$out")" = "false" ] || return 3
+  jq -j '.texts[0]' <<<"$out"
 }
 
 # redact_batch <text|@file>... — redact_texts over ONE batch with whatever
 # gitleaks the caller's PATH leads to. Prints {"texts":[...],"failed":bool}.
-# An argument starting with "@/" is read from that file, since a megabyte text
+# An argument starting with "@/" is read from that file, since a big text
 # does not fit in argv.
 redact_batch() {
   python3 -c '
