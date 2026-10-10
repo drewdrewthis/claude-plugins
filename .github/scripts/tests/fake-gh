@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Fake `gh` for repair-release-manifests.bats. Serves canned REST responses from
+# $FAKE_GH_DIR and records every call. It fails loudly on any call shape the
+# contract does not name, so a drifting script cannot pass: such a call also creates
+# $FAKE_GH_DIR/unknown-call, which the bats teardown turns into a failed test.
+# Rejecting --jq/-q/--template is a limit of this fake (it does not implement gh's
+# output filtering), not a rule about the real gh; the script pipes to jq instead.
+#
+#   $FAKE_GH_DIR/pulls.json            body for the pulls list (may hold concatenated arrays)
+#   $FAKE_GH_DIR/compare/<sha>.json    body for compare/<base>...<head sha>
+#   $FAKE_GH_DIR/contents/<sha>.json   body for contents/<path>?ref=<sha>
+#   $FAKE_GH_DIR/ref/<ref>.json        body for git/ref/heads/<ref>: {"object":{"sha":"<sha>"}}
+# Shas are 40 hex; a head sha starts with "a", a merge-base sha with "b" (that is how
+# the fake tells contents-head from contents-base for failure injection).
+#   $FAKE_GH_DIR/calls.log             one line per call, full argv, shell-quoted
+#   $FAKE_GH_DIR/put-<n>/{url,message,content,sha,branch}   one dir per PUT
+# FAKE_GH_FAIL: comma list of shapes that exit 1: pulls, compare, contents-base,
+# contents-head, ref, put. A failing PUT prints an HTTP 409 message.
+set -u
+d="${FAKE_GH_DIR:?}"
+printf '%q ' "$@" >> "$d/calls.log"; printf '\n' >> "$d/calls.log"
+
+die() { : > "$d/unknown-call"; echo "fake-gh: $*" >&2; exit 97; }
+fails() { case ",${FAKE_GH_FAIL:-}," in *",$1,"*) return 0;; esac; return 1; }
+
+[ "${1:-}" = api ] || die "only 'gh api' is allowed, got: $*"
+shift
+method=GET; paginate=0; url=""
+declare -A fields=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --jq|-q|--template|-t|--jq=*|--template=*) die "gh output filtering ($1) is not allowed; pipe to jq" ;;
+    --paginate) paginate=1 ;;
+    -X) method="$2"; shift ;;
+    -f) fields["${2%%=*}"]="${2#*=}"; shift ;;
+    -*) die "unknown flag $1" ;;
+    *) [ -z "$url" ] || die "two urls: $url and $1"; url="$1" ;;
+  esac
+  shift
+done
+
+repo="${GITHUB_REPOSITORY:?}"; base="${BASE_BRANCH:-main}"; mpath="${FAKE_GH_MANIFEST_PATH:?}"
+
+if [ "$method" = GET ] && [ "$url" = "repos/$repo/pulls?state=open&base=$base&per_page=100" ]; then
+  [ "$paginate" = 1 ] || die "pulls list must use --paginate"
+  fails pulls && { echo "gh: HTTP 500 (pulls)" >&2; exit 1; }
+  cat "$d/pulls.json"; exit 0
+fi
+[ "$paginate" = 0 ] || die "--paginate only allowed on the pulls list"
+
+if [ "$method" = GET ] && [[ "$url" == "repos/$repo/compare/$base..."* ]]; then
+  sha="${url#"repos/$repo/compare/$base..."}"
+  fails compare && { echo "gh: HTTP 500 (compare)" >&2; exit 1; }
+  [ -f "$d/compare/$sha.json" ] || die "no compare fixture for $sha"
+  cat "$d/compare/$sha.json"; exit 0
+fi
+
+if [ "$method" = GET ] && [[ "$url" == "repos/$repo/contents/$mpath?ref="* ]]; then
+  sha="${url#*\?ref=}"
+  case "$sha" in a*) shape=contents-head ;; b*) shape=contents-base ;; *) die "contents read at a ref that is not a staged sha: $sha" ;; esac
+  fails "$shape" && { echo "gh: HTTP 500 ($shape)" >&2; exit 1; }
+  [ -f "$d/contents/$sha.json" ] || die "no contents fixture for $sha"
+  cat "$d/contents/$sha.json"; exit 0
+fi
+
+if [ "$method" = GET ] && [[ "$url" == "repos/$repo/git/ref/heads/"* ]]; then
+  r="${url#"repos/$repo/git/ref/heads/"}"
+  fails ref && { echo "gh: HTTP 500 (ref)" >&2; exit 1; }
+  [ -f "$d/ref/$r.json" ] || die "no ref fixture for $r"
+  cat "$d/ref/$r.json"; exit 0
+fi
+
+if [ "$method" = PUT ]; then
+  [ "$url" = "repos/$repo/contents/$mpath" ] || die "PUT to a path other than the manifest: $url"
+  for k in "${!fields[@]}"; do
+    case "$k" in message|content|sha|branch) ;; *) die "unexpected PUT field $k" ;; esac
+  done
+  [ -n "${fields[branch]:-}" ] || { : > "$d/put-without-branch"; die "PUT without a branch field would write to the default branch"; }
+  [ -n "${fields[sha]:-}" ] && [ -n "${fields[content]:-}" ] && [ -n "${fields[message]:-}" ] || die "PUT needs message, content, sha"
+  n=$(find "$d" -maxdepth 1 -name 'put-[0-9]*' | wc -l)
+  mkdir "$d/put-$((n + 1))"
+  p="$d/put-$((n + 1))"
+  printf '%s' "$url" > "$p/url"
+  for k in message content sha branch; do printf '%s' "${fields[$k]}" > "$p/$k"; done
+  fails put && { echo "gh: HTTP 409: is at <sha> but expected <sha>" >&2; exit 1; }
+  echo '{}'; exit 0
+fi
+
+die "unknown call shape: method=$method url=$url"

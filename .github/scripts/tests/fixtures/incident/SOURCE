@@ -1,0 +1,3 @@
+head.json     = git show e86b71e4:.release-please-manifest.json (drewdrewthis/claude-plugins)
+base.json     = git show 284c1d7e:.release-please-manifest.json (drewdrewthis/claude-plugins)
+expected.json = git show 24eb73a8:.release-please-manifest.json (drewdrewthis/claude-plugins)

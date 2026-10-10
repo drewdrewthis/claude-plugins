@@ -12,7 +12,9 @@ permissions:
   contents: write
   pull-requests: write
 
-# A second push while a release PR is being built would race it.
+# The group makes release runs go one at a time. It does not stop a merge to
+# main during a run; the repair step below fixes that case.
+# https://github.com/drewdrewthis/claude-plugins/issues/232
 concurrency:
   group: release-please-${{ github.ref }}
   cancel-in-progress: false
@@ -25,3 +27,19 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      # The script and config come from the pushed commit, while release-please reads
+      # the head of main: a plugin added by a later push can give one red run that the next run clears.
+      - name: Check out the repair script
+        uses: actions/checkout@v4
+        if: ${{ !cancelled() }}
+        with:
+          persist-credentials: false
+
+      # A merge to main during the run above can make release-please write a
+      # manifest that sets another plugin's version back. Restore those lines.
+      # Runs even when the action failed, because that run may have written a PR.
+      - name: Repair release manifests
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/repair-release-manifests.sh release-please-config.json .release-please-manifest.json

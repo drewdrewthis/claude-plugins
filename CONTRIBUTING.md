@@ -116,6 +116,13 @@ Release-please PRs are opened with the default `GITHUB_TOKEN`, so no checks run
 on them. If `release-title` becomes a required check, release PRs need an
 App/PAT token for release-please first (tracked in https://github.com/drewdrewthis/claude-plugins/issues/204).
 
+If a merge lands on `main` while a release run is in progress, release-please
+can write a release PR whose manifest sets another plugin's version back
+(https://github.com/drewdrewthis/claude-plugins/issues/232). The
+`repair-release-manifests.sh` step restores those lines in the same run with
+one commit on the release branch. **Do not merge a release PR while a
+release-please run is in progress or failed.**
+
 A version reaches boxes only when the release-please PR
 (`chore(main): release <plugin> …`) is merged. An open release PR means the
 change has not shipped.
