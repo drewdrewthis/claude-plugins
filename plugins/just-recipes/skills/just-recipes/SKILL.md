@@ -1,6 +1,6 @@
 ---
 name: just-recipes
-description: Use when running project commands/tasks in any repo, when the user says "just", "recipe", "run the deploy/test/build task", or before composing an ad hoc shell command that a recipe likely covers. Prefer named just recipes over ad hoc shell — the global library at ~/.claude/just/justfile applies even where the repo has no justfile.
+description: Use when running project commands/tasks in any repo, when the user says "just", "recipe", "run the deploy/test/build task", or before composing an ad hoc shell command that a recipe likely covers. Prefer named just recipes over ad hoc shell — an optional global library at ~/.claude/just/justfile (if your machine provides it) applies even where the repo has no justfile.
 ---
 
 # just-recipes
@@ -9,12 +9,11 @@ description: Use when running project commands/tasks in any repo, when the user 
 
 - A PreToolUse hook acts on raw Bash in every repo. `JUST_RECIPES_ENFORCE`:
   - unset / default = **nudge.** The command runs; `additionalContext` names a matching recipe, or says none covers it yet.
-  - `strict` = **deny.** Every non-allowlisted command is blocked — use a recipe or `just wrap`.
+  - `strict` = **deny.** Every non-allowlisted command is blocked — use a recipe, or the wrap command the hook names (if any).
   - `off` / `0` = silent.
 - Passes untouched: `just ...` (every segment of a chain), and the read-only verbs `cd`, `pwd`, `echo`, `ls`, `cat`, `command -v`, `which`. Everything else is raw execution, command substitution (`$(...)`, backticks) included.
-- Escape hatch: `just wrap "<cmd>"` — runs the command under timeout/output-cap guardrails and logs it.
-  ⚠ fm.just-wrap-unwired — bare `just wrap` errors ("no such recipe") in any project whose own justfile lacks `wrap`: mounted module recipes stay namespaced and `set fallback` walks parent directories, not modules (verified on just 1.58.0). Always-resolving form: `just --justfile ~/.claude/just/justfile -d . wrap "<cmd>"` (`-d .` pins execution to the current dir). After the wiring below, `just global::wrap "<cmd>"` also works.
-- One-time project wiring — add to the project justfile to expose every global recipe as `global::<recipe>`:
+- Escape hatch: a `wrap` recipe runs the command under timeout/output-cap guardrails and logs it. The hook names the wrap command only when a wrap recipe resolves; when it names none, no wrap recipe is installed. `wrap` and `wrap-report` come from the optional global library at `~/.claude/just/justfile`, present only if your machine provides it (`JUST_GLOBAL_JUSTFILE` overrides the path).
+- Optional project wiring, if your machine provides the global library — add to the project justfile to expose its recipes as `global::<recipe>`:
 
   ```just
   mod global '~/.claude/just/justfile'
@@ -23,7 +22,7 @@ description: Use when running project commands/tasks in any repo, when the user 
 
 ## Habit loop
 
-Friction from a denied/wrapped command → write a script → add a recipe calling it, with a doc comment → discoverable via `just --list`. `just wrap-report` summarizes wrap.log — treat it as the recipe backlog.
+Friction from a denied/wrapped command → write a script → add a recipe calling it, with a doc comment → discoverable via `just --list`. `just wrap-report` (if the optional global library is installed) summarizes wrap.log — treat it as the recipe backlog.
 
 ## Flat-recipe convention
 
@@ -31,7 +30,7 @@ One kebab-case recipe per intent, flat namespace. Chooser stubs (e.g. `just log`
 
 ## Steps
 
-1. **Discover before composing.** Run `just --list` in the project (add `--list-submodules` if the justfile mounts modules) before writing any ad hoc shell command. **If the project has no justfile, fall back to the global library: `just --justfile ~/.claude/just/justfile --list`.** If a listed recipe covers the intent, use it instead of assembling the equivalent shell yourself.
+1. **Discover before composing.** Run `just --list` in the project (add `--list-submodules` if the justfile mounts modules) before writing any ad hoc shell command. **If the project has no justfile and your machine provides the optional global library, use `just --justfile ~/.claude/just/justfile --list`.** If a listed recipe covers the intent, use it instead of assembling the equivalent shell yourself.
 2. **Unfamiliar recipe → inspect first.**
    - `just --show <recipe>` — print its definition without running it.
    - `just --dry-run <recipe>` — print the commands it would run without executing them.
