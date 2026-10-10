@@ -9,7 +9,8 @@ more. Exit 2: the harness could not run (one stderr line names the cause).
 PIN RULE
   (a) The reference is one constant, PINNED_SHA below. It is the only place the
       full sha stands outside the release-please CHANGELOG.md files. Do not copy
-      it anywhere else.
+      it anywhere else. The pin test in redact-diff-fuzz.bats holds the same
+      sha as two string halves; move both halves together with PINNED_SHA.
   (b) Move PINNED_SHA to the new commit after each merged change to redact.py.
   (c) After a move, the named-case runs and the teeth runs in
       redact-diff-fuzz.bats must give the same exit codes as before.
@@ -86,7 +87,7 @@ def make_piece(t, draws, a=0, b=None):
     for d in draws:
         i = t.find(d, ptr)
         if i < 0:
-            continue
+            raise HarnessError("draw not found in token")
         ptr = i + len(d)
         lo, hi = max(i, a), min(i + len(d), b)
         if hi > lo:
@@ -331,7 +332,7 @@ CASES = {
 MARKER_RE = re.compile(r"<redacted:([a-z0-9-]{1,40})>")
 MIN_RUN = 4
 MARKER_RUN = 6
-SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+SHA_RE = re.compile(r"[0-9a-f]{7,40}")
 
 
 def _longest_common(a, b, used):
@@ -687,7 +688,7 @@ def check_args(args):
     """
     for flag in ("candidate_sha", "reference_sha"):
         value = getattr(args, flag)
-        if value is not None and not SHA_RE.match(value):
+        if value is not None and not SHA_RE.fullmatch(value):
             raise HarnessError("bad sha: --%s" % flag.replace("_", "-"))
     if args.cmd != "fuzz":
         return

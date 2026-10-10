@@ -2825,7 +2825,7 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
 # A tripwire, not the proof: under pipefail any pipe into an early-exit grep
 # (grep -q, -Fxq, ...) can null valid uuids (SIGPIPE, 141). The two
 # long-list tests above are the behaviour proof.
-@test "UUID-CHECK: the hook checks uuids without a grep pipe" {
+@test "UUID-CHECK: the hook has no pipe into an early-exit grep" {
   run grep -cE '\|[[:space:]]*grep[^|]*[[:space:]]-[a-zA-Z]*q' "$HOOK"
   [ "$output" = "0" ]
 }

@@ -242,6 +242,8 @@ builtin_seed() {
   has_match '^flagged=[0-9]+ confirmed=[1-9][0-9]*$'
   confirmed="$(grep -Eo 'confirmed=[0-9]+' <<<"$output" | head -n 1 | sed 's/confirmed=//')"
   has_line "worse=$confirmed"
+  # 17 texts are flagged, so an ignored cap would confirm more than 8.
+  [ "$confirmed" -le 8 ]
   no_planted_leak "$pl"
 }
 
@@ -347,6 +349,10 @@ def gitleaks_present():
 
 
 def redact_texts(texts):
+    log = os.environ.get("STUB_ALONE_LOG")
+    if len(texts) == 1 and log:
+        with open(log, "a") as f:
+            f.write("alone\n")
     if len(texts) == 1 and os.environ.get("STUB_ALONE") == "clean":
         return _real().redact_texts(texts)
     return list(texts), False
@@ -355,9 +361,11 @@ PY
 
 @test "failure mode 8 exits 2 when over the cap and none of the first flagged is confirmed" {
   write_stub8
-  export STUB_ALONE=clean
+  export STUB_ALONE=clean STUB_ALONE_LOG="$BATS_TEST_TMPDIR/alone.log"
   fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 2
   [ "$status" -eq 2 ]
+  # The candidate lib runs alone once per confirmed attempt, so an ignored cap gives 1,000 lines.
+  [ "$(wc -l <"$STUB_ALONE_LOG")" -eq 2 ]
   [[ "$stderr" == *"too many to confirm"* ]]
   # The message names the cap that was passed, so an ignored --confirm-cap fails here.
   [[ "$stderr" == *"none of the first 2 "* ]]
@@ -394,12 +402,17 @@ PY
 }
 
 @test "more flagged than the cap, with a confirmed text, exits 1" {
+  local confirmed
   write_stub8
-  export STUB_ALONE=leak
+  export STUB_ALONE=leak STUB_ALONE_LOG="$BATS_TEST_TMPDIR/alone.log"
   fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 2
   [ "$status" -eq 1 ]
   has_line "confirm_cap=2"
   has_match '^flagged=[0-9]+ confirmed=[1-9][0-9]*$'
+  confirmed="$(grep -Eo 'confirmed=[0-9]+' <<<"$output" | head -n 1 | sed 's/confirmed=//')"
+  # The leak stub is worse on every text alone, so every attempt is confirmed.
+  [ "$confirmed" -eq 2 ]
+  [ "$(wc -l <"$STUB_ALONE_LOG")" -eq 2 ]
 }
 
 # --- AC6b: marker rule ------------------------------------------------------

@@ -11,7 +11,7 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
   Exit 0 means no worse text, exit 1 means one or more, exit 2 means the test
   could not run.
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "corpus hash is stable across runs", "corpus hash follows the seed", "corpus hash at seed 1 and N 200 equals the pinned value on every leg"
+  # proves: hooks/tests/redact-diff-fuzz.bats "corpus hash is stable across runs", "corpus hash follows the seed", "corpus hash at seed 1 and N 200 equals the pinned value on every leg", "builtin fuzz has teeth against 05b2460"
   @integration
   Scenario: The corpus hash and verdict follow the seed
     Given the helper runs twice with the same seed and N
@@ -59,7 +59,7 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
       | ubuntu-latest |
       | macos-latest  |
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "named case F is clean with the candidate", "named case G1 is clean with the candidate", "named case G2b is clean with the candidate", "named case H1 is clean with the candidate", "named case H2 is clean with the candidate"
+  # proves: hooks/tests/redact-diff-fuzz.bats "named case F is clean with the candidate", "named case G1 is clean with the candidate", "named case G2b is clean with the candidate", "named case H1 is clean with the candidate", "named case G2 is clean with the candidate", "named case H2 is clean with the candidate"
   # proves: hooks/tests/redact-diff-fuzz.bats "named case F is worse with cb0ab84", "named case G1 is worse with 3854dc2", "named case G2b is worse with 3854dc2", "named case H1 is worse with f1f1f8a", "named case H2 is worse with f1f1f8a"
   @integration
   Scenario Outline: A named case from PR 217 is clean now and worse with its bad commit
@@ -93,13 +93,12 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
     Then the stored row has ask_uuid equal to that uuid
     And the test asserts the hook run ended in 60 seconds or less (a wide bound; a tight one fails under load)
 
-  # proves: hooks/tests/worklog-record.bats "UUID-CHECK: the hook checks uuids without a grep pipe"
+  # proves: hooks/tests/worklog-record.bats "UUID-CHECK: the hook has no pipe into an early-exit grep"
   @integration
   Scenario: The hook has no pipe into grep -Fxq
     Given the fixed hook file
     When grep -cE for a pipe into an early-exit grep (grep -q, -Fxq) runs on it
     Then the count is 0
-    And the comment at the uuid check names SIGPIPE, pipefail and exit 141
 
   # proves: hooks/tests/worklog-record.bats "UUID-CHECK: given an ask_uuid no jq-listed record holds, it is written null", "UUID-CHECK: given an ask_uuid that is a strict prefix of another record's uuid, it is written null", "UUID-CHECK: given an ask_uuid that is another uuid with its last 4 chars starred, it is written null", "UUID-CHECK: given an end_uuid no jq-listed record holds, it is written null", "UUID-CHECK: given an end_uuid that is a strict prefix of another record's uuid, it is written null", "UUID-CHECK: given an end_uuid that is another uuid with its last 4 chars starred, it is written null"
   @integration
@@ -177,8 +176,9 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
   @integration
   Scenario: A confirmed text among the first 40 gives exit 1, not exit 2
     Given more than 40 flagged texts and one or more of the first 40 is confirmed worse alone
-    When the helper runs
+    When the helper runs with a cap of 2 and a stub lib that counts its alone calls
     Then it exits 1
+    And the stub lib is run alone exactly 2 times, so the cap is applied
 
   # proves: hooks/tests/redact-diff-fuzz.bats "marker with a name outside the allowed set keeps its piece"
   @unit
