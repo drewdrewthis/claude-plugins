@@ -1184,6 +1184,39 @@ lp_shared_cap_run() {
   awk -v d="$(lp_cap_of ' claude( |$)')" 'BEGIN { exit !(d != "" && d >= 90 && d <= 120) }'
 }
 
+lp_bad_cap_run() {
+  lp_timeout_recorder
+  unread_line
+  LIBRARIAN_MAX_RUNTIME_SEC="$1" wake
+}
+
+@test "runtime cap of 0: the drain completes, claude runs once and the cursor advances" {
+  lp_bad_cap_run 0
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+}
+
+@test "runtime cap of 0: claude runs under the default cap, not a 1s timeout" {
+  lp_bad_cap_run 0
+  awk -v d="$(lp_cap_of ' claude( |$)')" 'BEGIN { exit !(d != "" && d >= 1700 && d <= 1800) }'
+}
+
+@test "runtime cap of 0: the log gains one 'invalid LIBRARIAN_MAX_RUNTIME_SEC=0' line" {
+  lp_bad_cap_run 0
+  [ "$(lp_log_count 'invalid LIBRARIAN_MAX_RUNTIME_SEC=0,')" -eq 1 ]
+}
+
+@test "runtime cap with a leading zero: the drain completes, claude runs once and the cursor advances" {
+  lp_bad_cap_run 08
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+}
+
+@test "runtime cap with a leading zero: the log gains one 'invalid LIBRARIAN_MAX_RUNTIME_SEC=08' line" {
+  lp_bad_cap_run 08
+  [ "$(lp_log_count 'invalid LIBRARIAN_MAX_RUNTIME_SEC=08,')" -eq 1 ]
+}
+
 # ---- AC 19: only a real cap overrun is called one ---------------------------
 
 lp_scan_dies_early() {

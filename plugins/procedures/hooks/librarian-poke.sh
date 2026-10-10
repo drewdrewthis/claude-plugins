@@ -111,7 +111,9 @@ LIBRARIAN_SETTLE_SECS="${LIBRARIAN_SETTLE_SECS:-3}"
 case "$LIBRARIAN_SETTLE_SECS" in ''|*[!0-9]*) LIBRARIAN_SETTLE_SECS=3 ;; esac
 
 # Wall-clock cap on the batch scan plus the drain together; see LP_TIMEOUT below.
-LIBRARIAN_MAX_RUNTIME_SEC="$(lp_num_or_default LIBRARIAN_MAX_RUNTIME_SEC "${LIBRARIAN_MAX_RUNTIME_SEC:-1800}" 1800 '^[0-9]+$')"
+# It must be a positive integer with no leading zero: 0 would leave the drain
+# no time at all, and 08 is not a number to shell arithmetic.
+LIBRARIAN_MAX_RUNTIME_SEC="$(lp_num_or_default LIBRARIAN_MAX_RUNTIME_SEC "${LIBRARIAN_MAX_RUNTIME_SEC:-1800}" 1800 '^[1-9][0-9]*$')"
 
 # The batch scan and the drain share this one cap, so the claim TTL must
 # outlive it plus timeout's 60s kill-after, or a live drain's claim is stolen

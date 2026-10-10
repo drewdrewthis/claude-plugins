@@ -172,7 +172,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And the drain claim is released
     And neither batch.manifest.tmp nor batch.txt.part exists after a kill mid-range
 
-  # proves: hooks/tests/librarian-poke.bats "shared cap: after a scan slowed by 3s, claude runs under a timeout of at least 1s and under the full 120s"; hooks/tests/librarian-poke.bats "shared cap: the scan's own timeout still shows the full 120s cap"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still lets the drain run claude exactly once"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still advances the cursor"; hooks/tests/librarian-poke.bats "shared cap: a fast scan leaves claude nearly the full 120s cap"
+  # proves: hooks/tests/librarian-poke.bats "shared cap: after a scan slowed by 3s, claude runs under a timeout of at least 1s and under the full 120s"; hooks/tests/librarian-poke.bats "shared cap: the scan's own timeout still shows the full 120s cap"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still lets the drain run claude exactly once"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still advances the cursor"; hooks/tests/librarian-poke.bats "shared cap: a fast scan leaves claude nearly the full 120s cap"; hooks/tests/librarian-poke.bats "runtime cap of 0: the drain completes, claude runs once and the cursor advances"; hooks/tests/librarian-poke.bats "runtime cap of 0: claude runs under the default cap, not a 1s timeout"; hooks/tests/librarian-poke.bats "runtime cap of 0: the log gains one 'invalid LIBRARIAN_MAX_RUNTIME_SEC=0' line"; hooks/tests/librarian-poke.bats "runtime cap with a leading zero: the drain completes, claude runs once and the cursor advances"; hooks/tests/librarian-poke.bats "runtime cap with a leading zero: the log gains one 'invalid LIBRARIAN_MAX_RUNTIME_SEC=08' line"
   @integration
   Scenario: The scan and the drain share one runtime cap
     Given LIBRARIAN_MAX_RUNTIME_SEC of 120, timeout on PATH, and a recording timeout shim
@@ -182,6 +182,8 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And claude runs once and the cursor advances
     When the scan is fast instead
     Then the timeout that wraps claude has a duration within 2 of 120
+    When LIBRARIAN_MAX_RUNTIME_SEC is 0 or has a leading zero such as 08
+    Then the hook logs "invalid LIBRARIAN_MAX_RUNTIME_SEC=<value>" once and falls back to the default 1800
 
   # proves: hooks/tests/librarian-poke.bats "early scan death: a scan SIGKILLed far below the cap logs one 'batch failed, drain skipped' line"; hooks/tests/librarian-poke.bats "early scan death: a scan SIGKILLed far below the cap is not logged as 'batch scan exceeded'"; hooks/tests/librarian-poke.bats "early scan death: a scan SIGKILLed far below the cap writes no last-drain-start"; hooks/tests/librarian-poke.bats "early scan death: a scan SIGKILLed far below the cap starts no claude"
   @integration
