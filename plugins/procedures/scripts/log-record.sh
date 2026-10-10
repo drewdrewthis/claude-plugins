@@ -226,7 +226,8 @@ cmd_mistake() {
     local rc=0
     mistakes_locked "$(mistakes_lock_path "$(dirname "$MISTAKES_JSONL")")" _append_row "$row" "$source" || rc=$?
     # 75 is the lock helper's timeout; any other failure is the write itself.
-    [ "$rc" -eq 0 ] || { [ "$rc" -eq 75 ] && die "could not take the mistakes.jsonl lock; row not appended"; die "row not appended"; }
+    if [ "$rc" -eq 75 ]; then die "could not take the mistakes.jsonl lock; row not appended"; fi
+    [ "$rc" -eq 0 ] || die "row not appended"
 }
 
 # _source_overlap <source> — print the ts of the first row, in this file or any
@@ -241,8 +242,9 @@ _source_overlap() {
     done
     for f in "${files[@]}"; do
         [ -f "$f" ] || continue
-        # jq emits only the first hit itself (no `head`, so a closed pipe cannot
-        # masquerade as a read failure): any non-zero exit is a real one.
+        # No `head`, so a closed pipe cannot masquerade as a read failure: any
+        # non-zero exit is a real one. jq 1.6 may emit more than one hit despite
+        # first(); the first line is kept below.
         hit="$(jq -nRr --arg src "$1" '
             def parse: capture("^(?<id>.+):(?<a>[0-9]+)-(?<b>[0-9]+)$")
                 | .a |= tonumber | .b |= tonumber;
@@ -252,6 +254,7 @@ _source_overlap() {
             | select($o.id == $n.id and $o.a <= $n.b and $n.a <= $o.b)
             | (.ts | if type == "string" and . != "" then . else "?" end))' "$f")" \
             || { printf 'log-record: note: could not read %s; duplicate check skipped for it\n' "$f" >&2; continue; }
+        hit="${hit%%$'\n'*}"
         [ -z "$hit" ] || { printf '%s\n' "$hit"; return 0; }
     done
 }

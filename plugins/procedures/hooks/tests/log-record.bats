@@ -262,6 +262,17 @@ _rows() { wc -l < "$MISTAKES_JSONL" | tr -d ' '; }
   [[ "$output" == *duplicate* && "$output" == *s1* && "$output" == *653-670* && "$output" == *2026-01-02T03:04:05Z* ]]
 }
 
+@test "two overlapping rows give a one-line duplicate note naming the first row's ts" {
+  _src_env
+  jq -nc '{ts:"T1",source:"s2:5-9"}' > "$MISTAKES_JSONL"
+  jq -nc '{ts:"T2",source:"s2:10-12"}' >> "$MISTAKES_JSONL"
+  _m --source "s2:9-10"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c duplicate <<<"$output")" -eq 1 ]
+  [[ "$output" == *"row ts T1)"* && "$output" != *T2* ]]
+  [ "$(_rows)" -eq 2 ]
+}
+
 @test "a covering row with an empty or missing ts still counts as a duplicate" {
   _src_env
   jq -nc '{ts:"",source:"s1:653-670"}' > "$MISTAKES_JSONL"
