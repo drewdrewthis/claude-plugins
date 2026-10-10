@@ -3598,6 +3598,8 @@ dash_wd() {
     file) printf 'known bytes\n' > "$WD/-" ;;
     link) printf 'target bytes\n' > "$SCRATCH/link-target"; ln -s "$SCRATCH/link-target" "$WD/-" ;;
     dir) mkdir "$WD/-" ;;
+    longer) printf 'older bytes, longer than anything the stub writes\n' > "$WD/-" ;;
+    empty) : > "$WD/-" ;;
   esac
 }
 
@@ -3850,6 +3852,45 @@ dash_file_turn() {
   grep -qF -- "<redacted:pulumi-api-token>" "$WORKLOG_JSONL"
 }
 
+@test "dash path: a pre-existing dash file overwritten during a run claimed safe makes the scan report failure and sets the report-file flag" {
+  misread_gitleaks
+  dash_wd longer
+  run scan_report "-" "$WD" "$MISREAD:$PATH"
+  [ "$output" = "True [] False True" ]
+}
+
+@test "dash path: a pre-existing dash file overwritten during a run claimed safe stays in place with the bytes gitleaks wrote" {
+  misread_gitleaks
+  dash_wd longer
+  scan_report "-" "$WD" "$MISREAD:$PATH" >/dev/null
+  [ "$(cat "$WD/-")" = "stub report bytes" ]
+}
+
+@test "dash path: an empty pre-existing dash file overwritten during a run claimed safe makes the scan report failure and sets the report-file flag" {
+  misread_gitleaks
+  dash_wd empty
+  run scan_report "-" "$WD" "$MISREAD:$PATH"
+  [ "$output" = "True [] False True" ]
+}
+
+@test "dash path: an empty pre-existing dash file overwritten during a run claimed safe stays in place with the bytes gitleaks wrote" {
+  misread_gitleaks
+  dash_wd empty
+  scan_report "-" "$WD" "$MISREAD:$PATH" >/dev/null
+  [ "$(cat "$WD/-")" = "stub report bytes" ]
+}
+
+@test "dash path: the real gitleaks 8.21.2 claimed as 8.30.1 overwriting an empty pre-existing dash file makes the scan report failure and sets the report-file flag" {
+  require_old_gitleaks
+  local wrap="$SCRATCH/wrapbin"
+  mkdir -p "$wrap"
+  printf '#!/usr/bin/env bash\nif [ "${1:-}" = version ]; then echo 8.30.1; exit 0; fi\nexec "%s" "$@"\n' "$WORKLOG_TEST_OLD_GITLEAKS" > "$wrap/gitleaks"
+  chmod +x "$wrap/gitleaks"
+  dash_wd empty
+  run scan_report "-" "$WD" "$wrap:$PATH"
+  [ "$output" = "True [] False True" ]
+}
+
 # --- hook, the dash path forced on either system ------------------------------
 #
 # Production code has no test switch. A sitecustomize.py on PYTHONPATH sets
@@ -3973,6 +4014,32 @@ dash_misread_turn() {
   [ "$(cat "$WD/-")" = "stub report bytes" ]
 }
 
+# dash_misread_prefilled_turn — as dash_misread_turn, but the working directory
+# already holds a regular `-` file that the misreading gitleaks then overwrites.
+dash_misread_prefilled_turn() {
+  forced_darwin
+  misread_gitleaks
+  KEY="$(fake_pulumi)"
+  dash_wd longer
+  fixture_secret_prompt "$KEY"
+  drive_dash "$WD" "$MISREAD" "$(old_reply "$KEY")"
+}
+
+@test "forced dash path: a pre-existing dash file overwritten during a run claimed safe logs gitleaks-report-file once" {
+  dash_misread_prefilled_turn
+  [ "$(note_count gitleaks-report-file)" -eq 1 ]
+}
+
+@test "forced dash path: a pre-existing dash file overwritten during a run claimed safe logs gitleaks-failed once" {
+  dash_misread_prefilled_turn
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "forced dash path: a pre-existing dash file overwritten during a run claimed safe does not call the model" {
+  dash_misread_prefilled_turn
+  [ ! -s "$CLAUDE_STDIN_LOG" ]
+}
+
 # dash_old_real_turn — a secret turn through the real 8.21.2 binary, dash path forced.
 dash_old_real_turn() {
   require_old_gitleaks
@@ -3996,4 +4063,153 @@ dash_old_real_turn() {
 @test "forced dash path: the real gitleaks 8.21.2 keeps the raw token out of the worklog" {
   dash_old_real_turn
   [ "$(grep -cF -- "$KEY" "$WORKLOG_JSONL" || true)" -eq 0 ]
+}
+
+# --- guards found by mutation review -----------------------------------------
+
+@test "the default report path with the caller's stdout a regular file still returns the finding" {
+  on_linux || return 0
+  dash_stub
+  PATH="$STUB:$PATH" python3 - "$HOOKS/lib" "$KEY" "$SCRATCH/scan-out" >"$SCRATCH/regular-stdout" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+found, failed = redact.scan("my token is " + sys.argv[2] + " please keep it")
+open(sys.argv[3], "w").write("%s %s" % (failed, [r for _, r in found]))
+PY
+  [ "$(cat "$SCRATCH/scan-out")" = "False ['pulumi-api-token']" ]
+}
+
+@test "dash path: gitleaks 8.22.0 returns the finding and sets no flag" {
+  dash_stub
+  dash_wd none
+  GITLEAKS_STUB_VERSION=8.22.0 run scan_report "-" "$WD" "$STUB:$PATH" "$KEY"
+  [ "$output" = "False ['pulumi-api-token'] False False" ]
+}
+
+@test "dash path: gitleaks 8.21.99 makes the scan report failure and sets the too-old flag" {
+  dash_stub
+  dash_wd none
+  GITLEAKS_STUB_VERSION=8.21.99 run scan_report "-" "$WD" "$STUB:$PATH" "$KEY"
+  [ "$output" = "True [] True False" ]
+}
+
+# second_pass_gitleaks — a gitleaks whose FIRST version call prints 8.30.1 and
+# whose first scan returns no findings. The hook runs the candidate pass first
+# and the model-entries pass second, each in its own python process, so only
+# the second pass sees the change. SECOND_MODE=old: later version calls print
+# 8.21.2. SECOND_MODE=file: the second scan writes a file named `-`.
+second_pass_gitleaks() {
+  SECOND="$SCRATCH/second"
+  mkdir -p "$SECOND"
+  cat > "$SECOND/gitleaks" <<'SH'
+#!/usr/bin/env bash
+bump() { local c; c="$(cat "$1" 2>/dev/null || echo 0)"; c=$((c+1)); echo "$c" >"$1"; echo "$c"; }
+if [ "${1:-}" = version ]; then
+  n="$(bump "$SECOND_DIR/version-count")"
+  if [ "$SECOND_MODE" = old ] && [ "$n" -gt 1 ]; then echo 8.21.2; else echo 8.30.1; fi
+  exit 0
+fi
+cat >/dev/null
+n="$(bump "$SECOND_DIR/scan-count")"
+if [ "$SECOND_MODE" = file ] && [ "$n" -gt 1 ]; then printf 'stub report bytes\n' > ./-; fi
+echo '[]'
+exit 0
+SH
+  chmod +x "$SECOND/gitleaks"
+}
+
+# second_pass_turn <mode> — a secret turn, dash path forced, through the stub above.
+second_pass_turn() {
+  forced_darwin
+  second_pass_gitleaks
+  KEY="$(fake_pulumi)"
+  WD="$(mktemp -d "$SCRATCH/wd.XXXXXX")"
+  fixture_secret_prompt "$KEY"
+  drive_dash "$WD" "$SECOND" "$(old_reply "$KEY")" "SECOND_MODE=$1" "SECOND_DIR=$SECOND"
+}
+
+@test "forced dash path: gitleaks too old only on the model-entries pass logs gitleaks-too-old once" {
+  second_pass_turn old
+  [ "$(note_count gitleaks-too-old)" -eq 1 ]
+}
+
+@test "forced dash path: gitleaks too old only on the model-entries pass still calls the model" {
+  second_pass_turn old
+  [ -s "$CLAUDE_STDIN_LOG" ]
+}
+
+@test "forced dash path: gitleaks too old only on the model-entries pass logs gitleaks-failed once" {
+  second_pass_turn old
+  [ "$(note_count gitleaks-failed)" -eq 1 ]
+}
+
+@test "forced dash path: a dash file written only on the model-entries pass logs gitleaks-report-file once" {
+  second_pass_turn file
+  [ "$(note_count gitleaks-report-file)" -eq 1 ]
+}
+
+@test "forced dash path: a dash file written only on the model-entries pass still calls the model" {
+  second_pass_turn file
+  [ -s "$CLAUDE_STDIN_LOG" ]
+}
+
+@test "forced dash path: a dash file written only on the model-entries pass stays with its bytes" {
+  second_pass_turn file
+  [ "$(cat "$WD/-")" = "stub report bytes" ]
+}
+
+# slow_version_gitleaks — `gitleaks version` blocks past any test timeout (exec'd,
+# so the killed child frees the pipe); a scan call is logged.
+slow_version_gitleaks() {
+  SLOW="$SCRATCH/slow"
+  mkdir -p "$SLOW"
+  cat > "$SLOW/gitleaks" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = version ]; then exec sleep 5; fi
+echo "$*" >>"$GITLEAKS_CALL_LOG"
+cat >/dev/null
+echo '[]'
+SH
+  chmod +x "$SLOW/gitleaks"
+}
+
+@test "dash path: a version call slower than the timeout makes the scan report failure and sets the too-old flag" {
+  slow_version_gitleaks
+  dash_wd none
+  WORKLOG_GITLEAKS_TIMEOUT=1 run scan_report "-" "$WD" "$SLOW:$PATH"
+  [ "$output" = "True [] True False" ]
+}
+
+@test "dash path: a version call slower than the timeout never runs gitleaks stdin" {
+  slow_version_gitleaks
+  dash_wd none
+  WORKLOG_GITLEAKS_TIMEOUT=1 scan_report "-" "$WD" "$SLOW:$PATH" >/dev/null
+  [ ! -s "$GITLEAKS_CALL_LOG" ]
+}
+
+# A version read that used the whole budget leaves nothing for the scan.
+# In-process: the clock jumps past the budget after the first reading.
+@test "dash path: a version read that uses up the budget makes the scan report failure without too-old, and runs no scan" {
+  dash_wd none
+  run bash -c 'cd "$1" && PATH="$2:$PATH" python3 - "$3" <<"PY"
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+redact._REPORT_PATH = "-"
+redact._gitleaks_version = lambda secs: (8, 30, 1)
+ticks = iter([0.0])
+redact.time.monotonic = lambda: next(ticks, 1000.0)
+ran = []
+redact._run_gitleaks = lambda text, secs=None: (ran.append(1) or ([("x", "y")], False))
+found, failed = redact.scan("some text")
+print("%s %s %s %s" % (failed, found, redact.gitleaks_too_old, len(ran)))
+PY' _ "$WD" "$STUB" "$HOOKS/lib"
+  [ "$output" = "True [] False 0" ]
+}
+
+@test "dash path: a timeout that is not a number makes the scan report failure without raising" {
+  dash_wd none
+  WORKLOG_GITLEAKS_TIMEOUT=abc run scan_report "-" "$WD" "$STUB:$PATH"
+  [ "$output" = "True [] False False" ]
 }

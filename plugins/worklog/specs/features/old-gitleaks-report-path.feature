@@ -192,6 +192,17 @@ Feature: Old gitleaks versions redact on Linux and are refused elsewhere
     When a scan is asked for on text with a fake token
     Then the scan reports failure with the report-file flag set and the file is still there with its bytes
 
+  # proves: hooks/tests/worklog-record.bats "dash path: a pre-existing dash file overwritten during a run claimed safe makes the scan report failure and sets the report-file flag"
+  # proves: hooks/tests/worklog-record.bats "dash path: a pre-existing dash file overwritten during a run claimed safe stays in place with the bytes gitleaks wrote"
+  # proves: hooks/tests/worklog-record.bats "dash path: an empty pre-existing dash file overwritten during a run claimed safe makes the scan report failure and sets the report-file flag"
+  # proves: hooks/tests/worklog-record.bats "dash path: an empty pre-existing dash file overwritten during a run claimed safe stays in place with the bytes gitleaks wrote"
+  # proves: hooks/tests/worklog-record.bats "dash path: the real gitleaks 8.21.2 claimed as 8.30.1 overwriting an empty pre-existing dash file makes the scan report failure and sets the report-file flag"
+  Scenario: A pre-existing dash file that a misread version overwrites fails the scan and keeps the file
+    Given the report path is the dash, "-" is an existing regular file (non-empty, or empty) and a gitleaks prints 8.30.1 (a stub, or the real 8.21.2 behind a version wrapper) but overwrites "-" for stdin
+    When a scan is asked for on text with a fake token
+    Then the scan reports failure with the report-file flag set, the too-old flag clear and no findings, and the file is still there with the bytes gitleaks wrote
+    # An existing "-" whose inode, size or mtime changed during the run counts as written by the run.
+
   # proves: hooks/tests/worklog-record.bats "dash path: a normal run asks for the version exactly once"
   # proves: hooks/tests/worklog-record.bats "dash path: a normal run scans once"
   Scenario: A normal dash run makes one version call and one scan call
@@ -247,6 +258,14 @@ Feature: Old gitleaks versions redact on Linux and are refused elsewhere
     When the hook records a turn with a fake token
     Then one gitleaks-report-file note and one gitleaks-failed note are logged, no gitleaks-too-old note, the model is called 0 times and the file keeps its bytes
 
+  # proves: hooks/tests/worklog-record.bats "forced dash path: a pre-existing dash file overwritten during a run claimed safe logs gitleaks-report-file once"
+  # proves: hooks/tests/worklog-record.bats "forced dash path: a pre-existing dash file overwritten during a run claimed safe logs gitleaks-failed once"
+  # proves: hooks/tests/worklog-record.bats "forced dash path: a pre-existing dash file overwritten during a run claimed safe does not call the model"
+  Scenario: The hook notes gitleaks-report-file when a misread version overwrites a pre-existing dash file
+    Given the hook runs with sys.platform forced to darwin, "-" is an existing regular file and a gitleaks prints 8.30.1 but overwrites it
+    When the hook records a turn with a fake token
+    Then one gitleaks-report-file note and one gitleaks-failed note are logged and the model is called 0 times
+
   # proves: hooks/tests/worklog-record.bats "forced dash path: the real gitleaks 8.21.2 logs gitleaks-too-old once"
   # proves: hooks/tests/worklog-record.bats "forced dash path: the real gitleaks 8.21.2 leaves no entry in the working directory"
   # proves: hooks/tests/worklog-record.bats "forced dash path: the real gitleaks 8.21.2 keeps the raw token out of the worklog"
@@ -255,3 +274,41 @@ Feature: Old gitleaks versions redact on Linux and are refused elsewhere
     When the hook records a turn with a fake token
     Then one gitleaks-too-old note is logged, the directory is empty and the worklog holds the token 0 times
 
+  # Guards found by mutation review. lstat, not stat: with the caller's stdout a regular file, /dev/stdout still counts as usable.
+  # proves: hooks/tests/worklog-record.bats "the default report path with the caller's stdout a regular file still returns the finding"
+  Scenario: The report path check does not follow the caller's stdout
+    Given Linux and a scan whose process stdout is a regular file
+    When the scan runs with the default report path
+    Then the finding is returned and the scan does not fail
+
+  # proves: hooks/tests/worklog-record.bats "dash path: gitleaks 8.22.0 returns the finding and sets no flag"
+  # proves: hooks/tests/worklog-record.bats "dash path: gitleaks 8.21.99 makes the scan report failure and sets the too-old flag"
+  Scenario: 8.22.0 is the exact minimum for the dash path
+    Given the dash path is forced
+    When gitleaks reports version 8.22.0, and then 8.21.99
+    Then 8.22.0 returns the finding with no flag and 8.21.99 fails the scan and sets the too-old flag
+
+  # proves: hooks/tests/worklog-record.bats "forced dash path: gitleaks too old only on the model-entries pass logs gitleaks-too-old once"
+  # proves: hooks/tests/worklog-record.bats "forced dash path: gitleaks too old only on the model-entries pass still calls the model"
+  # proves: hooks/tests/worklog-record.bats "forced dash path: gitleaks too old only on the model-entries pass logs gitleaks-failed once"
+  # proves: hooks/tests/worklog-record.bats "forced dash path: a dash file written only on the model-entries pass logs gitleaks-report-file once"
+  # proves: hooks/tests/worklog-record.bats "forced dash path: a dash file written only on the model-entries pass still calls the model"
+  # proves: hooks/tests/worklog-record.bats "forced dash path: a dash file written only on the model-entries pass stays with its bytes"
+  Scenario: The hook notes a problem that shows only on the model-entries pass
+    Given the dash path is forced and the candidate pass succeeds
+    When the model-entries pass meets a gitleaks that is too old, or one that writes a file named "-"
+    Then one gitleaks-too-old (or gitleaks-report-file) note and one gitleaks-failed note are logged, the model was called and the file keeps its bytes
+
+  # proves: hooks/tests/worklog-record.bats "dash path: a version call slower than the timeout makes the scan report failure and sets the too-old flag"
+  # proves: hooks/tests/worklog-record.bats "dash path: a version call slower than the timeout never runs gitleaks stdin"
+  # proves: hooks/tests/worklog-record.bats "dash path: a version read that uses up the budget makes the scan report failure without too-old, and runs no scan"
+  Scenario: The version read and the scan share one timeout budget
+    Given the dash path is forced
+    When the version call is slower than the timeout, or the version read uses up the whole budget
+    Then the scan fails, gitleaks stdin is not run, and the too-old flag is set only in the first case
+
+  # proves: hooks/tests/worklog-record.bats "dash path: a timeout that is not a number makes the scan report failure without raising"
+  Scenario: A timeout that is not a number fails the scan
+    Given the dash path is forced and WORKLOG_GITLEAKS_TIMEOUT is "abc"
+    When the scan runs
+    Then it reports failure and raises nothing

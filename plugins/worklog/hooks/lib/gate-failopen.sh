@@ -46,9 +46,10 @@
 # UNJUDGED (mechanical fields only), and the model is skipped if the candidate
 # pass failed: built-ins alone must not stand in for a layer meant to run.
 # gitleaks-too-old — on a non-Linux system gitleaks is older than 8.22.0 or its
-# version cannot be read; gitleaks was not run; upgrade to 8.22.0 or later.
+# version cannot be read; gitleaks was not run; upgrade to 8.22.0 or later (when
+# the version cannot be read, check the gitleaks install first).
 # Written once per session, with gitleaks-failed on each such turn.
-# gitleaks-report-file — gitleaks created a file named `-` in the working
+# gitleaks-report-file — gitleaks created or changed a file named `-` in the working
 # directory of the session during the run; it can hold a raw report; the caller
 # did not remove it. Written once per session, with gitleaks-failed.
 # redact-failed — a caller that redacts secrets before writing hit a RUNTIME
