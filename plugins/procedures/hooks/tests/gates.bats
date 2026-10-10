@@ -1,25 +1,36 @@
 #!/usr/bin/env bats
-# Policy tests for the three per-turn gates.
+# Policy tests for the two per-turn gates (how-do-i-gate, am-i-done-gate) and
+# the turn-state reset/record hooks they read.
 #
 # The libraries are covered by gate-libs.bats; these prove POLICY only —
 # who is denied, when, and that every degenerate path releases.
 #
 # Run: bats hooks/tests/gates.bats
 
+load helpers/common
+
 setup() {
   HOOKS="$BATS_TEST_DIRNAME/.."
+  clear_gate_switches
+  # The gate scripts exit early under sdk-cli; a caller's ambient value would
+  # make every armed assertion pass vacuously.
+  unset CLAUDE_CODE_ENTRYPOINT
+  # PLUGIN ADAPTATION (#144): gates are default-off here, so the suite arms them
+  export PROCEDURES_ENABLE_HOW_DO_I_GATE=true PROCEDURES_ENABLE_AM_I_DONE_GATE=true
   export TURN_STATE_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gates.XXXXXX")"
   # orchard-codex#210 root cause: gate_failopen() defaults this to the REAL
   # $HOME/.claude/gate-failopen.jsonl (the GATE_FAILOPEN_LOG assignment in
   # hooks/lib/gate-failopen.sh). Leaving it unset
   # here is what leaked this suite's own runs into production telemetry (see
-  # "root cause #210" test below). HOME is ALSO redirected: PROJ two lines
+  # "root cause orchard-codex#210" test below). HOME is ALSO redirected: PROJ two lines
   # down and gate_failopen's own default are both $HOME-relative, so a fake
   # HOME closes both holes with one export, and covers any future $HOME-relative
   # default too.
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/gates-home.XXXXXX")"
   mkdir -p "$HOME/.claude"
   export GATE_FAILOPEN_LOG="$TURN_STATE_DIR/gate-failopen.jsonl"
+  # Arming writes an armed_by row; keep it in the scratch dir, not the fake HOME.
+  export GATE_ESCAPE_LOG="$TURN_STATE_DIR/gate-escape.jsonl"
   SID="bats-g-$$-$BATS_TEST_NUMBER"
   PAYLOAD_EDIT="{\"session_id\":\"$SID\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}"
   # am-i-done-gate reads the transcript, which must live where it looks.
@@ -151,7 +162,7 @@ assistant_tool() {
 
 @test "how-do-i-gate: headless sdk-cli sessions (librarian drain) are never gated" {
   start_turn
-  run env PROCEDURES_ENABLE_HOW_DO_I_GATE=true CLAUDE_CODE_AGENT=librarian CLAUDE_CODE_ENTRYPOINT=sdk-cli bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  run env CLAUDE_CODE_AGENT=librarian CLAUDE_CODE_ENTRYPOINT=sdk-cli bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -362,6 +373,9 @@ assistant_tool() {
 
 # ---------- test-harness hygiene (orchard-codex#210 root cause, 2026-08-03) ----------
 #
+# NB: every "#210" in this section is orchard-codex#210, a different repo's
+# issue; it is not claude-plugins#210.
+#
 # gate_failopen() defaults its log to the REAL $HOME/.claude/gate-failopen.jsonl
 # (the GATE_FAILOPEN_LOG assignment in hooks/lib/gate-failopen.sh). This file's
 # setup() exported TURN_STATE_DIR but not
@@ -373,7 +387,7 @@ assistant_tool() {
 # #210 comments). setup()/teardown() below now export both, closing the hole
 # this test pins.
 
-@test "root cause #210: this suite does not leak a fail-open record into a bystander's real HOME" {
+@test "root cause orchard-codex#210: this suite does not leak a fail-open record into a bystander's real HOME" {
   # Runs THIS FILE, filtered to the one test that reproduces the leak, as a
   # child bats process with HOME pointed at a throwaway dir and
   # GATE_FAILOPEN_LOG deliberately UNSET — i.e. exactly this file's own
@@ -391,6 +405,16 @@ assistant_tool() {
   # leak check below for no reason.
   [[ "$output" == *"1..1"* ]]
   [[ "$output" == *"ok 1 am-i-done: fails OPEN when the reset hook never ran"* ]]
+
+  # The child's teardown rm -rf's whatever $HOME it ran with. If its setup()
+  # stopped redirecting HOME, that is the bystander's dir: the directory is gone
+  # and, with it, the leaked row the check below looks for. Its absence is
+  # therefore a failure in its own right, not a clean result.
+  [ -d "$LEAK_HOME/.claude" ] || {
+    echo "child setup() did not redirect HOME: its teardown removed the bystander HOME"
+    rm -rf "$LEAK_HOME"
+    false
+  }
 
   [ ! -e "$LEAK_HOME/.claude/gate-failopen.jsonl" ] || {
     echo "LEAK reproduced: $(cat "$LEAK_HOME/.claude/gate-failopen.jsonl")"
@@ -511,4 +535,38 @@ headless_plugin() {
   jq -e '.hooks.PostToolUse[] | select(.matcher == "Skill") | .hooks
         | length == 1 and (.[0].command == "bash ${CLAUDE_PLUGIN_ROOT}/hooks/turn-state-record.sh")' \
     "$HOOKS/hooks.json" >/dev/null
+}
+
+# ---------- negative controls: the gates are default-off ----------
+#
+# setup() arms both gates, so every deny above proves the armed path only. These
+# two prove the resting state: with the arm variables truly UNSET (not `=false`)
+# the same payload is silent and leaves no record, and the armed call on that
+# payload still denies, so the silence is the switch and not a payload that
+# never bit.
+
+@test "how-do-i-gate: unarmed is silent and records nothing, armed denies the same payload" {
+  start_turn
+  run bash -c "unset PROCEDURES_ENABLE_HOW_DO_I_GATE CLAUDE_PLUGIN_OPTION_ENABLE_HOW_DO_I_GATE; echo '$PAYLOAD_EDIT' | CLAUDE_CODE_AGENT=technician bash '$HOOKS/how-do-i-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ]
+
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+  [[ "$output" == *"HOW-DO-I-GATE"* ]]
+}
+
+@test "am-i-done-gate: unarmed is silent and records nothing, armed blocks the same payload" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run bash -c "unset PROCEDURES_ENABLE_AM_I_DONE_GATE CLAUDE_PLUGIN_OPTION_ENABLE_AM_I_DONE_GATE; echo '$STOP' | CLAUDE_CODE_AGENT=technician bash '$HOOKS/am-i-done-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ]
+
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [[ "$output" == *"AM-I-DONE"* ]]
 }

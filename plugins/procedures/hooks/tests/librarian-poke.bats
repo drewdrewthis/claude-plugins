@@ -9,7 +9,10 @@
 #
 # Run: bats hooks/tests/librarian-poke.bats
 
+load helpers/common
+
 setup() {
+  git_no_auto_maintenance
   HOOKS="$BATS_TEST_DIRNAME/.."
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/lib-home.XXXXXX")"
   mkdir -p "$HOME/.claude"
@@ -433,7 +436,7 @@ EOF
 # claim is stolen and two librarians write at once.
 @test "claim: the default TTL derives from the runtime cap — a 1000s-old claim is kept, then stolen under a 100s cap" {
   user_prompt
-  mkdir -p "$LIBRARIAN_LOCK.d"; touch -d "@$(( $(date +%s) - 1000 ))" "$LIBRARIAN_LOCK.d"
+  mkdir -p "$LIBRARIAN_LOCK.d"; _touch_ago "$LIBRARIAN_LOCK.d" 1000
   wake; [ "$status" -eq 0 ]
   claude_never_ran
   [ -d "$LIBRARIAN_LOCK.d" ]

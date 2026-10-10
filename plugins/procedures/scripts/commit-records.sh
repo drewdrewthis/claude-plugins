@@ -682,9 +682,17 @@ if [ "${#FINAL_PATHS[@]}" -gt 0 ]; then
     git -C "$ROOT" add -- "${FINAL_PATHS[@]}" 2>/dev/null || \
         _abort commit "git add failed for: ${FINAL_PATHS[*]}"
 fi
-# Ignored .index that still has tracked files: restage just those.
+# Ignored .index that still has tracked files: restage just those. Guarded on
+# ls-files: git add -u on a pathspec that matches nothing tracked exits 128 on
+# newer git, which aborted every commit in a store whose .index was never tracked.
+# A failed ls-files is an abort, not "nothing tracked": that would leave a tracked index unstaged.
 if [ -n "$INDEX_IGNORED" ]; then
-    git -C "$ROOT" add -u -- .index 2>/dev/null || _abort commit "git add -u failed for: .index"
+    _idx_tracked="$(git -C "$ROOT" ls-files -- .index 2>/dev/null)" || \
+        _abort commit "git ls-files failed for: .index"
+    if [ -n "$_idx_tracked" ]; then
+        git -C "$ROOT" add -u -- .index 2>/dev/null || _abort commit "git add -u failed for: .index"
+    fi
+    unset _idx_tracked
 fi
 
 # _stage_jsonl — stage mistakes.jsonl and vet exactly the rows this commit adds:

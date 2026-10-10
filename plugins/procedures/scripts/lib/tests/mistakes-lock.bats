@@ -2,6 +2,8 @@
 # Tests for scripts/lib/mistakes-lock.sh — the mkdir fallback (flock absent).
 # Run: bats scripts/lib/tests/mistakes-lock.bats
 
+load ../../../hooks/tests/helpers/common
+
 setup() {
   LIB="$BATS_TEST_DIRNAME/../mistakes-lock.sh"
   D="$(mktemp -d)"
@@ -10,7 +12,7 @@ setup() {
 
 @test "a stale lock is taken over even when it holds files (renamed, not removed in place)" {
   mkdir "$D/l.d"; : > "$D/l.d/owner"
-  touch -d '-5 minutes' "$D/l.d"
+  _touch_ago "$D/l.d" 300
   run bash -c "source '$LIB'; mistakes_locked '$D/l' true"
   [ "$status" -eq 0 ]
   [ ! -e "$D/l.d" ]

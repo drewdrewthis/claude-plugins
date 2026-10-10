@@ -48,7 +48,7 @@ linter, templates) is vendored from `orchard-codex@develop-sweatshop`.
 ## Tests are the gate
 
 ```
-cd plugins/procedures && bats hooks/tests
+cd plugins/procedures && bats hooks/tests scripts/lib/tests
 cd plugins/heartbeats && bats scripts/tests
 ```
 

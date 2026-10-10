@@ -7,6 +7,8 @@
 #
 # Run: bats hooks/tests/librarian-batch.bats
 
+load helpers/common
+
 setup() {
   SCRIPTS="$BATS_TEST_DIRNAME/../../scripts"
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/lb-home.XXXXXX")"
@@ -24,7 +26,7 @@ _transcript() {
   for i in $(seq 1 "$2"); do
     printf '{"type":"user","message":{"content":"%s msg %03d %s"}}\n' "$1" "$i" "$(printf '%080d' 0)"
   done > "$f"
-  touch -t "$(date -d "$3 days ago" +%Y%m%d%H%M)" "$f"
+  _touch_ago "$f" $(( $3 * 86400 ))
 }
 
 _batch() { run bash "$SCRIPTS/librarian-batch.sh"; [ "$status" -eq 0 ]; }
@@ -185,7 +187,7 @@ EOF
 
 @test "a jq failure skips that transcript with a message; younger ones are still issued" {
   printf '{"type":"user","message":{"content":"BOOM"}}\n' > "$PROJ/bad.jsonl"
-  touch -t "$(date -d '2 days ago' +%Y%m%d%H%M)" "$PROJ/bad.jsonl"
+  _touch_ago "$PROJ/bad.jsonl" 172800
   _transcript good 2 1
   _shim jq ' -R ' BOOM 'exit 5'
   _batch
@@ -197,7 +199,7 @@ EOF
 
 @test "a malformed END from the distill skips that transcript; younger ones are still issued" {
   printf '{"type":"user","message":{"content":"GARBAGE"}}\n' > "$PROJ/bad.jsonl"
-  touch -t "$(date -d '2 days ago' +%Y%m%d%H%M)" "$PROJ/bad.jsonl"
+  _touch_ago "$PROJ/bad.jsonl" 172800
   _transcript good 2 1
   _shim awk 'hdr=' GARBAGE 'echo "END x 1e9"; exit 0'
   _batch

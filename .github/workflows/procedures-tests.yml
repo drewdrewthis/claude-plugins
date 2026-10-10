@@ -1,0 +1,72 @@
+name: procedures-tests
+
+# Runs every bats suite of the procedures plugin. Exists because a regression
+# sat unnoticed on main: nothing ran these suites on push. The push trigger
+# therefore has NO paths filter, so every merge to main is tested whatever it
+# touched. Pull requests stay paths-filtered: nothing outside the plugin can
+# change this result.
+on:
+  pull_request:
+    paths:
+      - "plugins/procedures/**"
+      - ".github/workflows/procedures-tests.yml"
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on a PR only. On main a second merge must NOT cancel
+# the first run, or the run that would show red disappears. On a push the PR
+# number is empty; fall back to the ref.
+concurrency:
+  group: procedures-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bats:
+    # The macOS leg is the portability gate: BSD userland (date, stat, touch)
+    # breaks fixtures that pass on a GNU box.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # Local work, no network. A ceiling turns a hang into a failed check.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install bats and jq (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+      # The hooks need bash 4+ (scripts/lib/require-bash4.sh) and stock macOS
+      # ships 3.2, so this leg installs Homebrew bash. With it first on PATH the
+      # suites and every `bash <hook>` call run on bash 5 here, not on stock 3.2.
+      # Stock 3.2 is exercised only by gate-failopen.bats in worklog-tests.yml,
+      # and that workflow runs on a PR only when gate-failopen.sh, its suite, or
+      # the shared test helper changes.
+      - name: Install bats, jq and bash (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bats-core jq bash
+      - name: Record the toolchain under test
+        run: |
+          /bin/bash --version | head -1
+          bash --version | head -1
+          bats --version
+          jq --version
+          git --version
+      # Runs before the suites so the counts land in the log even when a suite
+      # fails, and a dropped glob is visible.
+      - name: Declared suites and tests
+        working-directory: plugins/procedures
+        run: |
+          ls hooks/tests/*.bats scripts/lib/tests/*.bats | wc -l
+          bats --count hooks/tests/*.bats scripts/lib/tests/*.bats
+      - name: Run the procedures suites
+        working-directory: plugins/procedures
+        # By glob, no file list: a new suite is picked up without editing this
+        # file, and a forgotten one cannot be silently skipped.
+        run: bats hooks/tests/*.bats scripts/lib/tests/*.bats

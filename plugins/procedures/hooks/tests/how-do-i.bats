@@ -26,13 +26,23 @@
 setup() {
   SCRIPT="$BATS_TEST_DIRNAME/../../scripts/how-do-i.sh"
   TMP="$(mktemp -d)"
-  # Isolates how-do-i.sh's CURRENT_ROOTS resolution from whatever
-  # CODEX_STORE_ROOTS/CODEX_ROOT happen to be set in the ambient
-  # environment: seed_roots_stamp (below) writes a roots.stamp that must
-  # match this exactly, or the roots/staleness invalidation gate (section o)
+  # Isolates how-do-i.sh's CURRENT_ROOTS resolution (_stores_resolve_roots_spec)
+  # from the ambient machine: seed_roots_stamp (below) writes a roots.stamp that
+  # must match it exactly, or the roots/staleness invalidation gate (section o)
   # wrongly treats every fixture as stale and triggers a real,
-  # non-deterministic rebuild.
-  unset CODEX_STORE_ROOTS
+  # non-deterministic rebuild. Each pin disables one resolver tier:
+  #   unset CODEX_STORE_ROOTS   -> the env tier
+  #   CLAUDE_CONFIG_DIR (empty) -> the settings.json tier
+  #   KNOWLEDGE_HOME (empty)    -> the ~/.knowledge config.json AND modules/
+  #                                auto-discovery tiers (a populated real
+  #                                ~/.knowledge outranks CODEX_ROOT and made 9
+  #                                tests rebuild against the real corpus)
+  #   CODEX_ROOT (scratch dir)  -> the one tier left, so fixtures are deterministic
+  # PROCEDURES_STATE_DIR is unset so no state-dir override leaks in either.
+  unset CODEX_STORE_ROOTS PROCEDURES_STATE_DIR
+  export KNOWLEDGE_HOME="$TMP/knowledge-home"
+  export CLAUDE_CONFIG_DIR="$TMP/claude-config"
+  mkdir -p "$KNOWLEDGE_HOME" "$CLAUDE_CONFIG_DIR"
   export CODEX_ROOT="$TMP/default-root"
   mkdir -p "$CODEX_ROOT"
 }
@@ -42,27 +52,24 @@ teardown() {
 }
 
 # Pre-seeds a roots.stamp in $1 matching how-do-i.sh's CURRENT_ROOTS under
-# this setup()'s isolated CODEX_ROOT, so the roots/staleness invalidation
+# the environment the caller has right now, so the roots/staleness invalidation
 # gate (section o) treats an already-built index as fresh. Every fixture
 # that pre-seeds index.txt/map.tsv to skip the build path calls this too,
 # now that a missing stamp alone forces a rebuild.
 #
-# Precedence matches _stores_resolve_roots_spec: $CODEX_STORE_ROOTS env >
-# settings.json > $CODEX_ROOT env > ~/.claude.
+# The roots string comes from the real resolver, never a hand-copied
+# precedence (the copy drifted when the ~/.knowledge tiers landed). It runs in
+# a SUBSHELL because sourcing stores.sh executes module-level code that must
+# not touch this bats process; the child inherits the caller's exported env,
+# including a per-call `CLAUDE_CONFIG_DIR=x seed_roots_stamp ...` override.
 seed_roots_stamp() {
   local index_dir="$1"
   local roots_spec
-  # Check CODEX_STORE_ROOTS first
-  if [ -n "${CODEX_STORE_ROOTS:-}" ]; then
-    roots_spec="$CODEX_STORE_ROOTS"
-  # Check settings.json next (if CLAUDE_CONFIG_DIR is set and file exists)
-  elif [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" ] && command -v jq >/dev/null 2>&1; then
-    roots_spec="$(jq -r '.env.CODEX_STORE_ROOTS // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || true)"
-    [ -z "$roots_spec" ] && roots_spec="${CODEX_ROOT:-$HOME/.claude}"
-  # Fall back to CODEX_ROOT
-  else
-    roots_spec="${CODEX_ROOT:-$HOME/.claude}"
-  fi
+  roots_spec="$(bash -c 'source "$1"; _stores_resolve_roots_spec' _ \
+    "$BATS_TEST_DIRNAME/../../scripts/lib/stores.sh")"
+  # A broken resolver must fail here, at the first fixture, not as a dozen
+  # unrelated how-do-i failures downstream.
+  [ -n "$roots_spec" ]
   printf '%s\n%s\n' "$roots_spec" "$(date +%s)" > "$index_dir/roots.stamp"
 }
 
