@@ -1464,3 +1464,352 @@ GATEWAY
   [ -s "$stub_dir/call-1.args" ]
   [ -z "$(ls -d "$work_tmp"/how-do-i.* 2>/dev/null)" ]
 }
+
+# ---------- (q) index guard: a usable index holds a record line; --dry-run leaves nothing behind (issue #231) ----------
+#
+# A usable index is readable AND holds at least one line shaped "<digits> :: ".
+# A whitespace-only or junk index used to pass the old size-only check and ended
+# as a confident NOT FOUND from a stage-1 call that never saw a record. The hint
+# differs by mode: a --dry-run user must re-run WITHOUT --dry-run and WITH
+# --rebuild (a run without --dry-run reuses a bad index, a bare --rebuild next to
+# --dry-run is a usage error). --dry-run --json also makes no temp file, so a
+# signal mid-render cannot leak one. Fixtures reuse fresh_fixture; the index is
+# overwritten per test and the stub must stay uncalled on every refused run.
+
+# run_howdoi with stderr split out, so a test can assert on the message text.
+run_howdoi_split() {
+  run --separate-stderr env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir" "$@"
+}
+
+# One record in a temp CODEX_ROOT so build-record-index.sh succeeds for real. The
+# record is backdated so the existing index is reused (not rebuilt) until a
+# --rebuild asks for it.
+rebuildable_root_fixture() {
+  mkdir -p "$CODEX_ROOT/records/decisions"
+  printf -- '---\nid: rec-one\ndescription: a widget record\n---\nbody\n' > "$CODEX_ROOT/records/decisions/one.md"
+  touch -t 202001010000 "$CODEX_ROOT/records/decisions/one.md"
+}
+
+# The shapes the guard refuses: zero is the old case, the rest have bytes but
+# no "<digits> :: " line.
+set_bad_index() {
+  case "$1" in
+    zero)       : > "$index_dir/index.txt" ;;
+    whitespace) printf ' \t\n\n  \n' > "$index_dir/index.txt" ;;
+    html)       printf '<html>502 Bad Gateway</html>\n' > "$index_dir/index.txt" ;;
+    lead-space) printf ' 1 :: x\n' > "$index_dir/index.txt" ;;
+    no-space)   printf '1::x\n' > "$index_dir/index.txt" ;;
+  esac
+}
+
+# Refusal contract shared by AC1-AC3: exit 1, "no record" on stderr, no NOT FOUND, stub never called.
+assert_refused() {
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"no record"* ]]
+  [[ "$output" != *"NOT FOUND"* ]]
+  [ ! -f "$stub_dir/count" ]
+}
+
+@test "a whitespace-only index.txt aborts a real run: exit 1, no record on stderr, zero CLI calls, no NOT FOUND" {
+  fresh_fixture
+  set_bad_index whitespace
+
+  run_howdoi_split
+
+  assert_refused
+}
+
+@test "a whitespace-only index.txt aborts --dry-run: exit 1, no record on stderr, empty stdout" {
+  fresh_fixture
+  set_bad_index whitespace
+
+  run_howdoi_split --dry-run
+
+  assert_refused
+  [ -z "$output" ]
+}
+
+@test "an index.txt with no record line (HTML error page) is refused with and without --dry-run" {
+  fresh_fixture
+  set_bad_index html
+
+  run_howdoi_split
+  assert_refused
+  run_howdoi_split --dry-run
+  assert_refused
+}
+
+@test "an index.txt whose only line starts with a space is refused with and without --dry-run" {
+  fresh_fixture
+  set_bad_index lead-space
+
+  run_howdoi_split
+  assert_refused
+  run_howdoi_split --dry-run
+  assert_refused
+}
+
+@test "an index.txt whose only line has no spaces around :: is refused with and without --dry-run" {
+  fresh_fixture
+  set_bad_index no-space
+
+  run_howdoi_split
+  assert_refused
+  run_howdoi_split --dry-run
+  assert_refused
+}
+
+@test "--dry-run on a bad index names one full next step: without --dry-run and with --rebuild" {
+  fresh_fixture
+
+  for shape in zero whitespace html; do
+    set_bad_index "$shape"
+    run_howdoi_split --dry-run
+    [ "$status" -eq 1 ]
+    [[ "$stderr" == *"without --dry-run and with --rebuild"* ]]
+    # The old one-clause hint told a dry-run user to add --rebuild to the same command.
+    [[ "$stderr" != *"re-run with --rebuild"* ]]
+  done
+}
+
+@test "following the --dry-run hint rebuilds the index and answers" {
+  fresh_fixture
+  rebuildable_root_fixture
+  set_bad_index whitespace
+  jq -n '{is_error: false, result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_split --dry-run
+  [ "$status" -eq 1 ]
+  # The step the hint names: the same command minus --dry-run, plus --rebuild.
+  run_howdoi_split --rebuild
+
+  [ "$status" -eq 0 ]
+  grep -qE '^[0-9]+ :: ' "$index_dir/index.txt"
+  [ -s "$stub_dir/call-1.args" ]
+}
+
+@test "a bad index without --dry-run exits 1 and the hint names --rebuild" {
+  fresh_fixture
+
+  for shape in zero whitespace html; do
+    set_bad_index "$shape"
+    run_howdoi_split
+    [ "$status" -eq 1 ]
+    [[ "$stderr" == *"--rebuild"* ]]
+  done
+}
+
+@test "a bad index without --dry-run is repaired by --rebuild and the stub answer reaches stdout" {
+  fresh_fixture
+  rebuildable_root_fixture
+  set_bad_index whitespace
+  jq -n '{is_error: false, result: "[1]"}' > "$stub_dir/resp-1.json"
+  jq -n '{is_error: false, result: "the stub answer"}' > "$stub_dir/resp-2.json"
+
+  run_howdoi_split --rebuild
+
+  [ "$status" -eq 0 ]
+  grep -qE '^[0-9]+ :: ' "$index_dir/index.txt"
+  [[ "$output" == *"the stub answer"* ]]
+}
+
+# A jq wrapper that stalls ONLY on the render call (the one with --rawfile), so
+# a signal can land while the --dry-run --json render is in flight. Any other jq
+# call execs the real jq at once, so an earlier call cannot trip the marker. The
+# render call records its pid (exec keeps it) and a "started" marker, waits,
+# then execs the real jq with the same arguments.
+make_slow_jq() {
+  local dir="$1" real_jq
+  real_jq="$(command -v jq)"
+  mkdir -p "$dir"
+  cat > "$dir/jq" <<WRAP
+#!/usr/bin/env bash
+case " \$* " in
+  *" --rawfile "*) ;;
+  *) exec "$real_jq" "\$@" ;;
+esac
+echo \$\$ > "$dir/pid"
+: > "$dir/started"
+sleep 2
+exec "$real_jq" "\$@"
+WRAP
+  chmod +x "$dir/jq"
+}
+
+# Starts the --dry-run --json render behind the slow jq, waits (bounded) for the
+# wrapper to start, sends signal $1 to the script, then waits for it and for the
+# wrapper child. Sets sig_status; stdout lands in $TMP/sig.out.
+dry_json_signalled() {
+  local sig="$1" pid i
+  fresh_fixture
+  make_slow_jq "$TMP/slow-jq"
+  ( export PATH="$TMP/slow-jq:$PATH" TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir"
+    exec bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run --json ) \
+    > "$TMP/sig.out" 2> "$TMP/sig.err" 3>&- &
+  pid=$!
+  for i in $(seq 1 100); do [ -e "$TMP/slow-jq/started" ] && break; sleep 0.1; done
+  [ -e "$TMP/slow-jq/started" ]
+  kill -"$sig" "$pid"
+  sig_status=0
+  wait "$pid" || sig_status=$?
+  # The wrapper child may outlive the script; wait (max 10 s) until it has exited.
+  for i in $(seq 1 100); do kill -0 "$(cat "$TMP/slow-jq/pid")" 2>/dev/null || break; sleep 0.1; done
+}
+
+@test "SIGTERM during --dry-run --json exits 143, prints no complete JSON and leaves no how-do-i entry in TMPDIR" {
+  dry_json_signalled TERM
+
+  [ "$sig_status" -eq 143 ]
+  # Slurped: jq 1.6 exits 0 for `-e` on empty input, so a bare `-e` filter reads an empty stdout as an object.
+  if jq -es 'length > 0 and (.[0] | type == "object")' "$TMP/sig.out" >/dev/null 2>&1; then return 1; fi
+  [ -z "$(ls -A "$work_tmp" | grep '^how-do-i')" ]
+}
+
+@test "SIGHUP during --dry-run --json exits 129, prints no complete JSON and leaves no how-do-i entry in TMPDIR" {
+  dry_json_signalled HUP
+
+  [ "$sig_status" -eq 129 ]
+  # Slurped: jq 1.6 exits 0 for `-e` on empty input, so a bare `-e` filter reads an empty stdout as an object.
+  if jq -es 'length > 0 and (.[0] | type == "object")' "$TMP/sig.out" >/dev/null 2>&1; then return 1; fi
+  [ -z "$(ls -A "$work_tmp" | grep '^how-do-i')" ]
+}
+
+@test "a failing jq render under --dry-run --json exits 1 with empty stdout, could not render on stderr and no how-do-i entry in TMPDIR" {
+  fresh_fixture
+  mkdir -p "$TMP/bad-jq"
+  # Prints a complete object, THEN fails: a script that forwards partial output leaks it.
+  printf '#!/bin/sh\necho "{\\"stage1_system_prompt\\":\\"x\\"}"\nexit 1\n' > "$TMP/bad-jq/jq"
+  chmod +x "$TMP/bad-jq/jq"
+
+  run --separate-stderr env PATH="$TMP/bad-jq:$PATH" TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run --json
+
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"could not render"* ]]
+  [ -z "$(ls -A "$work_tmp")" ]
+}
+
+@test "a normal --dry-run leaves no how-do-i entry in TMPDIR" {
+  fresh_fixture
+
+  run_howdoi_ok --dry-run
+
+  [ -z "$(ls -A "$work_tmp")" ]
+}
+
+@test "a normal --dry-run --json leaves no how-do-i entry in TMPDIR" {
+  fresh_fixture
+
+  run_howdoi_ok --dry-run --json
+
+  [ -z "$(ls -A "$work_tmp")" ]
+}
+
+# Runs the same index through a real stage-1 call and --dry-run --json, then
+# compares the system prompt byte for byte (the stub copies the real file at
+# call time). jq -j writes the string raw, with no added newline.
+assert_dry_json_matches_real_call() {
+  jq -n '{is_error: false, result: "[]"}' > "$stub_dir/resp-1.json"
+  run_howdoi_ok
+  [ -s "$stub_dir/call-1.system" ]
+  run_howdoi_ok --dry-run --json
+  printf '%s' "$output" | jq -j '.stage1_system_prompt' > "$TMP/dry.system"
+  cmp "$TMP/dry.system" "$stub_dir/call-1.system"
+}
+
+# One index line over 4096 bytes of a 3-byte character, after $1 ASCII bytes.
+wide_char_index() {
+  local pad="$1" dash line="" i
+  dash="$(printf '\xe2\x80\x94')"
+  for ((i = 0; i < 1500; i++)); do line+="$dash"; done
+  printf '1 :: %s%s\n2 :: tail record\n' "$(printf '%*s' "$pad" '' | tr ' ' a)" "$line" > "$index_dir/index.txt"
+}
+
+@test "--dry-run --json system prompt is byte-equal to the real call on a 3000-line index" {
+  fresh_fixture
+  awk 'BEGIN { for (i = 1; i <= 3000; i++) printf "%d :: some description text for record number %d that pads the line out\n", i, i }' > "$index_dir/index.txt"
+
+  assert_dry_json_matches_real_call
+}
+
+@test "--dry-run --json system prompt is byte-equal to the real call on a 4 KB multibyte line, offset 0" {
+  fresh_fixture
+  wide_char_index 0
+
+  assert_dry_json_matches_real_call
+}
+
+@test "--dry-run --json system prompt is byte-equal to the real call on a 4 KB multibyte line, offset 1" {
+  fresh_fixture
+  wide_char_index 1
+
+  assert_dry_json_matches_real_call
+}
+
+@test "--dry-run --json system prompt is byte-equal to the real call on a 4 KB multibyte line, offset 2" {
+  fresh_fixture
+  wide_char_index 2
+
+  assert_dry_json_matches_real_call
+}
+
+# Accepted shapes: --dry-run exits 0 and prints the record line. $1 is the
+# printf body written to index.txt, $2 the text the output must carry.
+assert_dry_accepts() {
+  printf "$1" > "$index_dir/index.txt"
+  run_howdoi_split --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$2"* ]]
+}
+
+@test "an index with one record line between blank lines is accepted" {
+  fresh_fixture
+  assert_dry_accepts '\n\n1 :: only record\n\n' '1 :: only record'
+}
+
+@test "an index whose description holds :: is accepted" {
+  fresh_fixture
+  assert_dry_accepts '1 :: a :: b\n' '1 :: a :: b'
+}
+
+@test "an index with an empty description is accepted" {
+  fresh_fixture
+  assert_dry_accepts '1 :: \n' '1 :: '
+}
+
+@test "an index with CRLF line ends is accepted" {
+  fresh_fixture
+  assert_dry_accepts '1 :: crlf record\r\n2 :: second\r\n' '1 :: crlf record'
+}
+
+@test "an index with one record line plus junk lines is accepted" {
+  fresh_fixture
+  assert_dry_accepts 'junk\n<html>\n1 :: kept record\nmore junk\n' '1 :: kept record'
+}
+
+@test "no file under plugins/procedures holds the old size-only guard message" {
+  # Built in two halves so this file does not match its own grep.
+  old="missing, unreadable or"" empty"
+
+  # CHANGELOG.md is excluded: a release note may quote the old text.
+  run grep -rnF --exclude=CHANGELOG.md -- "$old" "$BATS_TEST_DIRNAME/../.."
+
+  [ -z "$output" ]
+}
+
+@test "neither the script nor the skills tell a --dry-run user to put --rebuild on the same command" {
+  # Matches only the adjacent forms; prose lines may name both flags legitimately.
+  run grep -rnE -- '--dry-run +--rebuild|--rebuild +--dry-run' \
+      "$SCRIPT" "$BATS_TEST_DIRNAME/../../skills"
+
+  [ -z "$output" ]
+}
+
+@test "--help tells a --dry-run user to re-run without --dry-run and with --rebuild" {
+  run bash "$SCRIPT" --help
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"without --dry-run and with --rebuild"* ]]
+}
