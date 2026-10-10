@@ -257,35 +257,212 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     And the same AWS key id with nothing glued in front is redacted
     And a Shopify token preceded by x is redacted and holds no raw body
 
-  # proves: hooks/tests/worklog-record.bats "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front"
-  Scenario: A Pulumi token stays raw when punctuation follows it or a word character is glued in front
-    Given a Pulumi token in the middle of a URL path
-    And a Pulumi token followed by a period
-    And a Pulumi token followed by a comma
-    And a Pulumi token followed by an ampersand in a query string
-    And a Pulumi token preceded by x
-    And a Pulumi token in round brackets
-    And a Pulumi token followed by a colon
-    And a Pulumi token in a query string after key=
-    And a Pulumi token followed by a no-break space
-    And a Pulumi token in curly double quotes
-    And a Pulumi token followed by a space and a gitleaks allow comment on the same line
-    And a Pulumi token on the last line of the text, with a gitleaks allow comment on an earlier line
-    And a Pulumi token after a gitleaks allow comment on the same line, with a further line after it
+  # Issue 238: a Pulumi token is redacted in every position but two. gitleaks
+  # is asked about spaced copies of the text and ignores its own allow string.
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token at the end of a sentence is redacted"
+  Scenario: A Pulumi token at the end of a sentence is redacted
+    Given a Pulumi token directly followed by a period
+    When the real gitleaks runs
+    Then the output is the input with only the token replaced by the pulumi-api-token marker
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token as a query value before an ampersand is redacted"
+  Scenario: A Pulumi token as a query value before another parameter is redacted
+    Given a URL with a Pulumi token as a query value, followed by an ampersand and another parameter
+    When the real gitleaks runs
+    Then the output is the input with only the token replaced by the pulumi-api-token marker
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token directly before each ascii punctuation character is redacted"
+  Scenario Outline: A Pulumi token directly before an ASCII punctuation character is redacted
+    Given a Pulumi token directly followed by <character>
+    When the real gitleaks runs
+    Then the output is the input with only the token replaced by the pulumi-api-token marker
+
+    Examples:
+      | character                  |
+      | . , ) ] } : & # @ / ? ! * % ~ |
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token next to a no-break space or curly double quotes is redacted"
+  Scenario: A Pulumi token next to a no-break space or curly double quotes is redacted
+    Given a Pulumi token followed by a no-break space, one in curly double quotes, and one followed by a right curly quote
+    When the real gitleaks runs
+    Then each output is its input with only the token replaced by the pulumi-api-token marker
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token in round brackets, before a colon or in a query string is redacted"
+  Scenario: A Pulumi token in round brackets, before a colon or in a query string is redacted
+    Given a Pulumi token in round brackets, one followed by a colon, one after key= and one before a fragment
+    When the real gitleaks runs
+    Then each output is its input with only the token replaced by the pulumi-api-token marker
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token in the middle of a url path or in user info is redacted"
+  Scenario: A Pulumi token in the middle of a URL path or in user info is redacted
+    Given a Pulumi token in the middle of a URL path and one as the password part of user info
+    When the real gitleaks runs
+    Then the user info output is its input with only the token replaced by the pulumi-api-token marker
+    And the URL path output holds the pulumi-api-token marker, and the path glued after it is the glued-secrets marker
+
+  # proves: hooks/tests/worklog-record.bats "a second gitleaks-only secret shape is redacted before a period and a comma"
+  Scenario: Another shape that only gitleaks finds is redacted before a period and a comma
+    Given a Sentry user token, which no built-in rule matches, followed by a period and by a comma
+    When the real gitleaks runs
+    Then each output is its input with only the token replaced by the sentry-user-token marker
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token on the same line as a gitleaks allow string is redacted"
+  Scenario: A gitleaks allow string on the same line does not switch off the scan
+    Given a Pulumi token and the gitleaks allow string on one line, in each order, with and without a hash sign
+    And a Pulumi token followed by a period with the allow string after it
+    When the real gitleaks runs
+    Then each output is its input with only the token replaced by the pulumi-api-token marker
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token on the last line is redacted when an earlier line holds a gitleaks allow string"
+  Scenario: A gitleaks allow string on an earlier line does not hide a token on the last line
+    Given a text with the gitleaks allow string on its first line and a Pulumi token on its last line with no newline after it
+    When the real gitleaks runs
+    Then the token is replaced by the pulumi-api-token marker and the rest of the text is unchanged
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token in the last text is redacted when the first text of the batch holds a gitleaks allow string"
+  Scenario: A gitleaks allow string in the first of two texts does not hide a token in the second
+    Given a batch of two texts, the first holding only the gitleaks allow string and the second holding a Pulumi token
+    When the real gitleaks runs
+    Then the second output has the token replaced and the first output is unchanged
+
+  # proves: hooks/tests/worklog-record.bats "a pulumi token ending the last text is redacted when the first of three texts holds a gitleaks allow string"
+  Scenario: A gitleaks allow string in the first of three texts does not hide a token in the last
+    Given a batch of three texts, the first holding only the gitleaks allow string, the second plain words, the last a Pulumi token
+    When the real gitleaks runs
+    Then the last output has the token replaced and the other two outputs are unchanged
+
+  # proves: hooks/tests/worklog-record.bats "pulumi token shapes keep the exact pinned output"
+  Scenario: Pulumi token shapes keep the exact pinned output
+    Given a token before a space, in quotes, in backticks, before a semicolon, at the end of a URL, twice in one text, before a literal backslash n, a percent 20 and a backslash u 0020 escape
+    And a token before a later line holding the gitleaks allow string, and after an allow string line with a line following
+    And a token before a note that is not the allow string, and a token after PULUMI_ACCESS_TOKEN=
+    When the real gitleaks runs
+    Then each output keeps the exact output pinned in the test
+    And the PULUMI_ACCESS_TOKEN= value is redacted as a generic secret
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a pulumi token stays raw when a word character is glued in front or a hyphen, equals sign, plus sign or underscore follows it"
+  Scenario: A Pulumi token stays raw behind a glued word character or before a hyphen, equals sign, plus sign or underscore
+    Given a Pulumi token preceded by x
+    And a Pulumi token followed by a hyphen and a letter, by an equals sign and a digit, by a plus sign, and by an underscore and a letter
     When the real gitleaks runs
     Then each output equals its input
-    And the same token at the end of the URL path is redacted
-    And the same token at the end of a query string is redacted
-    And the same token followed by a space is redacted
-    And the same token followed by a space and a note that is not a gitleaks allow comment is redacted
-    And the same token followed by a gitleaks allow comment on a later line is redacted
-    And the same token on a line after a gitleaks allow comment, with a further line after it, is redacted
-    And the same token in double quotes is redacted
-    And a text holding the token twice has both copies redacted
-    And the same token followed by a literal backslash and n is redacted
-    And the same token followed by a percent 20 escape is redacted
-    And the same token followed by a literal backslash u 0020 escape is redacted
-    And the same token after PULUMI_ACCESS_TOKEN= is redacted as a generic secret
+
+  # proves: hooks/tests/worklog-record.bats "with gitleaks absent a pulumi token before a period comes back unchanged"
+  Scenario: With gitleaks absent a Pulumi token before a period comes back unchanged
+    Given gitleaks is not on PATH
+    When a text with a Pulumi token directly followed by a period is redacted
+    Then the output equals the input
+
+  # proves: hooks/tests/worklog-record.bats "with gitleaks absent the batch is not reported as failed"
+  Scenario: With gitleaks absent the spaced-copy scan is not reported as a failure
+    Given gitleaks is not on PATH
+    When a text with a Pulumi token directly followed by a period is redacted
+    Then the batch is not reported as failed
+
+  # proves: hooks/tests/worklog-record.bats "one redact_texts call starts gitleaks exactly once"
+  Scenario: A batch with spaced copies still starts gitleaks once
+    Given a stub gitleaks that counts its calls
+    When one batch of three texts with punctuation is redacted
+    Then the stub was started exactly once
+
+  # proves: hooks/tests/worklog-record.bats "a batch part end does not complete a keyword match with the next part"
+  Scenario: A match does not cross from one scanned part into the next
+    Given a text of a plain word, then a line of plain words, then a last line ending in "my token:"
+    When the real gitleaks runs
+    Then the output equals the input
+
+  # proves: hooks/tests/worklog-record.bats "a batch part end of curl does not complete a curl match with the next part"
+  Scenario: A curl word at the end of one scanned part does not reach the next part
+    Given a text of a line starting with -u, a name, a colon and a value, then a line of plain words, then a last line ending in "then run curl"
+    When the real gitleaks runs
+    Then the output equals the input
+
+  # proves: hooks/tests/worklog-record.bats "a finding that exists only in a spaced copy changes nothing"
+  Scenario: A finding that only a spaced copy holds changes nothing
+    Given a stub gitleaks that reports a secret containing a space that only a spaced copy of the text holds
+    When the text is redacted
+    Then the output equals the input
+
+  # proves: hooks/tests/worklog-record.bats "a finding that exists only in a spaced copy does not fail the batch"
+  Scenario: A finding that only a spaced copy holds is not a failure
+    Given a stub gitleaks that reports a secret containing a space that only a spaced copy of the text holds
+    When the text is redacted
+    Then the batch is not reported as failed
+
+  # proves: hooks/tests/worklog-record.bats "a built-in marker directly before a pulumi token and period leaves every marker closed and unnested"
+  Scenario: A built-in marker before a Pulumi token and period stays closed and unnested
+    Given an npm token glued directly before a Pulumi token and a period, and one separated by a space
+    When the real gitleaks runs
+    Then the outputs are exactly the npm marker and the generic-api-key marker, with the space kept in the second
+    And no marker is nested in another and no raw token is left
+
+  # proves: hooks/tests/worklog-record.bats "a batch with a text over the byte budget sends the separator line"
+  Scenario: Parts of the scanned text are separated by 12 newlines, a line of 512 "(" characters and 12 newlines
+    Given a batch of a text of 100,001 bytes and a small text with a period
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds a line of exactly 512 "(" characters
+
+  # proves: hooks/tests/worklog-record.bats "a batch with a text over the byte budget sends a spaced copy of the small text"
+  Scenario: A small text beside an over-budget text still gets its spaced copy
+    Given a batch of a text of 100,001 bytes and a small text with a period
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds the small text with a space in front of the period
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a batch with a text over the byte budget sends no spaced copy of that text"
+  Scenario: A text over the 100,000 byte budget gets no spaced copy
+    Given a batch of a text of 100,001 bytes with commas and a small text
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds no copy of the large text with a space in front of a comma
+
+  # proves: hooks/tests/worklog-record.bats "known limit: one text over the byte budget sends no separator line"
+  Scenario: One over-budget text alone is scanned without a separator
+    Given a single text of 100,001 bytes
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds no line of 512 "(" characters
+
+  # proves: hooks/tests/worklog-record.bats "one text over the byte budget sends the text and no more"
+  Scenario: One over-budget text alone is sent as it is
+    Given a single text of 100,001 bytes
+    When a stub gitleaks stores its stdin
+    Then the stored stdin is exactly the text
+
+  # proves: hooks/tests/worklog-record.bats "one text of exactly the byte budget sends the separator line"
+  Scenario: A text of exactly 100,000 bytes still gets its copies
+    Given a single text of exactly 100,000 bytes
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds a line of exactly 512 "(" characters
+
+  # proves: hooks/tests/worklog-record.bats "known limit: the smallest texts get the copies first and a text that no longer fits gets none"
+  Scenario: The smallest texts get the copies first
+    Given a batch of a text B of 60,000 bytes, a text A of 50,000 bytes and a small text, in that order
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds a spaced copy of the small text and of A
+    And the stored stdin holds no spaced copy of B
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a text under the budget in characters and over it in bytes gets no spaced copy"
+  Scenario: The byte budget counts UTF-8 bytes, not characters
+    Given a text of 33,334 fullwidth commas, under 100,000 characters and over 100,000 bytes, and a small text
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds no copy of the large text with a space in front of a fullwidth comma
+
+  # proves: hooks/tests/worklog-record.bats "a text under the budget in characters and over it in bytes leaves the small text its copy"
+  Scenario: The small text beside a byte-over-budget text still gets its copy
+    Given a text of 33,334 fullwidth commas and a small text with a period
+    When a stub gitleaks stores its stdin
+    Then the stored stdin holds the small text with a space in front of the period
+
+  # proves: hooks/tests/worklog-record.bats "the real gitleaks redacts a pulumi token followed by a period from prompt to stored row"
+  Scenario: A Pulumi token before a period in a prompt is stored redacted
+    Given a turn whose prompt holds a Pulumi token directly followed by a period
+    When the hook runs with the real gitleaks
+    Then the stored row holds the pulumi-api-token marker and not the token
+
+  # proves: hooks/tests/worklog-record.bats "the real gitleaks redacts a pulumi token followed by a period in the stdin the model receives"
+  Scenario: A Pulumi token before a period in a prompt never reaches the model
+    Given a turn whose prompt holds a Pulumi token directly followed by a period
+    When the hook runs with the real gitleaks
+    Then the text sent to the model holds the pulumi-api-token marker and not the token
 
   # proves: hooks/tests/worklog-record.bats "known limit: a body can settle where the same text as a quote hits the step cap"
   Scenario: A body can settle where the same text as a quote hits the step cap
