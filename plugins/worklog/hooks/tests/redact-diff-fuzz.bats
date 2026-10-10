@@ -1,12 +1,20 @@
 #!/usr/bin/env bats
 # Tests for hooks/tests/redact_diff_fuzz.py — the differential fuzz of hooks/lib/redact.py.
 #
-# WHAT THIS FILE PROVES (claude-plugins#218):
-#   A candidate redact lib is compared with a pinned reference lib. A text is
-#   "worse" when the candidate leaves more of the planted fake tokens in the
-#   output than the reference does. Exit 0 = no worse text, 1 = one or more,
-#   2 = the harness could not run. These tests pin that contract, the named
-#   regressions from PR 217, and the eleven exit-2 failure modes.
+# WHAT THIS FILE PROVES (claude-plugins#218, #240):
+#   A candidate redact lib is compared with a reference lib that the harness
+#   works out from git history on every run (merge base when the lib changed,
+#   else the parent of the last change on main). No sha is stored anywhere.
+#   A text is "worse" when the candidate leaves more of the planted fake tokens
+#   in the output than the reference does. Exit 0 = no worse text, 1 = one or
+#   more, 2 = the harness could not run. These tests pin that contract, how the
+#   reference is chosen, the named regressions from PR 217 (their bad libs are
+#   checked-in fixtures, so no PR ref is fetched), and the exit-2 failure modes.
+#
+# Tests that need another git history build a temp repo under BATS_TEST_TMPDIR
+# and run a COPY of the harness there: the harness finds its repo from its own
+# file location. Every temp repo sets its own git identity and ignores the
+# global and system git config.
 #
 # ⚠ NO TOKEN LITERALS IN THIS FILE. Every fake token is made by the helper at
 # run time (prefix + seeded random characters). This file only holds recipe
@@ -18,20 +26,23 @@
 # show() copies the helper call, exit code and output to fd 3, which bats
 # always prints. Do not remove it.
 #
-# ⚠ NEVER skip A TEST HERE. A missing gitleaks or a missing sha must FAIL
-# (AC6 rows 1-3). A skipped test would read as a pass in the log.
+# ⚠ NEVER skip A TEST HERE. A missing gitleaks, a missing origin/main or a
+# missing sha must FAIL (exit 2 is not ok). A skipped test would read as a
+# pass in the log. A test below checks this file for that call.
 #
 # Run: bats hooks/tests/redact-diff-fuzz.bats
 
 bats_require_minimum_version 1.5.0
 
-# Full ids of the PR 217 commits. They are public commit ids, not secrets.
-SHA_F=cb0ab8458a40c2cbc6e8c91b80feed2b1a981231      # case F bad commit
-SHA_G=3854dc277b0c72fb1f306884329ed96d2c899d78      # cases G1, G2, G2b
-SHA_H=f1f1f8ad37229c5736668503841da328746ee3cc      # cases H1, H2
-SHA_TEETH=05b246073138548869adc73427eed69f980c9567  # AC5 builtin teeth
-# Absent from any clone. Rows 1 and 2.
+# A public commit id on main (not a secret) for the builtin teeth run.
+SHA_TEETH=05b246073138548869adc73427eed69f980c9567
+# Absent from any clone.
 SHA_ABSENT=0000000000000000000000000000000000000001
+# git blob ids of the three checked-in bad libs under fixtures/redact-regress.
+BLOB_CB0AB84=1fb239a6e64ba14a251e6024e2e3fc0ab728cacc
+BLOB_3854DC2=b2fe72cdd7571765ead3ae5bcd84b7b6510d0935
+BLOB_F1F1F8A=a749eeeb36f53fc1514118de638d6a147c0651a5
+LIBREL=plugins/worklog/hooks/lib/redact.py
 
 # Regenerate with
 #   python3 plugins/worklog/hooks/tests/redact_diff_fuzz.py fuzz --mode builtin --seed 1 --n 200
@@ -112,15 +123,24 @@ PY
 clean_case() {
   fuzz case --name "$1"
   [ "$status" -eq 0 ]
+  [[ "$(first_line)" == reference=* ]]
   has_line "$2"
   has_line worse=0
 }
 
-# teeth_case <name> <sha> — AC3: the bad commit is worse, and nothing planted leaks into the log.
+# first_line — the first stdout line.
+first_line() { head -n 1 <<<"$output"; }
+
+# REFERENCE_LINE_RE — the first stdout line of every fuzz and case run (AC9).
+REFERENCE_LINE_RE='^reference=[0-9a-f]{40} rule=(merge-base library_changed=True|parent-of-last-change library_changed=False last_change=[0-9a-f]{40})$'
+
+# teeth_case <name> <fixture> — AC3: the bad lib is worse, the output starts
+# with the derived reference line, and nothing planted leaks into the log.
 teeth_case() {
   local pl="$BATS_TEST_TMPDIR/planted"
-  fuzz case --name "$1" --candidate-sha "$2" --dump-planted "$pl"
+  fuzz case --name "$1" --candidate-fixture "$2" --dump-planted "$pl"
   [ "$status" -eq 1 ]
+  [[ "$(first_line)" == reference=* ]]
   has_line worse=1
   no_planted_leak "$pl"
 }
@@ -208,14 +228,14 @@ builtin_seed() {
 @test "named case H1 is clean with the candidate" { clean_case H1 "$GITLEAKS_MODE"; }
 @test "named case H2 is clean with the candidate" { clean_case H2 "$GITLEAKS_MODE"; }
 
-@test "named case F is worse with cb0ab84" { teeth_case F "$SHA_F"; }
-@test "named case G1 is worse with 3854dc2" { teeth_case G1 "$SHA_G"; }
-@test "named case G2b is worse with 3854dc2" { teeth_case G2b "$SHA_G"; }
-@test "named case H1 is worse with f1f1f8a" { teeth_case H1 "$SHA_H"; }
-@test "named case H2 is worse with f1f1f8a" { teeth_case H2 "$SHA_H"; }
+@test "named case F is worse with cb0ab84" { teeth_case F cb0ab84; }
+@test "named case G1 is worse with 3854dc2" { teeth_case G1 3854dc2; }
+@test "named case G2b is worse with 3854dc2" { teeth_case G2b 3854dc2; }
+@test "named case H1 is worse with f1f1f8a" { teeth_case H1 f1f1f8a; }
+@test "named case H2 is worse with f1f1f8a" { teeth_case H2 f1f1f8a; }
 
 @test "named case G2 changes only marker names" {
-  fuzz case --name G2 --candidate-sha "$SHA_G"
+  fuzz case --name G2 --candidate-fixture 3854dc2
   [ "$status" -eq 0 ]
   # The outputs differ (marker names) yet nothing is worse.
   has_line outputs_differ=1
@@ -228,6 +248,7 @@ builtin_seed() {
   local pl="$BATS_TEST_TMPDIR/planted"
   fuzz fuzz --mode builtin --seed 2 --n 1000 --candidate-sha "$SHA_TEETH" --dump-planted "$pl"
   [ "$status" -eq 1 ]
+  [[ "$(first_line)" == reference=* ]]
   has_match '^worse=[1-9][0-9]*$'
   no_planted_leak "$pl"
 }
@@ -235,8 +256,9 @@ builtin_seed() {
 @test "gitleaks fuzz has teeth against f1f1f8a" {
   local pl="$BATS_TEST_TMPDIR/planted" confirmed
   # A small cap still confirms one or more texts; the default cap is kept by the clean run.
-  fuzz fuzz --mode gitleaks --candidate-sha "$SHA_H" --confirm-cap 8 --dump-planted "$pl"
+  fuzz fuzz --mode gitleaks --candidate-fixture f1f1f8a --confirm-cap 8 --dump-planted "$pl"
   [ "$status" -eq 1 ]
+  [[ "$(first_line)" == reference=* ]]
   # The cap given on the command line is the cap used.
   has_line "confirm_cap=8"
   has_match '^flagged=[0-9]+ confirmed=[1-9][0-9]*$'
@@ -247,23 +269,15 @@ builtin_seed() {
   no_planted_leak "$pl"
 }
 
-# --- AC6: eleven exit-2 failure modes ----------------------------------------
+# --- AC6: exit-2 failure modes -----------------------------------------------
 
-@test "failure mode 1 exits 2 when the pinned sha is not in the clone" {
-  fuzz case --name F --reference-sha "$SHA_ABSENT"
-  [ "$status" -eq 2 ]
-  [[ "$stderr" == *"$SHA_ABSENT"* ]]
-  [[ "$stderr" == *"git fetch --unshallow"* ]]
-}
-
-@test "failure mode 2 exits 2 when the bad commit is not in the clone" {
+@test "failure mode 1 exits 2 when the candidate commit is not in the clone" {
   fuzz case --name F --candidate-sha "$SHA_ABSENT"
   [ "$status" -eq 2 ]
   [[ "$stderr" == *"$SHA_ABSENT"* ]]
-  [[ "$stderr" == *"git fetch origin refs/pull/217/head"* ]]
 }
 
-@test "failure mode 3 exits 2 when gitleaks mode has no gitleaks" {
+@test "failure mode 2 exits 2 when gitleaks mode has no gitleaks" {
   # PATH is narrowed for the helper only: bats' own `run` needs its tools.
   local nogl py; nogl="$(path_without_gitleaks)"; py="$(command -v python3)"
   run --separate-stderr env PATH="$nogl" "$py" "$HELPER" fuzz --mode gitleaks
@@ -272,7 +286,7 @@ builtin_seed() {
   [[ "$stderr" == *"gitleaks not found"* ]]
 }
 
-@test "failure mode 4 exits 2 when gitleaks is visible in builtin mode" {
+@test "failure mode 3 exits 2 when gitleaks is visible in builtin mode" {
   write_stub "$BATS_TEST_TMPDIR/stub4" <<'PY'
 def gitleaks_present():
     return True
@@ -286,7 +300,7 @@ PY
   [[ "$stderr" == *"gitleaks present in builtin mode"* ]]
 }
 
-@test "failure mode 5 exits 2 when the candidate raises" {
+@test "failure mode 4 exits 2 when the candidate raises" {
   write_stub "$BATS_TEST_TMPDIR/stub5" <<'PY'
 def gitleaks_present():
     return False
@@ -300,7 +314,7 @@ PY
   [[ "$stderr" == *"candidate error"* ]]
 }
 
-@test "failure mode 6 exits 2 when the output count differs from the input count" {
+@test "failure mode 5 exits 2 when the output count differs from the input count" {
   write_stub "$BATS_TEST_TMPDIR/stub6" <<'PY'
 def gitleaks_present():
     return False
@@ -314,7 +328,7 @@ PY
   [[ "$stderr" == *"output count"* ]]
 }
 
-@test "failure mode 7 exits 2 when gitleaks reports failed" {
+@test "failure mode 6 exits 2 when gitleaks reports failed" {
   write_stub "$BATS_TEST_TMPDIR/stub7" <<'PY'
 def gitleaks_present():
     return True
@@ -359,7 +373,7 @@ def redact_texts(texts):
 PY
 }
 
-@test "failure mode 8 exits 2 when over the cap and none of the first flagged is confirmed" {
+@test "failure mode 7 exits 2 when over the cap and none of the first flagged is confirmed" {
   write_stub8
   export STUB_ALONE=clean STUB_ALONE_LOG="$BATS_TEST_TMPDIR/alone.log"
   fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 2
@@ -371,7 +385,7 @@ PY
   [[ "$stderr" == *"none of the first 2 "* ]]
 }
 
-@test "failure mode 9 exits 2 when a lib reports no gitleaks in gitleaks mode" {
+@test "failure mode 8 exits 2 when a lib reports no gitleaks in gitleaks mode" {
   write_stub "$BATS_TEST_TMPDIR/stub9" <<'PY'
 def gitleaks_present():
     return False
@@ -385,7 +399,7 @@ PY
   [[ "$stderr" == *"gitleaks not present in gitleaks mode"* ]]
 }
 
-@test "failure mode 10 exits 2 when an option is not used in the mode" {
+@test "failure mode 9 exits 2 when an option is not used in the mode" {
   fuzz fuzz --mode gitleaks --seed 3
   [ "$status" -eq 2 ]
   [[ "$stderr" == *"option not used in this mode: --seed"* ]]
@@ -394,7 +408,7 @@ PY
   [[ "$stderr" == *"option not used in this mode: --confirm-cap"* ]]
 }
 
-@test "failure mode 11 exits 2 on a malformed sha" {
+@test "failure mode 10 exits 2 on a malformed sha" {
   fuzz case --name F --candidate-sha not-a-sha
   [ "$status" -eq 2 ]
   [[ "$stderr" == *"bad sha: --candidate-sha"* ]]
@@ -413,6 +427,20 @@ PY
   # The leak stub is worse on every text alone, so every attempt is confirmed.
   [ "$confirmed" -eq 2 ]
   [ "$(wc -l <"$STUB_ALONE_LOG")" -eq 2 ]
+}
+
+@test "failure mode 11 exits 2 when a fixture blob id differs" {
+  # AC12: one changed byte in a copied fixture. The repo copy keeps the real
+  # fixtures untouched.
+  tr_new fx
+  tr_first_lib one
+  tr_lib two
+  tr_origin "$LAST"
+  printf 'x' >>"$TR/plugins/worklog/hooks/tests/fixtures/redact-regress/redact-3854dc2.py.txt"
+  fuzz case --name G1 --candidate-fixture 3854dc2
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"redact-3854dc2.py.txt"* ]]
+  [[ "$stderr" == *"blob id"* ]]
 }
 
 # --- AC6b: marker rule ------------------------------------------------------
@@ -447,14 +475,466 @@ PY
   [[ "$output" == *"no leaks found"* ]]
 }
 
-# --- AC9: pin rule ----------------------------------------------------------
+# --- temp repos -------------------------------------------------------------
 
-@test "the pinned sha appears once outside the changelogs and that is the helper" {
-  # Split so this file does not hold the sha it counts.
-  local pin="84304ff2b409""d4fd308d3a91b557ea00ef825e20"
-  # release-please writes commit links with full shas into CHANGELOG.md.
-  run git grep -c --untracked -e "$pin" -- . ':(exclude)*CHANGELOG.md'
+# tr_new <name> — an empty repo in BATS_TEST_TMPDIR with a COPY of the harness,
+# the fixtures and the real lib at the same relative paths. Sets TR, HELPER.
+# `git init -b` is missing on old git, so the branch is set with symbolic-ref.
+tr_new() {
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com \
+    GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com \
+    GIT_AUTHOR_DATE="2026-01-01T00:00:00+0000" GIT_COMMITTER_DATE="2026-01-01T00:00:00+0000"
+  TR="$BATS_TEST_TMPDIR/$1"
+  mkdir -p "$TR/plugins/worklog/hooks/lib"
+  git -C "$TR" init -q
+  git -C "$TR" symbolic-ref HEAD refs/heads/main
+  cp "$REAL_LIB" "$TR/$LIBREL"
+  tr_equip "$TR"
+}
+
+# tr_equip <dir> — copy the harness and the fixtures into a repo (untracked).
+tr_equip() {
+  mkdir -p "$1/plugins/worklog/hooks/tests"
+  cp "$BATS_TEST_DIRNAME/redact_diff_fuzz.py" "$1/plugins/worklog/hooks/tests/redact_diff_fuzz.py"
+  cp -R "$BATS_TEST_DIRNAME/fixtures" "$1/plugins/worklog/hooks/tests/"
+  HELPER="$1/plugins/worklog/hooks/tests/redact_diff_fuzz.py"
+}
+
+tg() { git -C "$TR" "$@"; }
+
+# tr_first_lib <msg> — commit the lib as copied. Sets LAST to the new sha.
+tr_first_lib() { tg add "$LIBREL"; tg commit -q -m "$1"; LAST="$(tg rev-parse HEAD)"; }
+
+# tr_lib <msg> — change the lib bytes with an appended comment line, commit.
+tr_lib() { printf '# %s\n' "$1" >>"$TR/$LIBREL"; tg add "$LIBREL"; tg commit -q -m "$1"; LAST="$(tg rev-parse HEAD)"; }
+
+# tr_lib_top <msg> — like tr_lib, but a comment line near the top (no merge conflict with an append).
+tr_lib_top() {
+  { head -n 1 "$TR/$LIBREL"; printf '# %s\n' "$1"; tail -n +2 "$TR/$LIBREL"; } >"$TR/lib.new"
+  cat "$TR/lib.new" >"$TR/$LIBREL"
+  tg add "$LIBREL"; tg commit -q -m "$1"; LAST="$(tg rev-parse HEAD)"
+}
+
+# tr_other <msg> — commit a change that does not touch the lib.
+tr_other() { printf '%s\n' "$1" >>"$TR/note.txt"; tg add note.txt; tg commit -q -m "$1"; LAST="$(tg rev-parse HEAD)"; }
+
+# tr_origin <sha> — simulate origin/main.
+tr_origin() { tg update-ref refs/remotes/origin/main "$1"; }
+
+# tr_weaken — drop the ghp_ shape from the github-pat built-in rule (working tree only).
+tr_weaken() {
+  python3 - "$TR/$LIBREL" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+assert "gh[pousr]_" in s
+open(sys.argv[1], "w").write(s.replace("gh[pousr]_", "gh[ousr]_", 1))
+PY
+}
+
+MB_LINE_PREFIX='rule=merge-base library_changed=True'
+
+# --- AC1: no stored reference, no reference option ---------------------------
+
+@test "fuzz --help lists no option with reference in its name" {
+  fuzz fuzz --help
+  [ "$status" -eq 0 ]
+  [ "$(grep -Eic -- '--[a-z-]*reference|reference_' <<<"$output")" -eq 0 ]
+}
+
+@test "case --help lists no option with reference in its name" {
+  fuzz case --help
+  [ "$status" -eq 0 ]
+  [ "$(grep -Eic -- '--[a-z-]*reference|reference_' <<<"$output")" -eq 0 ]
+}
+
+@test "a reference option is an unrecognized argument and exits 2" {
+  fuzz fuzz --mode builtin --reference-sha "$SHA_ABSENT"
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"unrecognized arguments"* ]]
+}
+
+@test "no file under plugins or .github holds a stored reference constant" {
+  # Split so this file does not hold the word it counts.
+  local pat="PINNED""_SHA"
+  run git grep -c --untracked -e "$pat" -- plugins .github
+  printf '# %s\n' "$output" >&3
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "an environment variable does not change the reference line" {
+  tr_new env1
+  tr_first_lib one
+  local c1="$LAST"
+  tr_lib two
+  tr_other three
+  tr_origin "$LAST"
+  fuzz reference
+  local plain="$output"
+  REDACT_FUZZ_REFERENCE="$c1" fuzz reference
+  [ "$status" -eq 0 ]
+  [ -n "$plain" ]
+  [ "$output" = "$plain" ]
+}
+
+# --- AC2: a changed lib uses the merge base ----------------------------------
+
+@test "reference is the merge base when a branch commit changes the lib" {
+  local mb
+  tr_new mb1
+  tr_first_lib one
+  tr_lib two
+  tr_origin "$LAST"
+  tg checkout -q -b feature
+  tr_lib three
+  mb="$(tg merge-base HEAD refs/remotes/origin/main)"
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [ "$output" = "reference=$mb $MB_LINE_PREFIX" ]
+}
+
+@test "reference is the merge base when only the working tree lib changed" {
+  local mb
+  tr_new mb2
+  tr_first_lib one
+  tr_lib two
+  tr_origin "$LAST"
+  tg checkout -q -b feature
+  printf '# uncommitted\n' >>"$TR/$LIBREL"
+  mb="$(tg merge-base HEAD refs/remotes/origin/main)"
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [ "$output" = "reference=$mb $MB_LINE_PREFIX" ]
+}
+
+@test "the reference subcommand prints one line" {
+  tr_new one1
+  tr_first_lib one
+  tr_lib two
+  tr_origin "$LAST"
+  tr_lib three
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '' <<<"$output")" -eq 1 ]
+}
+
+# --- AC3: an unchanged lib uses the parent of the last change ----------------
+
+@test "reference is the commit before the last lib change on a linear history" {
+  local c1 c2
+  tr_new lin
+  tr_first_lib one
+  c1="$LAST"
+  tr_lib two
+  c2="$LAST"
+  tr_other three
+  tr_origin "$LAST"
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [ "$output" = "reference=$c1 rule=parent-of-last-change library_changed=False last_change=$c2" ]
+}
+
+@test "reference is the first parent of a no-ff merge that changed the lib" {
+  local c2 m
+  tr_new mrg
+  tr_first_lib one
+  tr_lib two
+  c2="$LAST"
+  tg checkout -q -b topic
+  tr_lib topic-one
+  tr_lib topic-two
+  tg checkout -q main
+  tg merge -q --no-ff -m merge-topic topic
+  m="$(tg rev-parse HEAD)"
+  tr_origin "$m"
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [ "$output" = "reference=$c2 rule=parent-of-last-change library_changed=False last_change=$m" ]
+}
+
+@test "reference on the real history at 1d2a9fd is the parent of the last lib change" {
+  local clone="$BATS_TEST_TMPDIR/real"
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+  git clone -q "$REPO" "$clone"
+  TR="$clone"
+  tg checkout -q --detach 1d2a9fd4fa9b2b6fb3649ff3196ffca4d1049719
+  tr_origin 1d2a9fd4fa9b2b6fb3649ff3196ffca4d1049719
+  tr_equip "$clone"
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [ "$output" = "reference=92308c9505265b98cb4b4157430c4b3b74ad0198 rule=parent-of-last-change library_changed=False last_change=f2c5a3fe79c67c3b825be1ceed518aafc370295a" ]
+}
+
+# --- AC4: a mode-only commit is not a change ---------------------------------
+
+@test "a mode-only commit does not count as the last lib change" {
+  local c1 c2
+  tr_new mode
+  tr_first_lib one
+  c1="$LAST"
+  tr_lib two
+  c2="$LAST"
+  tg update-index --chmod=+x "$LIBREL"
+  tg commit -q -m mode-only
+  tr_origin "$(tg rev-parse HEAD)"
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [ "$output" = "reference=$c1 rule=parent-of-last-change library_changed=False last_change=$c2" ]
+}
+
+# --- AC5: the reference is never the candidate -------------------------------
+
+@test "a candidate commit equal to the reference exits 2 with no worse line" {
+  local c1
+  tr_new same
+  tr_first_lib one
+  c1="$LAST"
+  tr_lib two
+  tr_origin "$LAST"
+  fuzz case --name F --candidate-sha "$c1"
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"reference is identical to the candidate"* ]]
+  [ "$(grep -c '^worse=' <<<"$output")" -eq 0 ]
+}
+
+# --- AC6: clone problems, in the fixed order ---------------------------------
+
+@test "clone problem a: a depth 1 clone exits 2 and names git fetch --unshallow" {
+  local src clone="$BATS_TEST_TMPDIR/shallow"
+  tr_new src
+  src="$TR"
+  tr_first_lib one
+  tr_lib two
+  tr_lib three
+  git clone -q --depth 1 "file://$src" "$clone"
+  tr_equip "$clone"
+  fuzz reference
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"git fetch --unshallow"* ]]
+  [[ "$stderr" != *"no earlier version"* ]]
+}
+
+@test "clone problem b: a missing origin/main exits 2 and names git fetch origin main" {
+  tr_new noorig
+  tr_first_lib one
+  tr_lib two
+  fuzz reference
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"git fetch origin main"* ]]
+}
+
+@test "clone problem c: unrelated histories exit 2 with no single merge base" {
+  local root
+  tr_new unrel
+  tr_first_lib one
+  root="$(tg commit-tree -m unrelated "$(tg mktree </dev/null)")"
+  tr_origin "$root"
+  fuzz reference
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"no single merge base"* ]]
+}
+
+@test "clone problem d: a criss-cross merge exits 2 with no single merge base" {
+  local tree r a b m1 m2
+  tr_new criss
+  tr_first_lib one
+  tree="$(tg rev-parse HEAD^{tree})"
+  r="$(tg rev-parse HEAD)"
+  a="$(tg commit-tree -p "$r" -m side-a "$tree")"
+  b="$(tg commit-tree -p "$r" -m side-b "$tree")"
+  m1="$(tg commit-tree -p "$a" -p "$b" -m merge-1 "$tree")"
+  m2="$(tg commit-tree -p "$b" -p "$a" -m merge-2 "$tree")"
+  tg update-ref refs/heads/main "$m1"
+  tr_origin "$m2"
+  fuzz reference
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"no single merge base"* ]]
+}
+
+@test "clone problem e: a lib whose only commit is its first exits 2 with no earlier version" {
+  tr_new first1
+  tr_other readme
+  tr_first_lib one
+  tr_other later
+  tr_origin "$LAST"
+  fuzz reference
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"no earlier version"* ]]
+}
+
+@test "clone problem e: a root commit that adds the lib exits 2 with no earlier version" {
+  tr_new first2
+  tr_first_lib one
+  tr_other later
+  tr_origin "$LAST"
+  fuzz reference
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"no earlier version"* ]]
+}
+
+@test "clone problem f: a base without the lib file exits 2 with no earlier version" {
+  local c0
+  tr_new nolib
+  tr_other readme
+  c0="$LAST"
+  tr_first_lib one
+  tr_origin "$c0"
+  fuzz reference
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"no earlier version"* ]]
+}
+
+# --- AC7: detached HEAD and a fork-shaped PR ---------------------------------
+
+@test "a detached HEAD gives the same reference line as the branch" {
+  local on_branch
+  tr_new det
+  tr_first_lib one
+  tr_lib two
+  tr_origin "$LAST"
+  tg checkout -q -b feature
+  tr_lib three
+  fuzz reference
+  on_branch="$output"
+  tg checkout -q --detach
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [[ "$on_branch" == reference=* ]]
+  [ "$output" = "$on_branch" ]
+}
+
+@test "a merge of origin/main and a commit outside origin uses the origin/main tip" {
+  local tip
+  tr_new fork
+  tr_first_lib one
+  tr_lib two
+  tip="$LAST"
+  tr_origin "$tip"
+  tg checkout -q -b fork-pr HEAD~1
+  tr_lib_top fork-change
+  tg checkout -q -b pr-merge "$tip"
+  tg merge -q --no-ff -m merge-fork fork-pr
+  fuzz reference
+  [ "$status" -eq 0 ]
+  [ "$output" = "reference=$tip $MB_LINE_PREFIX" ]
+}
+
+# --- AC8: a harness failure is red, never a skip -----------------------------
+
+@test "this file holds no skip call" {
+  # Split so this file does not match its own check.
+  local pat='^[[:space:]]*sk''ip([[:space:]]|$)'
+  run grep -cE "$pat" "$BATS_TEST_FILENAME"
+  printf '# skip calls: %s\n' "$output" >&3
+  [ "$output" = "0" ]
+}
+
+# --- AC9: the derived reference is shown -------------------------------------
+
+@test "a fuzz run prints the reference line first" {
+  tr_new line1
+  tr_first_lib one
+  tr_lib two
+  tr_origin "$LAST"
+  tr_lib three
+  fuzz fuzz --mode builtin --seed 1 --n 20
+  [ "$status" -eq 0 ]
+  [[ "$(first_line)" =~ $REFERENCE_LINE_RE ]]
+}
+
+@test "a case run prints the reference line first" {
+  tr_new line2
+  tr_first_lib one
+  tr_lib two
+  tr_origin "$LAST"
+  fuzz case --name F
+  [ "$status" -eq 0 ]
+  [[ "$(first_line)" =~ $REFERENCE_LINE_RE ]]
+}
+
+@test "a planted weaker lib in the working tree is worse against the merge base" {
+  local mb
+  tr_new weak1
+  tr_first_lib one
+  tr_lib two
+  tr_origin "$LAST"
+  tg checkout -q -b feature
+  tr_weaken
+  mb="$(tg merge-base HEAD refs/remotes/origin/main)"
+  fuzz fuzz --mode builtin --seed 1 --n 1000
+  [ "$status" -eq 1 ]
+  [ "$(first_line)" = "reference=$mb $MB_LINE_PREFIX" ]
+  has_match '^worse=[1-9][0-9]*$'
+  [ "$(grep -c '^not from this change:' <<<"$output")" -eq 0 ]
+}
+
+@test "a worse lib change already on main prints the not from this change line" {
+  local c1 c2
+  tr_new weak2
+  tr_first_lib one
+  c1="$LAST"
+  tr_weaken
+  tg add "$LIBREL"
+  tg commit -q -m weaken
+  c2="$(tg rev-parse HEAD)"
+  tr_origin "$c2"
+  fuzz fuzz --mode builtin --seed 1 --n 1000
+  [ "$status" -eq 1 ]
+  [ "$(first_line)" = "reference=$c1 rule=parent-of-last-change library_changed=False last_change=$c2" ]
+  has_line "not from this change: the library change $c2 on main is worse than its parent"
+}
+
+# --- AC12: fixtures are checked and inert ------------------------------------
+
+FIXTURE_DIR=plugins/worklog/hooks/tests/fixtures/redact-regress
+
+@test "the fixture directory holds exactly the three bad libs" {
+  run bash -c 'cd "$1" && ls -A | tr "\n" " "' _ "$REPO/$FIXTURE_DIR"
+  [ "$output" = "redact-3854dc2.py.txt redact-cb0ab84.py.txt redact-f1f1f8a.py.txt " ]
+}
+
+@test "fixture redact-cb0ab84 has its recorded blob id" {
+  run git hash-object --no-filters "$REPO/$FIXTURE_DIR/redact-cb0ab84.py.txt"
+  [ "$output" = "$BLOB_CB0AB84" ]
+}
+
+@test "fixture redact-3854dc2 has its recorded blob id" {
+  run git hash-object --no-filters "$REPO/$FIXTURE_DIR/redact-3854dc2.py.txt"
+  [ "$output" = "$BLOB_3854DC2" ]
+}
+
+@test "fixture redact-f1f1f8a has its recorded blob id" {
+  run git hash-object --no-filters "$REPO/$FIXTURE_DIR/redact-f1f1f8a.py.txt"
+  [ "$output" = "$BLOB_F1F1F8A" ]
+}
+
+@test "no python file sits under the fixtures directory" {
+  run find "$REPO/plugins/worklog" -name '*.py' -path '*/fixtures/*'
+  [ -z "$output" ]
+}
+
+@test "gitleaks finds no leak in the fixtures" {
+  run gitleaks dir --no-banner "$REPO/$FIXTURE_DIR"
   printf '# %s\n' "$output" >&3
   [ "$status" -eq 0 ]
-  [ "$output" = "plugins/worklog/hooks/tests/redact_diff_fuzz.py:1" ]
+  [[ "$output" == *"no leaks found"* ]]
+}
+
+@test "no fixture holds the gitleaks allow string" {
+  # Built from two parts so this file does not hold it either.
+  local allow="gitleaks:""allow"
+  run grep -rc -e "$allow" "$REPO/$FIXTURE_DIR"
+  [[ "$output" != *":"[1-9]* ]]
+}
+
+# --- AC13: no PR 217 ref -----------------------------------------------------
+
+@test "no file under plugins or .github names the PR 217 ref" {
+  # Split so this file does not hold the pattern it counts.
+  local pat="pull/217""/head"
+  run git grep -c --untracked -e "$pat" -- plugins .github
+  printf '# %s\n' "$output" >&3
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
 }
