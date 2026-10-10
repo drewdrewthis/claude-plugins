@@ -58,12 +58,12 @@ curl-auth-user, dropbox-short-lived-api-token, flyio-access-token, jwt,
 lob-pub-api-key, mapbox-api-token, rubygems-api-token, sidekiq-secret,
 telegram-bot-api-token, twitter-bearer-token, vault-service-token,
 yandex-access-token (rubygems-api-token and twitter-bearer-token can be
-redacted in part). (4) Texts beyond the copy budget (100,000 bytes of original
-text per batch, smallest texts first) get no copies; for them a gitleaks-only
+redacted in part). (4) Texts beyond the copy budget (the copy budget,
+_COPY_BUDGET, in bytes of original text per batch, smallest texts first) get no copies; for them a gitleaks-only
 token before punctuation stays raw. (5) Without gitleaks nothing changes:
 gitleaks-only shapes stay raw. (6) gitleaks older than 8.22.0 gives the hook no
 findings (https://github.com/drewdrewthis/claude-plugins/issues/245). (7) The
-copies make the one gitleaks run larger (about 0.5 MB more at most), so a batch that is
+copies make the one gitleaks run larger (about 0.5 to 0.9 MB more), so a batch that is
 close to the gitleaks time limit without them can pass it with them; the row is
 then stored unjudged (gitleaks-failed), never unredacted.
 The "known limit:" tests pin a sample of these.
@@ -313,12 +313,14 @@ def apply(s, findings):
 
 
 # Byte budget for the spaced copies. It counts the UTF-8 bytes of the ORIGINAL
-# texts that get copies; the copies add about 4 to 5 times that to the one
-# gitleaks run (up to about 8 times when every character gets a space), and
-# gitleaks time grows with input size (measured: a 990,000-byte run of one
-# letter took 7 s alone and 19 s with copies, over the 15 s limit, which leaves
-# the row unjudged). 100,000 bytes keeps the added scan at about 0.5 MB. Texts
-# that do not fit still get the flag, just no copies.
+# texts that get copies. The four spacer patterns match disjoint characters, so
+# the copies add 4 to 5 times the bytes of the covered texts (5.0 times when
+# every character is punctuation), plus the four separators: about 0.5 MB for
+# one text at the budget, up to about 0.9 MB for a batch of very many tiny
+# texts, because the joining newlines are not counted. gitleaks time grows with
+# input size (measured: a 990,000-byte run of one letter took 7 s alone and 19 s
+# with copies, over the 15 s limit, which leaves the row unjudged). Texts that
+# do not fit still get the flag, just no copies.
 _COPY_BUDGET = 100000
 
 # Scan parts are joined by 12 newlines, one line of 512 "(" characters, 12
@@ -332,6 +334,9 @@ _SEPARATOR = "\n" * 12 + "(" * 512 + "\n" * 12
 
 # Where each spaced copy gets one space in front of a character. gitleaks rules
 # end a token at a terminator; a space in front of the punctuation supplies it.
+# One copy with a space in front of all punctuation would split every token that
+# holds ".", "/", ":" or "-" itself (the Pulumi prefix has "-"), so "." "/" and
+# ":" each get their own copy and the first copy leaves them alone.
 # re.ASCII makes every non-ASCII character (no-break space, curly quote, and
 # letters too) match the first pattern. "-", "=", "+", "_" are left out on
 # purpose: a space there would split tokens whose alphabet holds them
@@ -364,7 +369,10 @@ def _texts_within_budget(texts):
 def _scan_input(texts):
     """The text for the single gitleaks run: the joined texts, then, when any
     text fits the budget, four spaced copies of those texts, parts joined by
-    _SEPARATOR. The end of the text is the terminator gitleaks needs.
+    _SEPARATOR. No final newline is added: the end of the input ends a token for gitleaks.
+    The copies join only the texts that fit, so two texts with an over-budget
+    text between them are neighbours in a copy; a match across them can only
+    add redaction.
     """
     joined = "\n".join(texts)
     fit = _texts_within_budget(texts)

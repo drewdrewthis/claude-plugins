@@ -435,7 +435,7 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
 
   # proves: hooks/tests/worklog-record.bats "known limit: the smallest texts get the copies first and a text that no longer fits gets none"
   Scenario: The smallest texts get the copies first
-    Given a batch of a text A of 60,000 bytes, a text B of 60,000 bytes and a small text, in that order
+    Given a batch of a text B of 60,000 bytes, a text A of 50,000 bytes and a small text, in that order
     When a stub gitleaks stores its stdin
     Then the stored stdin holds a spaced copy of the small text and of A
     And the stored stdin holds no spaced copy of B

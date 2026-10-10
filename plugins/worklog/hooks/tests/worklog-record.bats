@@ -2362,8 +2362,7 @@ _$(fake_do)"
 }
 
 # gitleaks 8.30.1 does not find these glued shapes either (npm, aws key id), but
-# it does find others (Shopify). Accepted in issue 219; looked at again when the
-# fuzz from issue 218 exists.
+# it does find others (Shopify). Accepted limit of issue 219.
 @test "known limit: with gitleaks, a word character glued in front of an npm token or aws key id still keeps it raw" {
   require_real_gitleaks
   [ "$(real_redact_texts "$(fake_npm)")" = "<redacted:npm-token>" ]
@@ -2593,11 +2592,6 @@ open(sys.argv[1], "wb").write(b * (n // len(b)) + b"a" * (n % len(b)))
   KEY="$(fake_pulumi)"
   [ "$(real_redact_texts "see $(fake_npm)$KEY.")" = "see <redacted:npm-token><redacted:generic-api-key>" ]
   [ "$(real_redact_texts "see $(fake_npm) $KEY.")" = "see <redacted:npm-token> <redacted:generic-api-key>" ]
-  for input in "see $(fake_npm)$KEY." "see $(fake_npm) $KEY."; do
-    out="$(real_redact_texts "$input")"
-    if grep -qE '<redacted:[^>]*<redacted:' <<<"$out"; then return 1; fi
-    if grep -qF -- "$KEY" <<<"$out"; then return 1; fi
-  done
 }
 
 # --- byte budget: only texts that fit get spaced copies ----------------------
@@ -2654,15 +2648,17 @@ has_sep_line() {
   has_sep_line "$SCRATCH/stdin.txt"
 }
 
-# The budget is a running sum over the texts taken smallest first: the small
-# text and A (60,006 bytes) fit, B would make 120,006 and does not.
+# The budget is a running sum over the texts taken smallest first, not in batch
+# order: B (60,000 bytes) comes first but is taken last. The small text and A
+# (50,007 bytes) fit, B would make 110,007 and does not.
 @test "known limit: the smallest texts get the copies first and a text that no longer fits gets none" {
-  big_text "$SCRATCH/a.txt" "alpha, " 60000
   big_text "$SCRATCH/b.txt" "bravo, " 60000
-  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/a.txt" "@$SCRATCH/b.txt" "see Q." >/dev/null
-  [ "$(grep -oF -- "see Q ." "$SCRATCH/stdin.txt" | wc -l)" -ge 1 ]
-  [ "$(grep -oF -- "alpha ," "$SCRATCH/stdin.txt" | wc -l)" -ge 1 ]
-  [ "$(grep -oF -- "bravo ," "$SCRATCH/stdin.txt" | wc -l)" -eq 0 ]
+  big_text "$SCRATCH/a.txt" "alpha, " 50000
+  GITLEAKS_STDIN_LOG="$SCRATCH/stdin.txt" stub_batch "@$SCRATCH/b.txt" "@$SCRATCH/a.txt" "see Q." >/dev/null
+  grep -qF -- "see Q ." "$SCRATCH/stdin.txt"
+  grep -qF -- "alpha ," "$SCRATCH/stdin.txt"
+  run grep -qF -- "bravo ," "$SCRATCH/stdin.txt"
+  [ "$status" -eq 1 ]
 }
 
 # 33,334 fullwidth commas are under 100,000 characters and over 100,000
