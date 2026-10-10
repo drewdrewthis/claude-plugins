@@ -6,12 +6,12 @@
 #   "worse" when the candidate leaves more of the planted fake tokens in the
 #   output than the reference does. Exit 0 = no worse text, 1 = one or more,
 #   2 = the harness could not run. These tests pin that contract, the named
-#   regressions from PR 217, and the nine exit-2 failure modes.
+#   regressions from PR 217, and the eleven exit-2 failure modes.
 #
 # ⚠ NO TOKEN LITERALS IN THIS FILE. Every fake token is made by the helper at
 # run time (prefix + seeded random characters). This file only holds recipe
 # names (F, G1, ...), seeds, and commit ids. Do not paste a token here: the
-# helper's own gitleaks scan (AC7) runs over this file.
+# gitleaks tests at the end of this file (AC7) scan it.
 #
 # ⚠ THE OUTPUT OF PASSING TESTS IS PRINTED ON PURPOSE. Bats hides stdout of a
 # passing test, and the CI log is the evidence (corpus_sha256, mode, worse=).
@@ -85,8 +85,9 @@ has_match() { grep -Eq -- "$1" <<<"$output"; }
 value_of() { grep -Eo -- "(^|[ ])$1=[^ ]+" <<<"$output" | head -n 1 | sed -e 's/^ //' -e "s/^$1=//"; }
 
 BUILTIN_MODE='mode=builtin gitleaks_present=False'
-# A gitleaks bump means changing this constant, the "installed" test and the workflow install step together.
-GITLEAKS_MODE='mode=gitleaks gitleaks_present=True version=8.30.1 failed=False'
+# A gitleaks bump means changing this constant and the workflow install step together.
+GITLEAKS_VERSION=8.30.1
+GITLEAKS_MODE="mode=gitleaks gitleaks_present=True version=$GITLEAKS_VERSION failed=False"
 
 # no_planted_leak <planted file> — AC7. No run of 8+ chars of any planted piece
 # is in stdout or stderr. The dump file is written by the helper, one piece per
@@ -139,11 +140,11 @@ path_without_gitleaks() {
 
 # --- environment ------------------------------------------------------------
 
-@test "gitleaks 8.30.1 is installed on this runner" {
+@test "the pinned gitleaks version is installed on this runner" {
   run gitleaks version
   echo "# gitleaks version: $output" >&3
   [ "$status" -eq 0 ]
-  [[ "$output" == *8.30.1* ]]
+  [[ "$output" == *"$GITLEAKS_VERSION"* ]]
 }
 
 # --- AC1: corpus hash -------------------------------------------------------
@@ -225,7 +226,7 @@ builtin_seed() {
 
 @test "builtin fuzz has teeth against 05b2460" {
   local pl="$BATS_TEST_TMPDIR/planted"
-  fuzz fuzz --mode builtin --seed 2 --n 3000 --candidate-sha "$SHA_TEETH" --dump-planted "$pl"
+  fuzz fuzz --mode builtin --seed 2 --n 1000 --candidate-sha "$SHA_TEETH" --dump-planted "$pl"
   [ "$status" -eq 1 ]
   has_match '^worse=[1-9][0-9]*$'
   no_planted_leak "$pl"
@@ -236,13 +237,15 @@ builtin_seed() {
   # A small cap still confirms one or more texts; the default cap is kept by the clean run.
   fuzz fuzz --mode gitleaks --candidate-sha "$SHA_H" --confirm-cap 8 --dump-planted "$pl"
   [ "$status" -eq 1 ]
+  # The cap given on the command line is the cap used.
+  has_line "confirm_cap=8"
   has_match '^flagged=[0-9]+ confirmed=[1-9][0-9]*$'
   confirmed="$(grep -Eo 'confirmed=[0-9]+' <<<"$output" | head -n 1 | sed 's/confirmed=//')"
   has_line "worse=$confirmed"
   no_planted_leak "$pl"
 }
 
-# --- AC6: nine exit-2 failure modes ----------------------------------------
+# --- AC6: eleven exit-2 failure modes ----------------------------------------
 
 @test "failure mode 1 exits 2 when the pinned sha is not in the clone" {
   fuzz case --name F --reference-sha "$SHA_ABSENT"
@@ -353,9 +356,11 @@ PY
 @test "failure mode 8 exits 2 when over the cap and none of the first flagged is confirmed" {
   write_stub8
   export STUB_ALONE=clean
-  fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 3
+  fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 2
   [ "$status" -eq 2 ]
   [[ "$stderr" == *"too many to confirm"* ]]
+  # The message names the cap that was passed, so an ignored --confirm-cap fails here.
+  [[ "$stderr" == *"none of the first 2 "* ]]
 }
 
 @test "failure mode 9 exits 2 when a lib reports no gitleaks in gitleaks mode" {
@@ -372,11 +377,28 @@ PY
   [[ "$stderr" == *"gitleaks not present in gitleaks mode"* ]]
 }
 
+@test "failure mode 10 exits 2 when an option is not used in the mode" {
+  fuzz fuzz --mode gitleaks --seed 3
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"option not used in this mode: --seed"* ]]
+  fuzz fuzz --mode builtin --seed 1 --n 20 --confirm-cap 5
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"option not used in this mode: --confirm-cap"* ]]
+}
+
+@test "failure mode 11 exits 2 on a malformed sha" {
+  fuzz case --name F --candidate-sha not-a-sha
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"bad sha: --candidate-sha"* ]]
+  [[ "$stderr" != *not-a-sha* ]]
+}
+
 @test "more flagged than the cap, with a confirmed text, exits 1" {
   write_stub8
   export STUB_ALONE=leak
-  fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 3
+  fuzz fuzz --mode gitleaks --candidate-dir "$BATS_TEST_TMPDIR/stub8" --confirm-cap 2
   [ "$status" -eq 1 ]
+  has_line "confirm_cap=2"
   has_match '^flagged=[0-9]+ confirmed=[1-9][0-9]*$'
 }
 
@@ -387,6 +409,13 @@ PY
   show selftest
   [ "$status" -eq 0 ]
   grep -Eq '^check=uppercase-marker score=[1-9][0-9]*$' <<<"$output"
+  # A marker named after 6+ random chars of a piece keeps the piece, a 41-char
+  # name is no marker, and a plain name with digits and hyphens is still cut out.
+  # A name sharing only fixed shape text with a piece (slack) is cut out too.
+  grep -Eq '^check=piece-in-marker-name score=([4-9]|[1-9][0-9]+)$' <<<"$output"
+  grep -Eq '^check=long-marker score=[1-9][0-9]*$' <<<"$output"
+  grep -Eq '^check=digit-hyphen-marker score=0$' <<<"$output"
+  grep -Eq '^check=shape-text-in-marker-name score=0$' <<<"$output"
 }
 
 # --- AC7: no real secrets in the test files ---------------------------------

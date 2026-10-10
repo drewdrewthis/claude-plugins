@@ -92,11 +92,11 @@ jobs:
       - name: worklog-record suite
         run: bats plugins/worklog/hooks/tests/worklog-record.bats
 
-      # Its own step so its duration shows in the CI UI; budget is 120 s per
-      # leg; the timeout makes a large overrun fail visibly. Needs gitleaks
+      # Its own step so its duration shows in the CI UI. The budget is 120 s
+      # per leg and the 2-minute timeout enforces it. Needs gitleaks
       # (installed above) and bats >= 1.5.0 for `run --separate-stderr`.
       - name: redact differential fuzz suite
-        timeout-minutes: 5
+        timeout-minutes: 2
         run: bats plugins/worklog/hooks/tests/redact-diff-fuzz.bats
 
       # This suite also runs in procedures-tests.yml; it stays here because this

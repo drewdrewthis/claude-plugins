@@ -22,7 +22,8 @@ No token literal is in this file or in the bats file.
 
 Subcommands: fuzz --mode builtin|gitleaks, case --name NAME, selftest.
 Python 3.9-safe, stdlib only. The corpus uses only random.Random(seed) with
-random(), randint() and choice(), so it is the same on every Python and OS.
+random(), randint(), randrange() and choice(), so it is the same on every
+Python and OS.
 """
 import argparse
 import hashlib
@@ -60,8 +61,44 @@ B64 = ALNUM + "+/"
 URLB64 = ALNUM + "_-"
 
 
+_DRAWN = []  # every rs() result since the last clear: the random parts of the token being built
+
+
 def rs(rng, alphabet, n):
-    return "".join(rng.choice(alphabet) for _ in range(n))
+    s = "".join(rng.choice(alphabet) for _ in range(n))
+    _DRAWN.append(s)
+    return s
+
+
+class Piece(str):
+    """A planted piece. `rnd` holds its seeded random parts (never its fixed prefix/shape text)."""
+
+    def __new__(cls, text, rnd=()):
+        self = super().__new__(cls, text)
+        self.rnd = tuple(rnd)
+        return self
+
+
+def make_piece(t, draws, a=0, b=None):
+    """Piece t[a:b] of a built token; `draws` are the rs() results used to build t, in order."""
+    b = len(t) if b is None else b
+    rnd, ptr = [], 0
+    for d in draws:
+        i = t.find(d, ptr)
+        if i < 0:
+            continue
+        ptr = i + len(d)
+        lo, hi = max(i, a), min(i + len(d), b)
+        if hi > lo:
+            rnd.append(t[lo:hi])
+    return Piece(t[a:b], rnd)
+
+
+def build_token(r, kind):
+    """-> (token, its rs() draws)."""
+    del _DRAWN[:]
+    t = KINDS[kind](r)
+    return t, list(_DRAWN)
 
 
 def _jwt(r):
@@ -158,13 +195,14 @@ def gen_text(r):
             parts.append(r.choice(FRAGS)(r))
             continue
         k = r.choice(KIND_NAMES)
-        t = KINDS[k](r)
+        t, dt = build_token(r, k)
         if r.random() < NEST_P:
             # Token A cut after its prefix, token B inserted, then A's own remainder.
-            u = KINDS[r.choice(KIND_NAMES)](r)
+            u, du = build_token(r, r.choice(KIND_NAMES))
             cut = max(min(len(prefix_of(k)) + r.randint(0, 12), len(t) - 1), 4)
             tail = t[cut:cut + r.choice([0, 0, 3, 4, 5, 7, 8, 12])]
-            planted.extend(x for x in (t[:cut], u, tail) if x)
+            planted.extend(x for x in (make_piece(t, dt, 0, cut), make_piece(u, du),
+                                       make_piece(t, dt, cut, cut + len(tail))) if x)
             parts.append(t[:cut] + u + tail)
             continue
         if r.random() < TRUNC_P:
@@ -172,12 +210,15 @@ def gen_text(r):
                 cut = min(len(prefix_of(k)) + r.randint(0, 3), len(t) - 1)
             else:
                 cut = r.randint(min(6, len(t) - 1), len(t) - 1)
-            t = t[:max(cut, 4)]
-        planted.append(t)
+            cut = max(cut, 4)
+            planted.append(make_piece(t, dt, 0, cut))
+            parts.append(t[:cut])
+            continue
+        planted.append(make_piece(t, dt))
         parts.append(t)
     if not planted:  # every text plants at least one full token
-        t = KINDS[r.choice(KIND_NAMES)](r)
-        planted.append(t)
+        t, dt = build_token(r, r.choice(KIND_NAMES))
+        planted.append(make_piece(t, dt))
         parts[r.randrange(n)] = t
     return "".join(parts), planted
 
@@ -195,11 +236,14 @@ PAIRS_LIMIT = 1000
 def pairs_corpus(limit=PAIRS_LIMIT):
     """First `limit` texts of: context + A + B over full tokens, bare prefixes and one word.
 
-    Deterministic and seed-free. The H regressions show here (first hit near text 720).
+    Deterministic: fixed internal seed PAIRS_SEED, no caller seed. The H regressions show here.
     """
     r = random.Random(PAIRS_SEED)
     kinds = [k for k in KIND_NAMES if k != "pem"]
-    full = [KINDS[k](r) for k in kinds]
+    full = []
+    for k in kinds:
+        t, dt = build_token(r, k)
+        full.append(make_piece(t, dt))
     prefixes = sorted({prefix_of(k) for k in kinds})
     parts = full + prefixes + ["abwz"]
     out = []
@@ -276,8 +320,18 @@ CASES = {
 
 # Only a well-formed marker is cut out. A planted piece inside any other
 # `<redacted:...>` shape (an uppercase name, a name over 40 chars) still counts.
-MARKER_RE = re.compile(r"<redacted:[a-z0-9-]{1,40}>")
+# A well-formed marker whose name shares MARKER_RUN+ consecutive chars with a
+# RANDOM part of a planted piece is kept too, so a candidate cannot hide a piece
+# by naming a marker after it. Only the seeded random parts count, never a
+# piece's fixed prefix/shape text (`hooks.slack.com` vs a `slack-token` marker):
+# marker names must not change the score, and the candidate and the reference
+# may name the same text differently. 6 random chars landing in a short marker
+# name by chance is negligible. Accepted limit: a bare-prefix piece, or a random
+# part shorter than 6 chars, put into a marker name is not seen.
+MARKER_RE = re.compile(r"<redacted:([a-z0-9-]{1,40})>")
 MIN_RUN = 4
+MARKER_RUN = 6
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def _longest_common(a, b, used):
@@ -298,11 +352,20 @@ def _longest_common(a, b, used):
 def leak_spans(planted, out):
     """Spans (start, end) of `out` that are surviving runs of 4+ chars of a planted piece.
 
-    Markers are blanked to NULs of the same length, so the pieces on either side
-    never join and spans index straight into `out`. Per piece the longest common
+    Markers (unless named after a piece) are blanked to NULs of the same length,
+    so the pieces on either side never join and spans index straight into `out`. Per piece the longest common
     run is taken first; claimed chars are not counted twice.
     """
-    res = MARKER_RE.sub(lambda m: "\x00" * len(m.group(0)), out)
+    rnd_grams = {q[i:i + MARKER_RUN] for p in planted for q in getattr(p, "rnd", ())
+                 for i in range(len(q) - MARKER_RUN + 1)}
+
+    def blank(m):
+        name = m.group(1)
+        if any(name[i:i + MARKER_RUN] in rnd_grams for i in range(len(name) - MARKER_RUN + 1)):
+            return m.group(0)
+        return "\x00" * len(m.group(0))
+
+    res = MARKER_RE.sub(blank, out)
     grams = {res[i:i + MIN_RUN] for i in range(len(res) - MIN_RUN + 1)
              if "\x00" not in res[i:i + MIN_RUN]}
     used = [False] * len(res)
@@ -386,8 +449,8 @@ def load_from_dir(name, directory):
         raise HarnessError("%s error: cannot load lib (%s)" % (name, type(e).__name__))
 
 
-def load_from_sha(name, sha, tmp, hint):
-    p = subprocess.run(["git", "-C", repo_root(), "show", "%s:%s" % (sha, LIB_PATH)],
+def load_from_sha(name, sha, tmp, hint, root):
+    p = subprocess.run(["git", "-C", root, "show", "%s:%s" % (sha, LIB_PATH)],
                        capture_output=True)
     if p.returncode != 0:
         raise HarnessError("%s lib %s not found in this clone; run: %s" % (name, sha, hint))
@@ -400,9 +463,11 @@ def load_from_sha(name, sha, tmp, hint):
 
 def load_libs(args, tmp):
     """-> (candidate, reference), loaded as two separate modules."""
-    ref = load_from_sha("reference", args.reference_sha or PINNED_SHA, tmp, "git fetch --unshallow")
+    root = repo_root()
+    ref = load_from_sha("reference", args.reference_sha or PINNED_SHA, tmp, "git fetch --unshallow", root)
     if args.candidate_sha:
-        cand = load_from_sha("candidate", args.candidate_sha, tmp, "git fetch origin refs/pull/217/head, or git fetch --unshallow")
+        cand = load_from_sha("candidate", args.candidate_sha, tmp,
+                             "git fetch origin refs/pull/217/head, or git fetch --unshallow", root)
     else:
         cand = load_from_dir("candidate", args.candidate_dir or DEFAULT_CANDIDATE_DIR)
     return cand, ref
@@ -417,7 +482,6 @@ class Session(object):
         self.mode, self.cand, self.ref = mode, cand, ref
         self.gitleaks = mode == "gitleaks"
         self.present, self.version = present, version
-        self.failed = False
 
     def redact(self, label, lib, texts):
         try:
@@ -428,7 +492,6 @@ class Session(object):
             raise HarnessError("%s output count %d differs from input count %d" % (label, len(out), len(texts)))
         if self.gitleaks and failed:
             raise HarnessError("gitleaks failed in %s run" % label)
-        self.failed = self.failed or bool(failed)
         return out
 
     def both(self, texts):
@@ -443,7 +506,6 @@ def hide_gitleaks(tmp):
 
 
 def gitleaks_version():
-    os.environ.setdefault("WORKLOG_GITLEAKS_TIMEOUT", "120")
     return subprocess.run(["gitleaks", "version"], capture_output=True, text=True).stdout.strip()
 
 
@@ -469,6 +531,7 @@ def start_session(mode, cand, ref, tmp):
     """
     version = None
     if mode == "gitleaks":
+        os.environ.setdefault("WORKLOG_GITLEAKS_TIMEOUT", "120")
         version = gitleaks_version()
     else:
         hide_gitleaks(tmp)
@@ -478,8 +541,9 @@ def start_session(mode, cand, ref, tmp):
 def mode_line(session):
     if session.mode == "builtin":
         return "mode=builtin gitleaks_present=%s" % session.present
-    return "mode=gitleaks gitleaks_present=%s version=%s failed=%s" % (
-        session.present, session.version, session.failed)
+    # failed=False is a literal: a failed scan exits 2 before this line prints.
+    return "mode=gitleaks gitleaks_present=%s version=%s failed=False" % (
+        session.present, session.version)
 
 
 def worse_items(corpus, cand_out, ref_out):
@@ -567,18 +631,29 @@ def run_case(args, session):
 
 
 def selftest():
-    """Score three hand-made outputs; the marker rule is AC6b."""
-    piece = "AKIA" + rs(random.Random(1), UPDIG, 16)
+    """Score hand-made outputs; the marker rule is AC6b."""
+    r = random.Random(1)
+    body = rs(r, UPDIG, 16)
+    piece = Piece("AKIA" + body, [body])
+    lbody = rs(r, LO + DIG, 40)
+    low = Piece("pul-" + lbody, [lbody])  # lowercase, digits, hyphen: a legal marker name
+    hbody = rs(r, B64, 45)
+    hook = Piece("https://hooks.slack.com/services/" + hbody, [hbody])
+    # (name, planted piece, output, expected score; None = any score of 4 or more)
     checks = [
-        ("raw-piece", piece, len(piece)),
-        ("valid-marker", "<redacted:aws-access-key>", 0),
-        ("uppercase-marker", "<redacted:%s>" % piece, len(piece)),
+        ("raw-piece", piece, piece, len(piece)),
+        ("valid-marker", piece, "<redacted:aws-access-key>", 0),
+        ("uppercase-marker", piece, "<redacted:%s>" % piece, len(piece)),
+        ("piece-in-marker-name", low, "<redacted:%s>" % lbody[:30], None),
+        ("long-marker", low, "<redacted:%s>" % low[:41], None),
+        ("digit-hyphen-marker", piece, "<redacted:a1-b2-c3>", 0),
+        ("shape-text-in-marker-name", hook, "<redacted:slack-token>", 0),
     ]
     ok = True
-    for name, out, expect in checks:
-        score = leak_score([piece], out)
+    for name, planted, out, expect in checks:
+        score = leak_score([planted], out)
         print("check=%s score=%d" % (name, score))
-        ok = ok and score == expect
+        ok = ok and (score >= MIN_RUN if expect is None else score == expect)
     return 0 if ok else 1
 
 
@@ -594,18 +669,44 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("fuzz", parents=[common])
     f.add_argument("--mode", choices=["builtin", "gitleaks"], required=True)
-    f.add_argument("--seed", type=int, default=1)
-    f.add_argument("--n", type=int, default=3000)
-    f.add_argument("--confirm-cap", type=int, default=40)
+    # default=None tells "not given" from "given": see check_args.
+    f.add_argument("--seed", type=int)
+    f.add_argument("--n", type=int)
+    f.add_argument("--confirm-cap", type=int)
     c = sub.add_parser("case", parents=[common])
     c.add_argument("--name", choices=sorted(CASES), required=True)
     sub.add_parser("selftest")
     return p
 
 
+def check_args(args):
+    """Reject a bad sha and an option the mode ignores; fill the mode defaults.
+
+    A flag that is silently ignored would let a caller think it took effect.
+    The rejected sha is not echoed: only the flag name.
+    """
+    for flag in ("candidate_sha", "reference_sha"):
+        value = getattr(args, flag)
+        if value is not None and not SHA_RE.match(value):
+            raise HarnessError("bad sha: --%s" % flag.replace("_", "-"))
+    if args.cmd != "fuzz":
+        return
+    unused = (("--seed", args.seed), ("--n", args.n)) if args.mode == "gitleaks" \
+        else (("--confirm-cap", args.confirm_cap),)
+    for flag, value in unused:
+        if value is not None:
+            raise HarnessError("option not used in this mode: %s" % flag)
+    if args.mode == "builtin":
+        args.seed = 1 if args.seed is None else args.seed
+        args.n = 3000 if args.n is None else args.n
+    else:
+        args.confirm_cap = 40 if args.confirm_cap is None else args.confirm_cap
+
+
 def run(args):
     if args.cmd == "selftest":
         return selftest()
+    check_args(args)
     mode = args.mode if args.cmd == "fuzz" else CASES[args.name][1]
     if mode == "gitleaks" and not shutil.which("gitleaks"):
         raise HarnessError("gitleaks not found on PATH (gitleaks mode needs it)")

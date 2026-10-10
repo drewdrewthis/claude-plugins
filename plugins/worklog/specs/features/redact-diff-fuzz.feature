@@ -7,11 +7,11 @@
 Feature: The redact fuzz test catches a redaction that leaks more than the pinned reference
   The helper hooks/tests/redact_diff_fuzz.py scores each text by what is left
   after marker text is cut out. A text is worse when the candidate score is
-  higher than the pinned reference score (sha 0da91ef).
+  higher than the pinned reference score (the PINNED_SHA constant in the helper).
   Exit 0 means no worse text, exit 1 means one or more, exit 2 means the test
   could not run.
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "corpus hash is stable across runs"
+  # proves: hooks/tests/redact-diff-fuzz.bats "corpus hash is stable across runs", "corpus hash follows the seed", "corpus hash at seed 1 and N 200 equals the pinned value on every leg"
   @integration
   Scenario: The corpus hash and verdict follow the seed
     Given the helper runs twice with the same seed and N
@@ -51,7 +51,8 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
   Scenario Outline: The fuzz step runs on both legs inside the time budget
     Given the workflow has a named step that runs redact-diff-fuzz.bats
     When the step runs on <leg>
-    Then the step takes 120 seconds or less
+    Then the step ends in 120 seconds or less
+    And the step timeout of 2 minutes enforces it
 
     Examples:
       | leg           |
@@ -84,7 +85,7 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
     Then it exits 0 and prints outputs_differ=1 and worse=0
     # The outputs differ, yet nothing is worse: marker names do not count.
 
-  # proves: hooks/tests/worklog-record.bats "UUID-CHECK: a valid ask_uuid survives a 1 MB uuid list"
+  # proves: hooks/tests/worklog-record.bats "UUID-CHECK: a valid ask_uuid survives a 1 MB uuid list", "UUID-CHECK: a valid end_uuid survives a long uuid list"
   @integration
   Scenario: A large uuid list does not drop the asked uuid
     Given a transcript whose uuid lines total 1 MB or more with the asked uuid on the first line
@@ -96,7 +97,7 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
   @integration
   Scenario: The hook has no pipe into grep -Fxq
     Given the fixed hook file
-    When grep -cF '| grep -Fxq' runs on it
+    When grep -cE for a pipe into an early-exit grep (grep -q, -Fxq) runs on it
     Then the count is 0
     And the comment at the uuid check names SIGPIPE, pipefail and exit 141
 
@@ -140,7 +141,7 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
   @integration
   Scenario: The builtin fuzz fails a known-bad lib
     Given the lib of 05b2460 is the candidate
-    When the helper runs in builtin mode at seed 2 with N 3000
+    When the helper runs in builtin mode at seed 2 with N 1000
     Then it exits 1 and prints worse=N with N above 0
 
   # proves: hooks/tests/redact-diff-fuzz.bats "gitleaks fuzz has teeth against f1f1f8a"
@@ -150,7 +151,7 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
     When the helper scans the first 1000 texts of the pairs enumeration
     Then it exits 1 and prints flagged=A confirmed=B worse=B with B at least 1
 
-  # proves: hooks/tests/redact-diff-fuzz.bats "failure mode 1 exits 2 when the pinned sha is not in the clone", "failure mode 2 exits 2 when the bad commit is not in the clone", "failure mode 3 exits 2 when gitleaks mode has no gitleaks", "failure mode 4 exits 2 when gitleaks is visible in builtin mode", "failure mode 5 exits 2 when the candidate raises", "failure mode 6 exits 2 when the output count differs from the input count", "failure mode 7 exits 2 when gitleaks reports failed", "failure mode 8 exits 2 when over the cap and none of the first flagged is confirmed", "failure mode 9 exits 2 when a lib reports no gitleaks in gitleaks mode"
+  # proves: hooks/tests/redact-diff-fuzz.bats "failure mode 1 exits 2 when the pinned sha is not in the clone", "failure mode 2 exits 2 when the bad commit is not in the clone", "failure mode 3 exits 2 when gitleaks mode has no gitleaks", "failure mode 4 exits 2 when gitleaks is visible in builtin mode", "failure mode 5 exits 2 when the candidate raises", "failure mode 6 exits 2 when the output count differs from the input count", "failure mode 7 exits 2 when gitleaks reports failed", "failure mode 8 exits 2 when over the cap and none of the first flagged is confirmed", "failure mode 9 exits 2 when a lib reports no gitleaks in gitleaks mode", "failure mode 10 exits 2 when an option is not used in the mode", "failure mode 11 exits 2 on a malformed sha"
   @integration
   Scenario Outline: Setup failures exit 2 with a named stderr token
     Given the setup <setup>
@@ -167,8 +168,10 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
       | 5   | the candidate raises                                               | candidate error                          |
       | 6   | the output count differs from the input count                      | output count                             |
       | 7   | gitleaks reports failed true                                       | gitleaks failed                          |
-      | 8   | more than 40 flagged texts and none of the first 40 is confirmed worse alone | too many to confirm            |
+      | 8   | more flagged texts than the cap and none of the first flagged is confirmed worse alone | too many to confirm            |
       | 9   | gitleaks mode and a lib reports no gitleaks                        | gitleaks not present in gitleaks mode    |
+      | 10  | --seed or --n in gitleaks mode, or --confirm-cap in builtin mode   | option not used in this mode: <flag>     |
+      | 11  | --candidate-sha or --reference-sha is not 7 to 40 lowercase hex    | bad sha: <flag> (the value is not echoed) |
 
   # proves: hooks/tests/redact-diff-fuzz.bats "more flagged than the cap, with a confirmed text, exits 1"
   @integration
@@ -184,6 +187,17 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
     When the helper self-test scores the text
     Then the piece is kept in the leak score
 
+  # proves: hooks/tests/redact-diff-fuzz.bats "marker with a name outside the allowed set keeps its piece"
+  @unit
+  Scenario: A marker named after a planted piece is not cut out
+    Given a well-formed marker whose name shares 6 or more consecutive chars with a random part of a planted piece
+    And a marker of 41 name chars that holds the piece
+    And a well-formed marker with digits and hyphens that shares nothing with the piece
+    And a well-formed marker that shares only fixed shape text with a piece
+    When the helper self-test scores each text
+    Then the first two keep the piece (score 4 or more) and the last two score 0
+    # Real names such as aws-access-key are still cut out for the real corpus.
+
   # proves: hooks/tests/redact-diff-fuzz.bats "gitleaks finds no leak in the helper", "gitleaks finds no leak in this bats file", "builtin fuzz has teeth against 05b2460"
   @integration
   Scenario: The test files hold no real secret and the output does not echo planted pieces
@@ -194,9 +208,13 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
 
   # proves: hooks/tests/redact-diff-fuzz.bats "the pinned sha appears once outside the changelogs and that is the helper"
   @integration
-  Scenario: The helper header states the pin rule
+  Scenario: The pinned sha stands in one file outside the changelogs
     Given the helper file header states the pin rule
     Then git grep -c <the full pinned sha> -- . ':(exclude)*CHANGELOG.md' prints the helper with count 1
+
+  # Note: the "clean with the candidate" runs compare redact.py with an equal
+  # pinned copy today, so they can fail only after a change to redact.py. The
+  # teeth runs are the failing side.
 
   # --- AC Coverage Map ---
   # AC1   : The corpus hash and verdict follow the seed
@@ -210,6 +228,6 @@ Feature: The redact fuzz test catches a redaction that leaks more than the pinne
   # AC5   : The builtin fuzz fails a known-bad lib
   # AC5b  : The gitleaks fuzz fails a known-bad lib
   # AC6   : Setup failures exit 2 with a named stderr token; A confirmed text among the first 40 gives exit 1, not exit 2
-  # AC6b  : A planted piece inside an odd-named marker still counts as leaked
+  # AC6b  : A planted piece inside an odd-named marker still counts as leaked; A marker named after a planted piece is not cut out
   # AC7   : The test files hold no real secret and the output does not echo planted pieces
-  # AC9   : The helper header states the pin rule
+  # AC9   : The pinned sha stands in one file outside the changelogs

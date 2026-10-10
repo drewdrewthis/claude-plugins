@@ -2745,7 +2745,7 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
   elapsed=$((SECONDS - t0))
   [ "$(field .ask_uuid)" = "$U1" ]
   # A wide bound on purpose: it only catches a match that goes quadratic or
-  # hangs. A tight one (5 s) failed under machine load with a correct hook.
+  # hangs.
   echo "# hook run: ${elapsed}s" >&3
   [ "$elapsed" -le 60 ]
 }
@@ -2765,7 +2765,7 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
   elapsed=$((SECONDS - t0))
   [ "$(field .end_uuid)" = "$U2" ]
   # A wide bound on purpose: it only catches a match that goes quadratic or
-  # hangs. A tight one (5 s) failed under machine load with a correct hook.
+  # hangs.
   echo "# hook run: ${elapsed}s" >&3
   [ "$elapsed" -le 60 ]
 }
@@ -2822,9 +2822,11 @@ glued_line() { printf '%s\r{"type":"queue-operation"}\n' "$1"; }
   [ "$(jq -c .end_uuid "$WORKLOG_JSONL")" = "null" ]
 }
 
-# Under pipefail a `printf | grep -Fxq` pipe nulls valid uuids (SIGPIPE, 141).
+# A tripwire, not the proof: under pipefail any pipe into an early-exit grep
+# (grep -q, -Fxq, ...) can null valid uuids (SIGPIPE, 141). The two
+# long-list tests above are the behaviour proof.
 @test "UUID-CHECK: the hook checks uuids without a grep pipe" {
-  run grep -cF '| grep -Fxq' "$HOOK"
+  run grep -cE '\|[[:space:]]*grep[^|]*[[:space:]]-[a-zA-Z]*q' "$HOOK"
   [ "$output" = "0" ]
 }
 
