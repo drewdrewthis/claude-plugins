@@ -12,6 +12,9 @@
 #     --why-file <dir>/why.txt --source-file <dir>/source.txt \
 #     --evidence-file <dir>/evidence.txt
 #
+# --root must resolve to the same directory as $CODEX_ROOT (and may be given
+# once); anything else is refused before any check runs.
+#
 # The metadata fields also accept inline forms (--why/--source/--evidence);
 # prefer the -file forms for transcript-derived text — nothing is ever
 # assembled into shell source, so there is no quoting or escaping to get wrong.
@@ -33,7 +36,12 @@
 # grooming queue (<state-dir>/grooming-queue.md via stores.sh procedures_state_dir):
 #   0. set `mistakes.jsonl merge=union` in this clone's info/attributes
 #   1. pull --rebase (only when an upstream is configured)
-#   2. normalize frontmatter of the record paths (idempotent, in place)
+#   2. normalize frontmatter of the record paths (idempotent, in place); the
+#      rename to the id's slug BLOCKS, with the file unmoved, unless the slug
+#      passes stores_check_slug (one ASCII [A-Za-z0-9._-] component, no `..`,
+#      no dot/dash edge, not an auto-loaded memory name such as CLAUDE.md) and
+#      the target stays in the record's own directory. A --paths entry or a
+#      staged path that is an auto-loaded memory file BLOCKS (memory-file).
 #   3. validate — baseline: fence-block, size cap, check-sanitization.sh,
 #      check-sections.sh, whole-root duplicate-id scan, case-twin scan,
 #      lint-frontmatter.sh
@@ -94,6 +102,7 @@ Usage: commit-records.sh --root PATH --paths "p1.md p2.md [mistakes.jsonl]" \
        commit-records.sh --normalize --root PATH --paths "p1.md p2.md"
        commit-records.sh --release-quarantine PATH
 
+CODEX_ROOT must be set to the same directory as --root (given once).
 Prefer the -file forms for transcript-derived text; nothing is ever
 assembled into shell source. A -file path must live under the procedures
 state dir, typically <state-dir>/tmp/commit-<root-slug>/. The
@@ -217,7 +226,9 @@ while [ "$#" -gt 0 ]; do
             | --why-file | --source-file | --evidence-file)
             [ "$#" -ge 2 ] || usage_err "option '$1' requires a value"
             case "$1" in
-                --root) ROOT="$2" ;;
+                --root)
+                    [ -z "$ROOT" ] || usage_err "--root given more than once"
+                    ROOT="$2" ;;
                 --paths) PATHS_RAW="$2" ;;
                 --what) WHAT="$2" ;;
                 --why) WHY="$2"; WHY_INLINE=1 ;;
@@ -248,6 +259,17 @@ unset _META_VALUE
 [ -n "$ROOT" ] || usage_err "--root is required"
 [ -d "$ROOT" ] || usage_err "--root '$ROOT' is not a directory"
 [ -n "$PATHS_RAW" ] || usage_err "--paths is required"
+# --root must be the root the caller pinned in CODEX_ROOT. The headless
+# librarian's allow rule fixes the CODEX_ROOT= prefix per store root but not
+# every later argument, and this gate runs <root>/scripts/validate.sh, the
+# root's git hooks, and a push — so a free --root would run another repo's code.
+[ -n "${CODEX_ROOT:-}" ] || usage_err "CODEX_ROOT must be set to the same directory as --root"
+_cr_want="$(cd "$CODEX_ROOT" 2>/dev/null && pwd -P)" \
+    || usage_err "CODEX_ROOT '$CODEX_ROOT' is not a directory"
+_cr_got="$(cd "$ROOT" && pwd -P)" || usage_err "cannot resolve --root '$ROOT'"
+[ "$_cr_got" = "$_cr_want" ] \
+    || usage_err "--root '$ROOT' is not CODEX_ROOT '$CODEX_ROOT'; refusing"
+unset _cr_want _cr_got
 
 # Absolute root (paths are root-relative; git -C uses $ROOT).
 ROOT="$(cd "$ROOT" && pwd)"
@@ -398,6 +420,30 @@ _slug_of_id() {
     esac
 }
 
+# _check_id_slug <slug> <rel> — BLOCK unless <slug> is one safe filename
+# component: stores_check_slug, the same rule as log-record.sh's --slug check
+# (ASCII [A-Za-z0-9._-] only, no `..`, not a dot or dash edge, and never an
+# auto-loaded memory name such as CLAUDE.md). The slug comes from the record's
+# frontmatter id, which the headless librarian writes from untrusted transcripts.
+_check_id_slug() {
+    local why
+    why="$(stores_check_slug "$1")" \
+        || _abort id-slug "id slug '$1' $why; file left in place: $2"
+}
+
+# _check_same_dir <abs> <newabs> <rel> — BLOCK unless the rename target's
+# physical parent dir is the source's physical parent dir, so a rename never
+# moves a record to another directory.
+_check_same_dir() {
+    local src dst
+    src="$(cd "$(dirname -- "$1")" 2>/dev/null && pwd -P)" \
+        || _abort id-slug "cannot resolve directory of: $3"
+    dst="$(cd "$(dirname -- "$2")" 2>/dev/null && pwd -P)" \
+        || _abort id-slug "rename target directory does not resolve; file left in place: $3"
+    [ "$src" = "$dst" ] \
+        || _abort id-slug "rename would leave the record's directory ($dst != $src); file left in place: $3"
+}
+
 # normalize_and_collect — normalize every record path; rename the file so its
 # kebab-slug matches id. Updates FINAL_PATHS (what gets committed) and REC_PATHS
 # (record .md paths for validation) with any post-rename path.
@@ -431,8 +477,14 @@ normalize_and_collect() {
                         base="$(basename "$rel")"; dir="$(dirname "$rel")"
                         want="${slug}.md"
                         if [ "$base" != "$want" ]; then
+                            # The new name comes from file content (the id), so
+                            # it must stay one filename component in the same
+                            # directory before anything moves. A bad id blocks
+                            # with the record left where it is.
+                            _check_id_slug "$slug" "$rel"
                             [ "$dir" = "." ] && newrel="$want" || newrel="$dir/$want"
                             newabs="$ROOT/$newrel"
+                            _check_same_dir "$abs" "$newabs" "$rel"
                             # Never overwrite an existing DIFFERENT file: two
                             # records that resolve to the same slug (e.g. a
                             # duplicate id) must both survive so the dup-id scan
@@ -490,6 +542,19 @@ _rebuild_index() {
         _abort index "build-record-index failed: $(printf '%s' "$idx_out" | tr '\n' ' ')"
     fi
 }
+
+# ---- memory-file guard ----
+# A --paths entry whose basename Claude Code auto-loads as instructions
+# (CLAUDE.md, CLAUDE.local.md, AGENTS.md, case-insensitively) or that sits
+# under a .claude/ dir BLOCKS before anything is normalized or renamed: a later
+# session with its cwd in the store would read it as instructions. See
+# stores_is_memory_path. The id rename (normalize_and_collect) and the staged
+# set (before the commit) are checked against the same names.
+for _p in ${PATHS[@]+"${PATHS[@]}"}; do
+    stores_is_memory_path "$_p" \
+        && _abort memory-file "path names a file Claude Code auto-loads as instructions; nothing staged: $_p"
+done
+unset _p
 
 # ---- normalize-only mode (AC4 evidence) ----
 if [ -n "$NORMALIZE_ONLY" ]; then
@@ -818,6 +883,17 @@ _drop_lines() {
 
 JSONL_QUARANTINED=""
 [ -z "$JSONL" ] || _stage_jsonl
+# Staged memory-file guard: whatever is in the index commits, including a
+# path staged outside this call, so refuse the commit when any staged path is
+# an auto-loaded memory file (stores_is_memory_path). -z: without it git
+# C-quotes a non-ASCII path, and the trailing quote would hide the basename.
+_staged="$(git -C "$ROOT" diff --cached --name-only --no-renames -z 2>/dev/null | tr '\0' '\n' && printf x)" \
+    || _abort memory-file "cannot list the staged paths for $ROOT"
+while IFS= read -r _sp; do
+    [ -n "$_sp" ] && stores_is_memory_path "$_sp" \
+        && _abort memory-file "staged path names a file Claude Code auto-loads as instructions; not committing: $_sp"
+done <<< "${_staged%x}"
+unset _sp _staged
 if git -C "$ROOT" diff --cached --quiet; then
     printf '%s: nothing to commit\n' "$prog"
     exit 0

@@ -18,6 +18,8 @@ setup() {
   QUEUE="$PROCEDURES_STATE_DIR/grooming-queue.md"
   ROOT="$FIX/root"
   _init_root "$ROOT"
+  # The gate refuses a --root that is not $CODEX_ROOT; the default fixture pins it.
+  export CODEX_ROOT="$ROOT"
 }
 # teardown — remove the tmp fixture tree. Runs after every test.
 teardown() { rm -rf "$FIX"; }
@@ -60,9 +62,12 @@ y
 EOF
 }
 
-# _run_gate <args…> — run the gate with push skipped (COMMIT_RECORDS_NO_PUSH=1).
+# _run_gate <args…> — run the gate with push skipped (COMMIT_RECORDS_NO_PUSH=1),
+# with CODEX_ROOT pinned to the --root it is given (the gate requires a match).
 _run_gate() {  # COMMIT_RECORDS_NO_PUSH by default
-  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" "$@"
+  local a r="$CODEX_ROOT" prev=""
+  for a in "$@"; do [ "$prev" = --root ] && r="$a"; prev="$a"; done
+  CODEX_ROOT="$r" COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" "$@"
 }
 
 # _commit_count — number of commits on HEAD in $ROOT.
@@ -245,7 +250,7 @@ exit $rc
 EOF
   chmod +x "$LW/scripts/validate.sh"
   _fm "$LW/records/failure-modes/bare.md" fm.bare
-  PROCEDURES_STATE_DIR="$FIX/state" COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+  PROCEDURES_STATE_DIR="$FIX/state" COMMIT_RECORDS_NO_PUSH=1 run env CODEX_ROOT="$LW" bash "$GATE" \
     --root "$LW" --paths "records/failure-modes/bare.md .index" --what x --why w --source s --evidence e
   [ "$status" -ne 0 ]
   [[ "$output" == *"per-store-validate"* ]]
@@ -319,7 +324,7 @@ EOF
   _remote_fixture "records/failure-modes/contested.md" fm.contested
   _fm "$A/records/failure-modes/contested.md" fm.contested LOCAL
   # push NOT skipped here
-  PROCEDURES_STATE_DIR="$FIX/state" run bash "$GATE" \
+  PROCEDURES_STATE_DIR="$FIX/state" run env CODEX_ROOT="$A" bash "$GATE" \
     --root "$A" --paths "records/failure-modes/contested.md .index" --what x --why w --source s --evidence e
   [ "$status" -ne 0 ]
   [[ "$output" == *"BLOCK [push]"* ]]
@@ -431,7 +436,7 @@ EOF
 @test "AC21: push retry — rebase imports an upstream duplicate id and is blocked" {
   _remote_fixture "records/failure-modes/remote.md" fm.same
   _fm "$A/records/failure-modes/local.md" fm.same LOCAL
-  PROCEDURES_STATE_DIR="$FIX/state" run bash "$GATE" \
+  PROCEDURES_STATE_DIR="$FIX/state" run env CODEX_ROOT="$A" bash "$GATE" \
     --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
   [ "$status" -ne 0 ]
   [[ "$output" == *"BLOCK [duplicate-id]"* ]]
@@ -443,7 +448,7 @@ EOF
 @test "AC22: push retry — rebase imports a distinct upstream record, reindexes, and pushes" {
   _remote_fixture "records/failure-modes/remote.md" fm.remote
   _fm "$A/records/failure-modes/local.md" fm.local LOCAL
-  PROCEDURES_STATE_DIR="$FIX/state" run bash "$GATE" \
+  PROCEDURES_STATE_DIR="$FIX/state" run env CODEX_ROOT="$A" bash "$GATE" \
     --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
   [ "$status" -eq 0 ]
   [[ "$output" == *"committed and pushed"* ]]
@@ -470,7 +475,7 @@ _clone() {
   git -C "$A" add mistakes.jsonl; git -C "$A" commit -qm jsonl; git -C "$A" push -q origin main
   printf '{"b":2}\n' >> "$A/mistakes.jsonl"                                  # log-record.sh-style append
   _fm "$A/records/failure-modes/local.md" fm.local LOCAL
-  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+  COMMIT_RECORDS_NO_PUSH=1 run env CODEX_ROOT="$A" bash "$GATE" \
     --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
   [ "$status" -eq 0 ]
   git -C "$A" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
@@ -483,7 +488,7 @@ _clone() {
   git -C "$B" commit -qam remote; git -C "$B" push -q origin main
   _fm "$A/records/failure-modes/anchor.md" fm.anchor LOCAL-EDIT
   pre="$(git -C "$A" rev-parse HEAD)"
-  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+  COMMIT_RECORDS_NO_PUSH=1 run env CODEX_ROOT="$A" bash "$GATE" \
     --root "$A" --paths "records/failure-modes/anchor.md" --what x --why w --source s --evidence e
   [ "$status" -ne 0 ]
   [[ "$output" == *"BLOCK [pull]"* ]]
@@ -504,7 +509,7 @@ _clone() {
   printf '{"remote":1}\n' >> "$B/mistakes.jsonl"; git -C "$B" commit -qam remote; git -C "$B" push -q origin main
   printf '{"local":1}\n' >> "$A/mistakes.jsonl"
   _fm "$A/records/failure-modes/local.md" fm.local LOCAL
-  COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+  COMMIT_RECORDS_NO_PUSH=1 run env CODEX_ROOT="$A" bash "$GATE" \
     --root "$A" --paths "records/failure-modes/local.md" --what x --why w --source s --evidence e
   [ "$status" -eq 0 ]
   git -C "$A" log -1 --name-only --format= | grep -q "records/failure-modes/local.md"
@@ -524,7 +529,7 @@ _clone() {
   git -C "$B" pull -q
   printf '{"fromB":1}\n' >> "$B/mistakes.jsonl"; git -C "$B" commit -qam b; git -C "$B" push -q origin main
   printf '{"fromA":1}\n' >> "$A/mistakes.jsonl"
-  run bash "$GATE" --root "$A" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
+  run env CODEX_ROOT="$A" bash "$GATE" --root "$A" --paths "mistakes.jsonl" --what "1 mistake" --why w --source s --evidence e
   [ "$status" -eq 0 ]
   [[ "$output" == *"committed and pushed"* ]]
   local remote_rows; remote_rows="$(git -C "$REMOTE" show main:mistakes.jsonl)"
@@ -1077,4 +1082,165 @@ _glued_head() {
   run _log_mistake new-row
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$ROOT/mistakes.jsonl")" -eq 2 ]
+}
+
+# ---- --root pinned to CODEX_ROOT (headless allowlist leaves later args open) ----
+
+# _other_repo — a second git root whose scripts/validate.sh drops a marker if run.
+_other_repo() {
+  OTHER="$FIX/other"
+  _init_root "$OTHER"
+  mkdir -p "$OTHER/scripts"
+  printf '#!/usr/bin/env bash\ntouch "%s/validate-ran"\n' "$FIX" > "$OTHER/scripts/validate.sh"
+  chmod +x "$OTHER/scripts/validate.sh"
+  _fm "$OTHER/records/failure-modes/rec.md" fm.rec
+}
+
+@test "root pin: a --root that is not CODEX_ROOT is refused before any check runs" {
+  _other_repo
+  local before; before="$(git -C "$OTHER" rev-list --count HEAD)"
+  CODEX_ROOT="$ROOT" COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+    --root "$OTHER" --paths "records/failure-modes/rec.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"is not CODEX_ROOT"* ]]
+  [ ! -e "$FIX/validate-ran" ]
+  [ "$(git -C "$OTHER" rev-list --count HEAD)" -eq "$before" ]
+}
+
+@test "root pin: an unset CODEX_ROOT is refused" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  run env -u CODEX_ROOT COMMIT_RECORDS_NO_PUSH=1 bash "$GATE" \
+    --root "$ROOT" --paths "records/failure-modes/rec.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"CODEX_ROOT must be set"* ]]
+}
+
+@test "root pin: a second --root after the pinned one is refused" {
+  _other_repo
+  CODEX_ROOT="$ROOT" COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" --root "$ROOT" \
+    --paths "records/failure-modes/rec.md" --root "$OTHER" --what x --why w --source s --evidence e
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--root given more than once"* ]]
+  [ ! -e "$FIX/validate-ran" ]
+}
+
+@test "root pin: a CODEX_ROOT symlink to the same dir as --root is accepted" {
+  ln -s "$ROOT" "$FIX/root-link"
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  CODEX_ROOT="$FIX/root-link" COMMIT_RECORDS_NO_PUSH=1 run bash "$GATE" \
+    --root "$ROOT" --paths "records/failure-modes/rec.md" --what x --why w --source s --evidence e
+  [ "$status" -eq 0 ]
+}
+
+# ---- id slug: normalize's rename never leaves the record's directory ----
+# _evil_fm <path> <id> — a valid record whose id would rename it elsewhere.
+_evil_fm() { _fm "$1" fm.placeholder; sed -i.bak "s|^id: .*|id: $2|" "$1"; rm -f "$1.bak"; }
+
+@test "id slug: a traversal id BLOCKS before any move; the file stays put, nothing lands outside" {
+  _evil_fm "$ROOT/records/failure-modes/evil.md" 'fm./../../../pwn2'
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/evil.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [id-slug]"* ]]
+  [ -f "$ROOT/records/failure-modes/evil.md" ]
+  [ ! -e "$FIX/pwn2.md" ] && [ ! -e "$ROOT/pwn2.md" ] && [ ! -e "$ROOT/records/pwn2.md" ]
+  [ -z "$(find "$FIX" -name 'pwn2*' -print)" ]
+  [ "$(_commit_count)" -eq "$before" ]
+  grep -q "check: id-slug" "$QUEUE"
+}
+
+@test "id slug: --normalize alone also refuses a traversal id and moves nothing" {
+  _evil_fm "$ROOT/records/failure-modes/evil.md" 'fm.x/../../escaped'
+  run bash "$GATE" --normalize --root "$ROOT" --paths "records/failure-modes/evil.md"
+  [ "$status" -ne 0 ]
+  [ -f "$ROOT/records/failure-modes/evil.md" ]
+  [ -z "$(find "$FIX" -name 'escaped*' -print)" ]
+}
+
+@test "id slug: a character outside [A-Za-z0-9._-] BLOCKS and the file stays put" {
+  _evil_fm "$ROOT/records/failure-modes/odd.md" 'fm.a;b$c'
+  _run_gate --root "$ROOT" --paths "records/failure-modes/odd.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [id-slug]"* ]]
+  [ -f "$ROOT/records/failure-modes/odd.md" ]
+  [ "$(find "$ROOT/records/failure-modes" -name '*.md' | wc -l | tr -d ' ')" -eq 2 ]
+}
+
+# ---- memory-file names: never a rename target, a --paths entry, or staged ----
+@test "id slug: id dec.CLAUDE (any case) BLOCKS the rename to CLAUDE.md; the file stays put" {
+  local id
+  for id in dec.CLAUDE dec.claude dec.Agents dec.CLAUDE.local; do
+    rm -f "$QUEUE"
+    _evil_fm "$ROOT/records/decisions/mem.md" "$id"
+    local before; before=$(_commit_count)
+    _run_gate --root "$ROOT" --paths "records/decisions/mem.md" \
+      --what x --why w --source s --evidence e
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BLOCK [id-slug]"* ]]
+    [[ "$output" == *"auto-loads as instructions"* ]]
+    [ -f "$ROOT/records/decisions/mem.md" ]
+    [ "$(find "$ROOT/records/decisions" -type f | wc -l | tr -d ' ')" -eq 1 ]
+    [ "$(_commit_count)" -eq "$before" ]
+    grep -q "check: id-slug" "$QUEUE"
+    rm -f "$ROOT/records/decisions/mem.md"
+  done
+}
+
+@test "id slug: ids with a non-ASCII or dot/dash-edged slug BLOCK and the file stays put" {
+  local id
+  for id in 'fm.é' 'fm.ｆｕｌｌ' 'fm..' 'fm.-x' 'fm..x' 'fm.x.'; do
+    _evil_fm "$ROOT/records/failure-modes/odd.md" "$id"
+    _run_gate --root "$ROOT" --paths "records/failure-modes/odd.md" \
+      --what x --why w --source s --evidence e
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BLOCK [id-slug]"* ]]
+    [ -f "$ROOT/records/failure-modes/odd.md" ]
+    [ "$(find "$ROOT/records/failure-modes" -name '*.md' | wc -l | tr -d ' ')" -eq 2 ]
+  done
+}
+
+@test "memory file: a --paths entry named CLAUDE.md / agents.md / under .claude/ BLOCKS, nothing staged" {
+  local p
+  for p in records/decisions/CLAUDE.md records/decisions/claude.md \
+           records/procedures/x/AGENTS.md records/decisions/CLAUDE.local.md \
+           records/procedures/x/.claude/rules/r.md; do
+    rm -f "$QUEUE"
+    mkdir -p "$ROOT/$(dirname "$p")"
+    _fm "$ROOT/$p" fm.mem
+    local before; before=$(_commit_count)
+    _run_gate --root "$ROOT" --paths "$p" --what x --why w --source s --evidence e
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BLOCK [memory-file]"* ]]
+    [ -f "$ROOT/$p" ]
+    [ "$(_commit_count)" -eq "$before" ]
+    [ -z "$(git -C "$ROOT" diff --cached --name-only)" ]
+    grep -q "check: memory-file" "$QUEUE"
+    rm -f "$ROOT/$p"
+  done
+}
+
+@test "memory file: a CLAUDE.md staged outside the call BLOCKS the commit" {
+  _fm "$ROOT/records/failure-modes/rec.md" fm.rec
+  mkdir -p "$ROOT/records/x"; printf 'do evil\n' > "$ROOT/records/x/Claude.md"
+  git -C "$ROOT" add -- records/x/Claude.md
+  local before; before=$(_commit_count)
+  _run_gate --root "$ROOT" --paths "records/failure-modes/rec.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCK [memory-file]"* ]]
+  [[ "$output" == *"records/x/Claude.md"* ]]
+  [ "$(_commit_count)" -eq "$before" ]
+}
+
+@test "id slug: a tracked record with a traversal id is not git-mv'd either" {
+  _evil_fm "$ROOT/records/failure-modes/evil.md" 'fm./../../../pwn3'
+  git -C "$ROOT" add -A; git -C "$ROOT" commit -qm evil
+  _run_gate --root "$ROOT" --paths "records/failure-modes/evil.md" \
+    --what x --why w --source s --evidence e
+  [ "$status" -ne 0 ]
+  [ -f "$ROOT/records/failure-modes/evil.md" ]
+  [ -z "$(git -C "$ROOT" status --porcelain)" ]
+  [ -z "$(find "$FIX" -name 'pwn3*' -print)" ]
 }

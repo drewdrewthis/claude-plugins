@@ -37,7 +37,15 @@ grooming queue (`<state-dir>/grooming-queue.md`, resolved via
    order (the seven keys of `std.record-frontmatter`, then any extra keys in
    original order), `links: {}` when empty, trailing whitespace stripped, and
    the filename kebab-slug made to match the `id` (`<prefix>.<slug>` →
-   `<slug>.md`). Idempotent and in place.
+   `<slug>.md`). Idempotent and in place. The slug comes from file content,
+   so before any rename it must be one ASCII `[A-Za-z0-9._-]` filename
+   component with no `..`, not `.`, not starting with `-` or `.`, not ending
+   with `.`, and not naming a file Claude Code auto-loads as instructions
+   (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, any case), and the target
+   must resolve to the record's own directory; otherwise the gate blocks
+   (`id-slug`) and the file stays where it is. A `--paths` entry or a staged
+   path with one of those basenames, or under a `.claude/` dir, blocks too
+   (`memory-file`).
 3. **Validate — baseline** (all rejections abort+queue):
    - **Frontmatter** — `lint-frontmatter.sh` (schema keys present, `id` unique
      within the root, `links:` resolve, `keywords:` non-empty).
