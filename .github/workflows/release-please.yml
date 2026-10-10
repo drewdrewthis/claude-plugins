@@ -27,7 +27,10 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-      - uses: actions/checkout@v4
+      # The script and config come from the pushed commit, while release-please reads
+      # the head of main: a plugin added by a later push can give one red run that the next run clears.
+      - name: Check out the repair script
+        uses: actions/checkout@v4
         if: ${{ !cancelled() }}
         with:
           persist-credentials: false

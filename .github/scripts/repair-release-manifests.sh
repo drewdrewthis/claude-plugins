@@ -14,12 +14,17 @@
 # differs from main's head and still merges cleanly, so a head comparison would
 # "repair" healthy branches.
 #
+# The rule assumes one release branch changes one manifest line (no linked-versions
+# or workspace plugin in the config).
+#
 # Fix: one normal commit on the release branch (never a force push, never a
 # write to any other path).
 #
 # Usage: GH_TOKEN=... GITHUB_REPOSITORY=owner/repo [BASE_BRANCH=main] [DRY_RUN=1] \
 #          repair-release-manifests.sh <release-please-config.json> <manifest-path>
 # Exit 1 if any release PR could not be checked or repaired. Other PRs still run.
+# Exit 2 on a bad invocation (arguments, config file, GITHUB_REPOSITORY).
+# Needs jq 1.6+.
 set -euo pipefail
 
 usage() {
@@ -41,15 +46,17 @@ checked=0
 
 bad() { echo "::error::$1: $2"; failed=1; }
 
+# `input` makes empty content fail here; jq -e alone passes on empty input.
 # Key order of the merge base is kept so the commit only touches the broken lines.
-decode() { jq -er '.content | gsub("\n"; "") | @base64d' | jq -c .; }
+decode() { jq -er '.content | gsub("\n"; "") | @base64d' | jq -cen 'input | objects'; }
 
 repair_one() {
-  local ref=$1 fork=$2 pending=$3 component key mb head_resp base_json head_json own expected diff blob content
+  local ref=$1 head_sha=$2 foreign=$3 pending=$4 component key mb head_resp base_json head_json expected same changes blob content
 
-  if [[ $fork == true ]]; then
+  if [[ $foreign == true ]]; then
     echo "skip: $ref (head is not in $repo)"
-    echo "::warning::$ref: head is not in $repo; not touched"
+    # The ref is chosen by the outsider, so it stays out of the annotation.
+    echo "::warning::skipped a pull request from another repository that uses the release-please branch prefix"
     return
   fi
 
@@ -57,45 +64,49 @@ repair_one() {
   component=${ref#"$prefix"}
   [[ $component =~ ^[A-Za-z0-9._-]+$ ]] || { bad "$ref" "branch name does not match the release-please pattern"; return; }
   [[ $pending == true ]] || { bad "$ref" "no 'autorelease: pending' label"; return; }
+  # Every read of the branch uses this one commit, so a branch that moves mid-run cannot mix two states.
+  [[ $head_sha =~ ^[0-9a-f]{40}$ ]] || { bad "$ref" "head sha is not a commit sha"; return; }
 
   key=$(jq -r --arg c "$component" '[.packages | to_entries[] | select(.value.component == $c) | .key] | first // empty' "$config") ||
     { bad "$ref" "cannot read $config"; return; }
   [[ -n $key ]] || { bad "$ref" "component '$component' is not in $config"; return; }
 
-  mb=$(gh api "repos/$repo/compare/$base...$ref" | jq -er '.merge_base_commit.sha') ||
-    { bad "$ref" "cannot find the merge base with $base"; return; }
+  mb=$(gh api "repos/$repo/compare/$base...$head_sha" | jq -er '.merge_base_commit.sha') &&
+    [[ $mb =~ ^[0-9a-f]{40}$ ]] || { bad "$ref" "cannot find the merge base with $base"; return; }
   base_json=$(gh api "repos/$repo/contents/$manifest?ref=$mb" | decode) ||
     { bad "$ref" "cannot read $manifest at merge base $mb"; return; }
-  head_resp=$(gh api "repos/$repo/contents/$manifest?ref=$ref") ||
+  head_resp=$(gh api "repos/$repo/contents/$manifest?ref=$head_sha") ||
     { bad "$ref" "cannot read $manifest on the branch"; return; }
   head_json=$(decode <<< "$head_resp") || { bad "$ref" "$manifest on the branch is not valid JSON"; return; }
   blob=$(jq -er '.sha' <<< "$head_resp") || { bad "$ref" "no blob sha for $manifest on the branch"; return; }
-  own=$(jq -ec --arg k "$key" '.[$k] | select(. != null)' <<< "$head_json") ||
+  expected=$(jq -ce --arg k "$key" --argjson h "$head_json" \
+    'if $h[$k] == null then error("own line missing") else .[$k] = $h[$k] end' <<< "$base_json") ||
     { bad "$ref" "own line $key is missing from $manifest on the branch"; return; }
 
-  expected=$(jq -c --arg k "$key" --argjson v "$own" '.[$k] = $v' <<< "$base_json") || { bad "$ref" "cannot build the expected manifest"; return; }
-  if jq -en --argjson a "$expected" --argjson b "$head_json" '$a == $b' > /dev/null; then
+  same=$(jq -n --argjson a "$expected" --argjson b "$head_json" '$a == $b') ||
+    { bad "$ref" "cannot compare the manifests"; return; }
+  if [[ $same == true ]]; then
     echo "ok: $ref"
     return
   fi
 
-  diff=$(jq -nr --argjson a "$head_json" --argjson b "$expected" \
+  changes=$(jq -nr --argjson a "$head_json" --argjson b "$expected" \
     '[($a + $b | keys[]) as $k | select($a[$k] != $b[$k]) | "\($k) \($a[$k] // "absent") -> \($b[$k] // "absent")"] | join(", ")' |
     tr -d '\r\n') || { bad "$ref" "cannot describe the difference"; return; }
 
   if [[ ${DRY_RUN:-} == 1 ]]; then
-    echo "would repair: $ref ($diff)"
+    echo "would repair: $ref ($changes)"
     return
   fi
 
-  content=$(jq --indent 2 . <<< "$expected" | base64 -w0) || { bad "$ref" "cannot encode the repair"; return; }
+  content=$(jq --indent 2 . <<< "$expected" | base64 | tr -d '\n') || { bad "$ref" "cannot encode the repair"; return; }
   # One attempt: a 409 means the branch moved, and the next run re-checks it.
   gh api -X PUT "repos/$repo/contents/$manifest" \
     -f "message=chore(release): restore manifest lines set back by release-please" \
     -f "content=$content" -f "sha=$blob" -f "branch=$ref" > /dev/null ||
     { bad "$ref" "could not write the repair commit"; return; }
-  echo "repaired: $ref ($diff)"
-  echo "::warning::$ref: restored manifest lines set back by release-please ($diff)"
+  echo "repaired: $ref ($changes)"
+  echo "::warning::$ref: restored manifest lines set back by release-please ($changes)"
 }
 
 pulls=$(gh api --paginate "repos/$repo/pulls?state=open&base=$base&per_page=100") ||
@@ -103,14 +114,15 @@ pulls=$(gh api --paginate "repos/$repo/pulls?state=open&base=$base&per_page=100"
 
 # --paginate may concatenate arrays; jq reads each as its own value.
 list=$(jq -r --arg p "$prefix" --arg repo "$repo" '.[] | select(.head.ref | startswith($p)) |
-  [.head.ref, ((.head.repo.full_name // "") != $repo), ([.labels[].name] | index("autorelease: pending") != null)] | @tsv' <<< "$pulls") ||
+  [.head.ref, (.head.sha // "none"), ((.head.repo.full_name // "") != $repo), any(.labels[]; .name == "autorelease: pending")] | @tsv' <<< "$pulls") ||
   { echo "::error::cannot parse the pull request list"; exit 1; }
 
 if [[ -n $list ]]; then
-  while IFS=$'\t' read -r ref fork pending; do
+  # fd 3, so nothing inside the loop can consume the list.
+  while IFS=$'\t' read -r -u 3 ref head_sha foreign pending; do
     checked=$((checked + 1))
-    repair_one "$ref" "$fork" "$pending"
-  done <<< "$list"
+    repair_one "$ref" "$head_sha" "$foreign" "$pending"
+  done 3<<< "$list"
 fi
 
 echo "checked: $checked release PR(s)"

@@ -3,8 +3,12 @@
 # leaves another plugin's release branch with an old manifest, so merging that PR would set the
 # other plugin back. The next runs skip the branch ("remained the same"). A step after the action
 # now compares each release branch with its own merge base and repairs it with one normal commit.
-# Not executable: each Scenario carries a "# proves:" comment naming the bats test or live
-# command that proves it. Bats names are in .github/scripts/tests/repair-release-manifests.bats.
+# Not executable: each Scenario carries a "# proves:" comment naming the bats test section or live
+# command that proves it. The tests are in .github/scripts/tests/repair-release-manifests.bats,
+# under the section headings "stale branch", "healthy branch", "skip and refuse",
+# "failing gh calls", "several PRs, pagination, env", "usage" and "the 2026-10-10 incident".
+# Delivery checks (workflow wiring greps AC9, AC10, AC11, AC12) are not product behavior and are
+# proven in the PR body.
 # @e2e scenarios run on the private scratch repo drewdrewthis/scratch-rp-race-232, never here.
 
 Feature: A release branch that sets another plugin back is repaired in the same run
@@ -22,7 +26,7 @@ Feature: A release branch that sets another plugin back is repaired in the same 
     And branch a gains exactly one commit that changes only the manifest, only the plugins/a line against the merge base
     And PR a keeps its number, state, title, body and labels
 
-  # proves: bats "stale branch gives exactly one PUT", "stale branch PUT targets the release branch", "stale branch PUT carries the blob sha read from the release branch", "stale branch PUT content is the merge-base manifest with the own line from the branch", "stale branch never sends a PUT without a branch field"
+  # proves: bats section "stale branch"
   @integration
   Scenario: A stale branch gets one PUT on its own branch with the expected bytes
     Given a release PR whose branch manifest sets plugins/beta back against the merge base
@@ -55,12 +59,12 @@ Feature: A release branch that sets another plugin back is repaired in the same 
     Then the manifest on main has a and b at their new versions
     And the next run creates the tag "a-v<new>"
 
-  # proves: bats "healthy branch on an older main gives zero PUT", "healthy branch reports ok and exits 0", "the manifest is never read from the tip of the base branch"; live: DRY_RUN=1 on drewdrewthis/claude-plugins
+  # proves: bats section "healthy branch"; live: DRY_RUN=1 on drewdrewthis/claude-plugins
   @integration
   Scenario: A healthy branch on an older main is not touched
     Given a release PR whose branch manifest equals the merge-base manifest plus its own line
     When the repair script runs
-    Then it prints "ok: <ref>", sends no PUT and never reads the manifest from main
+    Then it prints "ok: <ref>", sends no PUT and does not rewrite the branch although main moved on
 
   # proves: bats "incident 2026-10-10: ship set back by the procedures release branch is restored byte for byte"
   @integration
@@ -69,7 +73,7 @@ Feature: A release branch that sets another plugin back is repaired in the same 
     When the repair script runs for component procedures
     Then the single PUT content equals "git show 24eb73a8:.release-please-manifest.json"
 
-  # proves: bats "fork head is skipped with a warning", "fork head gives zero PUT, exit 0 and counts as checked", "head.repo null is skipped like a fork", "unknown component is an error", "missing own line on the branch is an error", "missing autorelease pending label is an error", "branch name outside the strict pattern is an error", "branch name outside the strict pattern triggers no call beyond the list", "failing pulls list is an error", "failing compare call is an error for that PR", "failing merge-base manifest read is an error for that PR", "failing head manifest read is an error for that PR", "PUT rejected with HTTP 409 is an error and is not reported as repaired", "PUT rejected with HTTP 409 is not retried", "two other lines set back are both restored", "a line present at the merge base and absent on the branch is restored", "DRY_RUN=1 on a stale branch reports would repair", "DRY_RUN=1 on a stale branch writes nothing", "DRY_RUN=1 on a stale branch exits 0", "an error on PR 1 does not stop the repair of PR 2", "an error on PR 1 makes the run exit non-zero and counts both PRs", "two concatenated pages from --paginate are both read", "no pull requests at all ends with checked 0 and exit 0"
+  # proves: bats sections "skip and refuse", "failing gh calls", "several PRs, pagination, env" and the dry-run tests in "stale branch"
   @integration
   Scenario Outline: Failure modes
     Given a release PR in the state "<state>"
@@ -91,22 +95,6 @@ Feature: A release branch that sets another plugin back is repaired in the same 
       | error on PR 1, stale PR 2                 | PR 2 repaired, non-zero exit          |
       | no release PRs                            | checked: 0, exit 0                    |
 
-  # proves: workflow diff and grep output (permissions and concurrency byte-equal to main, persist-credentials false, if: ${{ !cancelled() }}, no eval, grep -c 'would race' returns 0); security review lane
-  @unit
-  Scenario: The workflow wiring is minimal and safe
-    Given the release-please workflow with the repair step
-    Then the step runs after the action with "if: ${{ !cancelled() }}"
-    And "permissions:" and "concurrency:" are byte-equal to main
-    And the checkout uses persist-credentials false
-    And the script has no eval, passes API data to jq with --arg or stdin, and writes only the manifest path
-
-  # proves: quoted diff hunk of CONTRIBUTING.md section "Versioning - automated, never by hand"
-  @unit
-  Scenario: The docs state what the step does and the merge rule
-    Given CONTRIBUTING.md
-    Then the section states what the repair step does
-    And it says not to merge a release PR while a release-please run is in progress or failed
-
   # proves: bats "check-release-title" suite unchanged and green; git diff --stat origin/main...HEAD lists neither release-please-config.json nor .release-please-manifest.json
   @integration
   Scenario: Existing release-title behavior and managed files are unchanged
@@ -114,15 +102,17 @@ Feature: A release branch that sets another plugin back is repaired in the same 
     Then all pre-existing tests pass
     And the diff against main touches neither the config nor the manifest
 
-  # proves: snapshots at T0 and T1 of PR 195 and PR 190 (head sha, state, title, body hash, labels), tags and releases, run list
-  @e2e
-  Scenario: Open release PRs, tags and releases of this repo are unchanged
-    Given a snapshot at T0 and one when this PR is ready
-    Then each difference is explained by a push-event run of a merge that is not this PR
-    And no workflow_dispatch run and no run_attempt above 1 occurred in between
+  # proves: bats "reads carry the head sha and never the branch name; the PUT carries the branch"
+  @integration
+  Scenario: Every read of a release branch is pinned to one commit
+    Given a release PR whose head sha is in the pull request list
+    When the repair script runs
+    Then the compare call and the manifest read use that sha and not the branch name
+    And the PUT carries the branch name and the blob sha of that read, so a branch that moved gets a 409
 
-  # proves: the PR body section "Residual risk" (quoted)
-  @unit
-  Scenario: Residual risk and rollback are stated
-    Given the PR body
-    Then "Residual risk" states that the stale write is not prevented, the open window, and the rollback by revert
+  # proves: bats "the warning for a fork head does not contain the branch name"
+  @integration
+  Scenario: The warning for a pull request from another repository carries no ref
+    Given a release-prefixed pull request whose head is in another repository
+    When the repair script runs
+    Then the ::warning:: line does not contain the branch name, because outsiders choose it

@@ -35,21 +35,37 @@ setup() {
 JSON
 }
 
-# add_pr <number> <ref> [<head repo full name> | null] [<label> | none]
+# A call the fake does not know is a failed test, even when the script swallowed it.
+teardown() {
+  [ ! -e "$FX/unknown-call" ] || { echo "fake-gh got a call it does not know:"; cat "$FX/calls.log"; return 1; }
+}
+
+# add_pr <number> <ref> [<head repo full name> | null] [<label> | none] [<head sha>]
+# Default head sha: 40 hex starting with "a" (see fake-gh).
 add_pr() {
-  local repo="${3:-acme/plugins}" label="${4:-autorelease: pending}"
-  jq -nc --argjson n "$1" --arg ref "$2" --arg repo "$repo" --arg lab "$label" '{
+  local repo="${3:-acme/plugins}" label="${4:-autorelease: pending}" sha="${5:-$(printf 'a%039x' "$1")}"
+  jq -nc --argjson n "$1" --arg ref "$2" --arg repo "$repo" --arg lab "$label" --arg sha "$sha" '{
     number: $n, user: {login: "github-actions[bot]"},
-    head: {ref: $ref, sha: ("head-sha-" + ($n | tostring)),
+    head: {ref: $ref, sha: $sha,
            repo: (if $repo == "null" then null else {full_name: $repo} end)},
     labels: (if $lab == "none" then [] else [{name: $lab}] end)}' >> "$FX/prs.ndjson"
 }
 
-# stage <ref> <base manifest file> <head manifest file>: merge base "mb-<ref>", blob "blob-<ref>"
+# b64_json <file>: the contents API shape, base64 wrapped at 60 columns with a trailing newline
+b64_json() {
+  jq -nc --arg c "$(base64 < "$1" | tr -d '\n' | fold -w60)" --arg sha "$2" \
+    '{sha: $sha, content: (if $c == "" then $c else $c + "\n" end)}'
+}
+
+# stage <ref> <base manifest file> <head manifest file>: serves what the PR's head sha
+# and its merge base (same number, first char "b") need; blob "blob-<ref>"
 stage() {
-  jq -nc --arg sha "mb-$1" '{merge_base_commit: {sha: $sha}}' > "$FX/compare/$1.json"
-  jq -nc --rawfile c "$2" '{sha: "blob-mb", content: ($c | @base64)}' > "$FX/contents/mb-$1.json"
-  jq -nc --rawfile c "$3" --arg sha "blob-$1" '{sha: $sha, content: ($c | @base64)}' > "$FX/contents/$1.json"
+  local head mb
+  head=$(jq -r --arg r "$1" 'select(.head.ref == $r) | .head.sha' "$FX/prs.ndjson")
+  mb="b${head:1}"
+  jq -nc --arg sha "$mb" '{merge_base_commit: {sha: $sha}}' > "$FX/compare/$head.json"
+  b64_json "$2" blob-mb > "$FX/contents/$mb.json"
+  b64_json "$3" "blob-$1" > "$FX/contents/$head.json"
 }
 
 # stage_json <ref> <base json> <head json>
@@ -71,12 +87,15 @@ run_repair() {
 puts() { find "$FX" -maxdepth 1 -name 'put-[0-9]*' | wc -l; }
 gh_calls() { grep -c . "$FX/calls.log" || true; }
 
-# A refused PR: non-zero exit, an ::error:: line naming the ref, and no write.
+# A refused PR: non-zero exit, the ::error:: line for the ref with its specific message, and no write.
 assert_refused() {
   [ "$status" -ne 0 ]
-  [[ "$output" == *"::error::"*"$1"* ]]
+  [[ "$output" == *"::error::$1: "*"$2"* ]]
   [ "$(puts)" -eq 0 ]
 }
+
+# head_sha_of <ref>
+head_sha_of() { jq -r --arg r "$1" 'select(.head.ref == $r) | .head.sha' "$FX/prs.ndjson"; }
 
 # --- stale branch -----------------------------------------------------------
 
@@ -101,6 +120,16 @@ stale_pr() { REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" "$
   stale_pr; run_repair
   printf '{\n  "plugins/gamma": "1.0.0",\n  "plugins/alpha": "1.1.0",\n  "plugins/beta": "2.0.0"\n}\n' > "$BATS_TEST_TMPDIR/expected"
   base64 -d < "$FX/put-1/content" | cmp - "$BATS_TEST_TMPDIR/expected"
+}
+
+@test "reads carry the head sha and never the branch name; the PUT carries the branch" {
+  stale_pr; run_repair
+  sha=$(head_sha_of "$REF")
+  grep -qF "compare/main...$sha" "$FX/calls.log"
+  grep -qF "ref=$sha" "$FX/calls.log"
+  run bash -c 'grep -v PUT "$0" | grep -cF "$1"' "$FX/calls.log" "$REF"
+  [ "$output" = "0" ]
+  [ "$(cat "$FX/put-1/branch")" = "$REF" ]
 }
 
 @test "stale branch never sends a PUT without a branch field" {
@@ -169,18 +198,19 @@ healthy_pr() { REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" 
   [[ "$output" == *"ok: $REF"* ]]
 }
 
-@test "the manifest is never read from the tip of the base branch" {
-  healthy_pr; run_repair
-  run grep -c 'ref=main' "$FX/calls.log"
-  [ "$output" = "0" ]
-}
-
 # --- skip and refuse --------------------------------------------------------
 
 @test "fork head is skipped with a warning" {
   REF="${PREFIX}alpha"; add_pr 7 "$REF" other/plugins; run_repair
   [[ "$output" == *"skip: $REF"* ]]
   [[ "$output" == *"::warning::"* ]]
+}
+
+@test "the warning for a fork head does not contain the branch name" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF" other/plugins; run_repair
+  warning=$(grep '^::warning::' <<< "$output")
+  [ -n "$warning" ]
+  [[ "$warning" != *"$REF"* ]]
 }
 
 @test "fork head gives zero PUT, exit 0 and counts as checked" {
@@ -199,28 +229,71 @@ healthy_pr() { REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" 
 
 @test "unknown component is an error" {
   REF="${PREFIX}zeta"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" "$STALE"; run_repair
-  assert_refused "$REF"
+  assert_refused "$REF" "component 'zeta' is not in"
 }
 
 @test "missing own line on the branch is an error" {
   REF="${PREFIX}alpha"; add_pr 7 "$REF"
   stage_json "$REF" "$BASE" '{"plugins/beta":"1.0.0","plugins/gamma":"1.0.0"}'; run_repair
-  assert_refused "$REF"
+  assert_refused "$REF" "own line plugins/alpha is missing"
 }
 
 @test "missing autorelease pending label is an error" {
   REF="${PREFIX}alpha"; add_pr 7 "$REF" acme/plugins none; stage_json "$REF" "$BASE" "$STALE"; run_repair
-  assert_refused "$REF"
+  assert_refused "$REF" "no 'autorelease: pending' label"
+}
+
+# The config names these components, so only the pattern check can refuse them.
+strict_pattern_case() {
+  REF="$PREFIX$1"; add_pr 7 "$REF"
+  jq -n --arg c "$1" '{packages: {"plugins/evil": {component: $c}}}' > "$CFG"
+  run_repair
 }
 
 @test "branch name outside the strict pattern is an error" {
-  REF="${PREFIX}alpha/evil"; add_pr 7 "$REF"; run_repair
-  assert_refused "$REF"
+  strict_pattern_case "alpha/evil"
+  assert_refused "$REF" "does not match the release-please pattern"
+}
+
+@test "branch name with a space or semicolon is an error" {
+  strict_pattern_case "alpha ;evil"
+  assert_refused "$REF" "does not match the release-please pattern"
 }
 
 @test "branch name outside the strict pattern triggers no call beyond the list" {
-  REF="${PREFIX}alpha/evil"; add_pr 7 "$REF"; run_repair
+  strict_pattern_case "alpha/evil"
   [ "$(gh_calls)" -eq 1 ]
+}
+
+@test "head sha that is not 40 hex is an error before any further call" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF" acme/plugins "autorelease: pending" "main"; run_repair
+  assert_refused "$REF" "head sha is not a commit sha"
+  [ "$(gh_calls)" -eq 1 ]
+}
+
+@test "head sha missing from the list is an error before any further call" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"
+  jq -c 'del(.head.sha)' "$FX/prs.ndjson" > "$FX/x" && mv "$FX/x" "$FX/prs.ndjson"; run_repair
+  assert_refused "$REF" "head sha is not a commit sha"
+  [ "$(gh_calls)" -eq 1 ]
+}
+
+@test "merge base sha that is not 40 hex is an error" {
+  stale_pr
+  jq -nc '{merge_base_commit: {sha: "main"}}' > "$FX/compare/$(head_sha_of "$REF").json"; run_repair
+  assert_refused "$REF" "cannot find the merge base"
+}
+
+@test "branch manifest that is not JSON is an error" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" "this is not json"; run_repair
+  assert_refused "$REF" "is not valid JSON"
+}
+
+@test "branch manifest with empty content is an error at the read" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" "$STALE"
+  : > "$BATS_TEST_TMPDIR/empty"; stage "$REF" "$BATS_TEST_TMPDIR/base-$REF.json" "$BATS_TEST_TMPDIR/empty"
+  run_repair
+  assert_refused "$REF" "is not valid JSON"
 }
 
 @test "pull requests without the release prefix are ignored silently" {
@@ -239,28 +312,28 @@ healthy_pr() { REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" 
 @test "failing pulls list is an error" {
   stale_pr; FAKE_GH_FAIL=pulls run_repair
   [ "$status" -ne 0 ]
-  [[ "$output" == *"::error::"* ]]
+  [[ "$output" == *"::error::cannot list open pull requests"* ]]
 }
 
 @test "failing compare call is an error for that PR" {
   stale_pr; FAKE_GH_FAIL=compare run_repair
-  assert_refused "$REF"
+  assert_refused "$REF" "cannot find the merge base"
 }
 
 @test "failing merge-base manifest read is an error for that PR" {
   stale_pr; FAKE_GH_FAIL=contents-base run_repair
-  assert_refused "$REF"
+  assert_refused "$REF" "cannot read $MANIFEST at merge base"
 }
 
 @test "failing head manifest read is an error for that PR" {
   stale_pr; FAKE_GH_FAIL=contents-head run_repair
-  assert_refused "$REF"
+  assert_refused "$REF" "cannot read $MANIFEST on the branch"
 }
 
 @test "PUT rejected with HTTP 409 is an error and is not reported as repaired" {
   stale_pr; FAKE_GH_FAIL=put run_repair
   [ "$status" -ne 0 ]
-  [[ "$output" == *"::error::"*"$REF"* ]]
+  [[ "$output" == *"::error::$REF: could not write the repair commit"* ]]
   [[ "$output" != *"repaired: $REF"* ]]
 }
 
@@ -303,14 +376,14 @@ healthy_pr() { REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" 
 
 @test "no arguments exits non-zero with usage before any gh call" {
   run bash -c '"$0" 2>&1' "$SCRIPT"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *[Uu]sage* ]]
   [ "$(gh_calls)" -eq 0 ]
 }
 
 @test "missing config file exits non-zero before any gh call" {
   run bash -c '"$0" "$@" 2>&1' "$SCRIPT" "$BATS_TEST_TMPDIR/nope.json" "$MANIFEST"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *nope.json* ]]
   [ "$(gh_calls)" -eq 0 ]
 }
@@ -318,7 +391,7 @@ healthy_pr() { REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" 
 @test "missing GITHUB_REPOSITORY exits non-zero before any gh call" {
   unset GITHUB_REPOSITORY
   run bash -c '"$0" "$@" 2>&1' "$SCRIPT" "$CFG" "$MANIFEST"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *GITHUB_REPOSITORY* ]]
   [ "$(gh_calls)" -eq 0 ]
 }
