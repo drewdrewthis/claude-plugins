@@ -121,7 +121,7 @@ can write a release PR whose manifest sets another plugin's version back
 (https://github.com/drewdrewthis/claude-plugins/issues/232). The
 `repair-release-manifests.sh` step restores those lines in the same run with
 one commit on the release branch. **Do not merge a release PR while a
-release-please run is in progress or failed.** Squash-merge release PRs.
+release-please run is in progress or failed.**
 
 A version reaches boxes only when the release-please PR
 (`chore(main): release <plugin> …`) is merged. An open release PR means the

@@ -9,12 +9,13 @@
 #   $FAKE_GH_DIR/pulls.json            body for the pulls list (may hold concatenated arrays)
 #   $FAKE_GH_DIR/compare/<sha>.json    body for compare/<base>...<head sha>
 #   $FAKE_GH_DIR/contents/<sha>.json   body for contents/<path>?ref=<sha>
+#   $FAKE_GH_DIR/ref/<ref>.json        body for git/ref/heads/<ref>: {"object":{"sha":"<sha>"}}
 # Shas are 40 hex; a head sha starts with "a", a merge-base sha with "b" (that is how
 # the fake tells contents-head from contents-base for failure injection).
 #   $FAKE_GH_DIR/calls.log             one line per call, full argv, shell-quoted
 #   $FAKE_GH_DIR/put-<n>/{url,message,content,sha,branch}   one dir per PUT
 # FAKE_GH_FAIL: comma list of shapes that exit 1: pulls, compare, contents-base,
-# contents-head, put. A failing PUT prints an HTTP 409 message.
+# contents-head, ref, put. A failing PUT prints an HTTP 409 message.
 set -u
 d="${FAKE_GH_DIR:?}"
 printf '%q ' "$@" >> "$d/calls.log"; printf '\n' >> "$d/calls.log"
@@ -60,6 +61,13 @@ if [ "$method" = GET ] && [[ "$url" == "repos/$repo/contents/$mpath?ref="* ]]; t
   fails "$shape" && { echo "gh: HTTP 500 ($shape)" >&2; exit 1; }
   [ -f "$d/contents/$sha.json" ] || die "no contents fixture for $sha"
   cat "$d/contents/$sha.json"; exit 0
+fi
+
+if [ "$method" = GET ] && [[ "$url" == "repos/$repo/git/ref/heads/"* ]]; then
+  r="${url#"repos/$repo/git/ref/heads/"}"
+  fails ref && { echo "gh: HTTP 500 (ref)" >&2; exit 1; }
+  [ -f "$d/ref/$r.json" ] || die "no ref fixture for $r"
+  cat "$d/ref/$r.json"; exit 0
 fi
 
 if [ "$method" = PUT ]; then

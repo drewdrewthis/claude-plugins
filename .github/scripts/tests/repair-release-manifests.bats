@@ -19,7 +19,7 @@ HEALTHY='{"plugins/alpha":"1.1.0","plugins/beta":"2.0.0","plugins/gamma":"1.0.0"
 
 setup() {
   FX="$BATS_TEST_TMPDIR/gh"
-  mkdir -p "$FX/compare" "$FX/contents" "$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$FX/compare" "$FX/contents" "$FX/ref" "$BATS_TEST_TMPDIR/bin"
   : > "$FX/calls.log"; : > "$FX/prs.ndjson"
   cp "$BATS_TEST_DIRNAME/fake-gh" "$BATS_TEST_TMPDIR/bin/gh"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
@@ -58,7 +58,8 @@ b64_json() {
 }
 
 # stage <ref> <base manifest file> <head manifest file>: serves what the PR's head sha
-# and its merge base (same number, first char "b") need; blob "blob-<ref>"
+# and its merge base (same number, first char "b") need; blob "blob-<ref>"; the branch tip
+# the re-check reads is the head sha (overwrite $FX/ref/<ref>.json to move it)
 stage() {
   local head mb
   head=$(jq -r --arg r "$1" 'select(.head.ref == $r) | .head.sha' "$FX/prs.ndjson")
@@ -66,6 +67,7 @@ stage() {
   jq -nc --arg sha "$mb" '{merge_base_commit: {sha: $sha}}' > "$FX/compare/$head.json"
   b64_json "$2" blob-mb > "$FX/contents/$mb.json"
   b64_json "$3" "blob-$1" > "$FX/contents/$head.json"
+  jq -nc --arg sha "$head" '{object: {sha: $sha}}' > "$FX/ref/$1.json"
 }
 
 # stage_json <ref> <base json> <head json>
@@ -127,7 +129,7 @@ stale_pr() { REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" "$
   sha=$(head_sha_of "$REF")
   grep -qF "compare/main...$sha" "$FX/calls.log"
   grep -qF "ref=$sha" "$FX/calls.log"
-  run bash -c 'grep -v PUT "$0" | grep -cF "$1"' "$FX/calls.log" "$REF"
+  run bash -c 'grep -vF -e "-X PUT" -e git/ref/heads/ "$0" | grep -cF "$1"' "$FX/calls.log" "$REF"
   [ "$output" = "0" ]
   [ "$(cat "$FX/put-1/branch")" = "$REF" ]
 }
@@ -235,7 +237,7 @@ healthy_pr() { REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" 
 @test "missing own line on the branch is an error" {
   REF="${PREFIX}alpha"; add_pr 7 "$REF"
   stage_json "$REF" "$BASE" '{"plugins/beta":"1.0.0","plugins/gamma":"1.0.0"}'; run_repair
-  assert_refused "$REF" "own line plugins/alpha is missing"
+  assert_refused "$REF" "own line plugins/alpha is missing or not a string"
 }
 
 @test "missing autorelease pending label is an error" {
@@ -296,6 +298,59 @@ strict_pattern_case() {
   assert_refused "$REF" "is not valid JSON"
 }
 
+@test "merge-base manifest that is not JSON is an error at the merge base" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "this is not json" "$STALE"; run_repair
+  assert_refused "$REF" "cannot read $MANIFEST at merge base"
+}
+
+@test "merge-base manifest with empty content is an error at the merge base" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" "$STALE"
+  : > "$BATS_TEST_TMPDIR/empty"; stage "$REF" "$BATS_TEST_TMPDIR/empty" "$BATS_TEST_TMPDIR/head-$REF.json"
+  run_repair
+  assert_refused "$REF" "cannot read $MANIFEST at merge base"
+}
+
+# Exactly one JSON object is accepted on the branch; each shape below must be refused.
+strict_decode_case() {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"; stage_json "$REF" "$BASE" "$1"; run_repair
+  [ "$status" -eq 1 ]
+  assert_refused "$REF" "$MANIFEST on the branch is not valid JSON"
+}
+
+@test "branch manifest that is an array is an error" {
+  strict_decode_case '[]'
+}
+
+@test "branch manifest with trailing text is an error" {
+  strict_decode_case '{"plugins/alpha":"1.1.0"} garbage'
+}
+
+@test "branch manifest with two objects is an error" {
+  strict_decode_case '{"plugins/alpha":"1.1.0"}{"plugins/beta":"2.0.0"}'
+}
+
+@test "own line that is not a string is an error" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"
+  stage_json "$REF" "$BASE" '{"plugins/alpha":false,"plugins/beta":"1.0.0","plugins/gamma":"1.0.0"}'; run_repair
+  [ "$status" -eq 1 ]
+  assert_refused "$REF" "missing or not a string"
+}
+
+@test "head sha that is an empty string is an error before any further call" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"
+  jq -c '.head.sha = ""' "$FX/prs.ndjson" > "$FX/x" && mv "$FX/x" "$FX/prs.ndjson"; run_repair
+  [ "$status" -eq 1 ]
+  assert_refused "$REF" "head sha is not a commit sha"
+  [ "$(gh_calls)" -eq 1 ]
+}
+
+@test "repo name in a different letter case is still the same repository" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF" ACME/Plugins; stage_json "$REF" "$BASE" "$HEALTHY"; run_repair
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok: $REF"* ]]
+  [[ "$output" != *"skip:"* ]]
+}
+
 @test "pull requests without the release prefix are ignored silently" {
   add_pr 3 "feature/x"; run_repair
   [ "$output" = "checked: 0 release PR(s)" ]
@@ -328,6 +383,25 @@ strict_pattern_case() {
 @test "failing head manifest read is an error for that PR" {
   stale_pr; FAKE_GH_FAIL=contents-head run_repair
   assert_refused "$REF" "cannot read $MANIFEST on the branch"
+}
+
+@test "branch tip that differs from the listed head sha at write time is an error and writes nothing" {
+  stale_pr
+  jq -nc --arg sha "$(printf 'c%039x' 7)" '{object: {sha: $sha}}' > "$FX/ref/$REF.json"; run_repair
+  [ "$status" -eq 1 ]
+  assert_refused "$REF" "branch moved during the check"
+}
+
+@test "failing branch tip read is an error and writes nothing" {
+  stale_pr; FAKE_GH_FAIL=ref run_repair
+  [ "$status" -eq 1 ]
+  assert_refused "$REF" "branch moved during the check"
+}
+
+@test "DRY_RUN=1 makes no git/ref call" {
+  stale_pr; DRY_RUN=1 run_repair
+  [ "$status" -eq 0 ]
+  ! grep -qF git/ref "$FX/calls.log"
 }
 
 @test "PUT rejected with HTTP 409 is an error and is not reported as repaired" {
@@ -372,6 +446,44 @@ strict_pattern_case() {
   [ "$(cat "$FX/put-1/branch")" = "$REF" ]
 }
 
+@test "a line present on the branch and absent at the merge base is dropped: the branch must equal the merge base except its own line" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"
+  stage_json "$REF" "$BASE" '{"plugins/alpha":"1.1.0","plugins/beta":"2.0.0","plugins/gamma":"1.0.0","plugins/delta":"9.0.0"}'
+  run_repair
+  [ "$(puts)" -eq 1 ]
+  [ "$(base64 -d < "$FX/put-1/content" | jq 'has("plugins/delta")')" = "false" ]
+}
+
+@test "a plugin new on the branch (own line absent at the merge base) is ok" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"
+  stage_json "$REF" '{"plugins/beta":"2.0.0","plugins/gamma":"1.0.0"}' '{"plugins/alpha":"0.1.0","plugins/beta":"2.0.0","plugins/gamma":"1.0.0"}'
+  run_repair
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok: $REF"* ]]
+  [ "$(puts)" -eq 0 ]
+}
+
+# --- hostile or odd content -------------------------------------------------
+
+@test "control characters in a set-back value cannot forge or inject annotation lines" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"
+  stage_json "$REF" "$BASE" '{"plugins/alpha":"1.1.0","plugins/beta":"a\n::error::x\u001b[31m","plugins/gamma":"1.0.0"}'
+  run_repair
+  [ "$(puts)" -eq 1 ]
+  [ "$(grep -c '^::warning::' <<< "$output")" -eq 1 ]
+  [ "$(grep -c '^::error::' <<< "$output" || true)" -eq 0 ]
+  [ "$(printf '%s' "$output" | tr -dc '\033' | wc -c)" -eq 0 ]
+}
+
+@test "a very long set-back value keeps the repaired line short" {
+  REF="${PREFIX}alpha"; add_pr 7 "$REF"
+  stage_json "$REF" "$BASE" "{\"plugins/alpha\":\"1.1.0\",\"plugins/beta\":\"$(printf 'x%.0s' $(seq 1000))\",\"plugins/gamma\":\"1.0.0\"}"
+  run_repair
+  line=$(grep '^repaired:' <<< "$output")
+  [ -n "$line" ]
+  [ "${#line}" -lt 400 ]
+}
+
 # --- usage ------------------------------------------------------------------
 
 @test "no arguments exits non-zero with usage before any gh call" {
@@ -397,9 +509,6 @@ strict_pattern_case() {
 }
 
 # --- the 2026-10-10 incident (real data) ------------------------------------
-# e86b71e4 (release branch for procedures) sat on top of 284c1d7e but carried the
-# manifest of a main where ship was still 0.1.0. 24eb73a8 is the manifest that
-# commit should have had.
 
 @test "incident 2026-10-10: ship set back by the procedures release branch is restored byte for byte" {
   REF="${PREFIX}procedures"; add_pr 190 "$REF"

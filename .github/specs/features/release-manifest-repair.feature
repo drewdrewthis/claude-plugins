@@ -1,12 +1,9 @@
-# Coverage map for claude-plugins#232 - release-please 17.3.0 reads the manifest once per run
-# and later rewrites it on top of the current head of main. A release PR merged during the run
-# leaves another plugin's release branch with an old manifest, so merging that PR would set the
-# other plugin back. The next runs skip the branch ("remained the same"). A step after the action
-# now compares each release branch with its own merge base and repairs it with one normal commit.
+# Coverage map for claude-plugins#232 - a step after release-please compares each release branch
+# with its own merge base and repairs it with one normal commit.
 # Not executable: each Scenario carries a "# proves:" comment naming the bats test section or live
 # command that proves it. The tests are in .github/scripts/tests/repair-release-manifests.bats,
 # under the section headings "stale branch", "healthy branch", "skip and refuse",
-# "failing gh calls", "several PRs, pagination, env", "usage" and "the 2026-10-10 incident".
+# "failing gh calls", "several PRs, pagination, env", "hostile or odd content", "usage" and "the 2026-10-10 incident".
 # Delivery checks (workflow wiring greps AC9, AC10, AC11, AC12) are not product behavior and are
 # proven in the PR body.
 # @e2e scenarios run on the private scratch repo drewdrewthis/scratch-rp-race-232, never here.
@@ -73,7 +70,25 @@ Feature: A release branch that sets another plugin back is repaired in the same 
     When the repair script runs for component procedures
     Then the single PUT content equals "git show 24eb73a8:.release-please-manifest.json"
 
-  # proves: bats sections "skip and refuse", "failing gh calls", "several PRs, pagination, env" and the dry-run tests in "stale branch"
+  # proves: bats sections "stale branch", "healthy branch" and "hostile or odd content"
+  @integration
+  Scenario Outline: Branch manifest differences are repaired or accepted
+    Given a release PR whose branch manifest is in the state "<state>"
+    When the repair script runs
+    Then the outcome is "<outcome>"
+
+    Examples:
+      | state                                              | outcome                                   |
+      | two other lines set back                           | both restored in one PUT                  |
+      | line absent on the branch                          | restored in one PUT                       |
+      | line only on the branch, absent at the merge base  | repaired: the line is dropped in one PUT  |
+      | own line absent at the merge base (new plugin)     | ok, zero PUT                              |
+      | DRY_RUN=1 on a stale branch                        | would repair, zero PUT, no git/ref call   |
+      | set-back value with control characters             | one ::warning::, no ::error::, no ESC     |
+      | set-back value of 1000 characters                  | repaired line under 400 characters        |
+      | repo name in another letter case                   | same repository, not skipped              |
+
+  # proves: bats sections "skip and refuse", "failing gh calls", "several PRs, pagination, env"
   @integration
   Scenario Outline: Failure modes
     Given a release PR in the state "<state>"
@@ -81,26 +96,27 @@ Feature: A release branch that sets another plugin back is repaired in the same 
     Then the outcome is "<outcome>" and the last line is "checked: <N> release PR(s)"
 
     Examples:
-      | state                                     | outcome                               |
-      | fork head or head.repo null               | skip, zero PUT, exit 0                |
-      | unknown component                         | ::error::, zero PUT, non-zero exit    |
-      | missing own line on the branch            | ::error::, zero PUT, non-zero exit    |
-      | no autorelease pending label              | ::error::, zero PUT, non-zero exit    |
-      | branch name outside the strict pattern    | ::error::, zero PUT, non-zero exit    |
-      | any failing gh call                       | ::error::, zero PUT, non-zero exit    |
-      | PUT rejected with HTTP 409                | ::error::, not retried, non-zero exit |
-      | two other lines set back                  | both restored in one PUT              |
-      | line absent on the branch                 | restored in one PUT                   |
-      | DRY_RUN=1 on a stale branch               | would repair, zero PUT, exit 0        |
-      | error on PR 1, stale PR 2                 | PR 2 repaired, non-zero exit          |
-      | no release PRs                            | checked: 0, exit 0                    |
+      | state                                        | outcome                               | N |
+      | fork head or head.repo null                  | skip, zero PUT, exit 0                | 1 |
+      | unknown component                            | ::error::, zero PUT, non-zero exit    | 1 |
+      | missing own line on the branch               | ::error::, zero PUT, non-zero exit    | 1 |
+      | own line on the branch is not a string       | ::error::, zero PUT, non-zero exit    | 1 |
+      | no autorelease pending label                 | ::error::, zero PUT, non-zero exit    | 1 |
+      | branch name outside the strict pattern       | ::error::, zero PUT, non-zero exit    | 1 |
+      | head sha empty or not 40 hex                 | ::error::, no further call, exit 1    | 1 |
+      | any failing gh call                          | ::error::, zero PUT, non-zero exit    | 1 |
+      | manifest is not exactly one JSON object      | ::error::, zero PUT, exit 1           | 1 |
+      | merge-base manifest not JSON or empty        | ::error::, zero PUT, exit 1           | 1 |
+      | branch tip moved or unreadable at write time | ::error::, zero PUT, exit 1           | 1 |
+      | PUT rejected with HTTP 409                   | ::error::, not retried, non-zero exit | 1 |
+      | error on PR 1, stale PR 2                    | PR 2 repaired, non-zero exit          | 2 |
+      | no release PRs                               | checked: 0, exit 0                    | 0 |
 
-  # proves: bats "check-release-title" suite unchanged and green; git diff --stat origin/main...HEAD lists neither release-please-config.json nor .release-please-manifest.json
+  # proves: bats "check-release-title" suite unchanged and green
   @integration
-  Scenario: Existing release-title behavior and managed files are unchanged
+  Scenario: Existing release-title behavior is unchanged
     When "bats .github/scripts/tests" runs
     Then all pre-existing tests pass
-    And the diff against main touches neither the config nor the manifest
 
   # proves: bats "reads carry the head sha and never the branch name; the PUT carries the branch"
   @integration
@@ -108,7 +124,8 @@ Feature: A release branch that sets another plugin back is repaired in the same 
     Given a release PR whose head sha is in the pull request list
     When the repair script runs
     Then the compare call and the manifest read use that sha and not the branch name
-    And the PUT carries the branch name and the blob sha of that read, so a branch that moved gets a 409
+    And the branch tip is re-read before the write, and a branch that moved turns the run red with no PUT
+    And the PUT carries the branch name and the blob sha of that read
 
   # proves: bats "the warning for a fork head does not contain the branch name"
   @integration
