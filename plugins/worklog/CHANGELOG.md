@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.2](https://github.com/drewdrewthis/claude-plugins/compare/worklog-v0.2.1...worklog-v0.2.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* **worklog:** keep valid uuids under load and add a differential redact fuzz test ([#236](https://github.com/drewdrewthis/claude-plugins/issues/236)) ([a0f9557](https://github.com/drewdrewthis/claude-plugins/commit/a0f95576f1718a739ee486544dd8a2582fa94c59))
+
+
+### Documentation
+
+* **worklog:** state the four accepted redact limits and pin each with a test ([#237](https://github.com/drewdrewthis/claude-plugins/issues/237)) ([14b595e](https://github.com/drewdrewthis/claude-plugins/commit/14b595e6520dd19771f56ee2c8c1740591571220))
+
 ## [0.2.1](https://github.com/drewdrewthis/claude-plugins/compare/worklog-v0.2.0...worklog-v0.2.1) (2026-10-10)
 
 
