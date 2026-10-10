@@ -46,9 +46,11 @@ comma, "/", "&", a no-break space or a curly quote, and directly after an
 ASCII letter, digit or underscore. In the same measurement it was found before
 an ASCII space, tab, newline, carriage return or form feed, a straight quote, a
 backtick, a semicolon, a literal "\\n" or "\\r" escape, a percent or "\\u"
-escape of one of these, or the end of the text, but not when a "gitleaks:allow"
-comment was on the same line or the line before (gitleaks then skips the
-finding and the whole token stays raw). It was also redacted when another rule
+escape of one of these, or the end of the text, but not when a gitleaks allow
+comment (the word gitleaks, a colon, then allow) stood earlier in the scanned
+text or later on the same line: gitleaks then skipped the finding and the whole
+token stayed raw (measured 200 lines apart, and with the comment in an earlier
+text of the same batch). It was also redacted when another rule
 matched around it (for example a secret keyword such as "token" in front of
 it). These lists are measured, not complete; the "known limit:" tests pin them.
 The fix is issue #238

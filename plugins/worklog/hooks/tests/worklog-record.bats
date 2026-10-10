@@ -2374,7 +2374,9 @@ _$(fake_do)"
 # backtick, a semicolon, a literal \n or \r escape, a percent or \u escape of
 # one of these, or the end of the text, and when another rule matches around it
 # (for example a secret keyword in front). It was not found when a gitleaks
-# allow comment was on the same line or the line before. The lists are
+# allow comment stood earlier in the scanned text or later on the same line
+# (measured 200 lines apart, and with the comment in an earlier text of the
+# same batch); a comment on a later line did not hide it. The lists are
 # measured, not complete. Accepted for now in issue 219. The fix is issue 238.
 @test "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front" {
   require_real_gitleaks
@@ -2413,6 +2415,10 @@ _$(fake_do)"
   allow="gitleaks"":allow"
   input="see $KEY now # $allow"
   [ "$(real_redact_texts "$input")" = "$input" ]
+  nl=$'\n'
+  input="# $allow${nl}plain words here${nl}plain words here${nl}see $KEY now"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  [ "$(real_redact_texts "see $KEY now${nl}# $allow")" = "see <redacted:pulumi-api-token> now${nl}# $allow" ]
   [ "$(real_redact_texts "see $KEY now # other note")" = "see <redacted:pulumi-api-token> now # other note" ]
   [ "$(real_redact_texts "PULUMI_ACCESS_TOKEN=$KEY")" = "PULUMI_ACCESS_<redacted:generic-secret>" ]
 }
