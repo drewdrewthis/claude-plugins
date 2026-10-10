@@ -1491,8 +1491,8 @@ rebuildable_root_fixture() {
   touch -t 202001010000 "$CODEX_ROOT/records/decisions/one.md"
 }
 
-# The three shapes the guard refuses besides a zero-byte file; the third has
-# non-whitespace text but no "<digits> :: " line.
+# The shapes the guard refuses: zero is the old case, the rest have bytes but
+# no "<digits> :: " line.
 set_bad_index() {
   case "$1" in
     zero)       : > "$index_dir/index.txt" ;;

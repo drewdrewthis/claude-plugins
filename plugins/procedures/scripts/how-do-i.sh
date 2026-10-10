@@ -359,10 +359,6 @@ stage_json() {
         '
 }
 
-# Single source of truth for the stage-1 SYSTEM prompt text: written to
-# stage1-system.txt for the real calls and printed by --dry-run. The index is
-# streamed from the file (not via a shell variable) so the bytes are exactly
-# index.txt's, which keeps the file byte-identical per index for the API cache.
 # A usable index is a regular, readable file with at least one
 # "<number> :: " line, the form build-record-index.sh writes. -f first: grep
 # would block forever on a FIFO. C locale so BSD and GNU grep treat invalid
@@ -371,6 +367,10 @@ index_has_record() {
     [ -f "$1" ] && [ -r "$1" ] && LC_ALL=C grep -qE '^[0-9]+ :: ' "$1"
 }
 
+# Single source of truth for the stage-1 SYSTEM prompt text: written to
+# stage1-system.txt for the real calls and printed by --dry-run. The index is
+# streamed from the file (not via a shell variable) so the bytes are exactly
+# index.txt's, which keeps the file byte-identical per index for the API cache.
 build_stage1_system_prompt() {
     printf '%s\n\nIndex:\n' "$SELECT_INSTRUCTION"
     cat "$INDEX_TXT"

@@ -58,7 +58,7 @@ Feature: how-do-i refuses an index without a record, and --dry-run leaves nothin
   # proves: how-do-i.bats "SIGTERM during --dry-run --json exits 143, prints no complete JSON and leaves no how-do-i entry in TMPDIR", "SIGHUP during --dry-run --json exits 129, prints no complete JSON and leaves no how-do-i entry in TMPDIR"
   @integration
   Scenario Outline: A signal during the --dry-run --json render leaves no temp file
-    Given a jq that waits 2 s on every call and a marker written when it starts
+    Given a jq that waits 2 s on the render call and a marker written when it starts
     When the script gets <signal> after the marker exists
     Then it exits <code>, stdout is not a complete JSON object, and TMPDIR holds no how-do-i entry
 
