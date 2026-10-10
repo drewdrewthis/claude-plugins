@@ -19,10 +19,12 @@
 #     surface as a nonsensical negative "overhead" or "teardown" duration.
 #   - MAX_THINKING_TOKENS=0 is exported for both stages: the single biggest
 #     inference-latency lever measured.
-#   - Prompt-cache session reuse is a big COST win, a small WALL win (every
-#     --resume still pays process spawn). See CACHING below.
-#   - Cold-start wall time varies a lot run to run, so every timing this
-#     script reports is labeled cold or warm — never presented bare.
+#   - A stage-1 prompt of instruction + index is ~115k tokens. Served from the
+#     API prompt cache it is cheap; re-sent uncached on every query it is not.
+#     See CACHING below.
+#   - User instruction files (CLAUDE.md etc.) are injected into every call's
+#     messages by default: measured 23.7k tokens re-written per query, 1.65k
+#     with CLAUDE_CODE_DISABLE_CLAUDE_MDS=1.
 #
 # Pipeline:
 #   1. Resolve/build the record index (build-record-index.sh --out DIR).
@@ -32,21 +34,23 @@
 #      current CODEX_STORE_ROOTS/CODEX_ROOT resolution, or any *.md under
 #      those roots newer than index.txt — otherwise the existing index is
 #      reused as-is.
-#   2. Stage 1 (select): fast model + full index (cold) or a resumed session
-#      (warm) -> JSON array of selected record numbers.
+#   2. Stage 1 (select): fast model, instruction + full index as the SYSTEM
+#      prompt, the question alone as the user message -> JSON array of
+#      selected record numbers.
 #   3. compile-records.sh turns the selected numbers into record text.
 #      An EMPTY selection short-circuits here: stage 1 saying "nothing is
 #      relevant" is an answer, so the run prints NOT FOUND and exits 0
 #      rather than handing compile-records.sh a selection it must reject.
 #   4. Stage 2 (answer): strong model + compiled records -> the answer.
 #
-# CACHING: priming (cold) call's session_id is captured from the response
-# JSON and persisted at DIR/session.id, alongside a checksum of index.txt at
-# DIR/session.fingerprint. A later run recomputes the checksum: if it
-# matches, stage 1 resumes the stored session (warm, short prompt); if it
-# differs or either file is missing, stage 1 primes fresh (cold, full
-# prompt) and — only on success — overwrites both files. This never serves
-# an answer from a session primed on a stale index.
+# CACHING: the stage-1 system prompt (instruction + index) is written to
+# a per-run scratch file, stage1-system.txt, and is byte-identical for a
+# given index, so the API prompt cache serves it across queries and retries.
+# No CLI session is kept or resumed: message history can be rewritten or
+# compacted between calls (a context-compressing proxy summarised the index
+# message away and every selection came back empty — issue #198), whereas a
+# system prompt is sent verbatim every call. Every call also runs with
+# --no-session-persistence so nothing accumulates on disk.
 #
 # Usage:
 #   how-do-i.sh [--question TEXT | --question-file PATH] [--index-dir DIR]
@@ -80,13 +84,13 @@
 #   Default    the stage-2 answer on stdout, nothing else. On an empty
 #              selection, a NOT FOUND message instead (exit 0).
 #   --json     a JSON object: answer, selected_numbers, resolved_ids,
-#              stages.{select,answer} (model, mode, attempts, wall_ms,
+#              stages.{select,answer} (model, mode=n/a, attempts, wall_ms,
 #              cli_duration_ms, api_ms, usage incl. cache read/creation).
 #              On an empty selection it additionally carries not_found:true,
 #              with empty selection arrays and stages.answer null (stage 2
 #              never ran). not_found is ABSENT on every other outcome.
 #   --timing   a stderr breakdown per stage/attempt: wall/boot/api/cache_*,
-#              always labeled mode=cold|warm|n/a. No-op under --dry-run
+#              mode is always n/a (no sessions). No-op under --dry-run
 #              (nothing was timed).
 #   --dry-run  builds and prints the prompt(s) that WOULD be sent; makes NO
 #              model calls and requires an index.txt to already exist (it
@@ -152,8 +156,8 @@ Usage: how-do-i.sh [--question TEXT | --question-file PATH] [--index-dir DIR]
                     [--rebuild] [--select-model haiku] [--answer-model sonnet]
                     [--expand-links] [--json] [--dry-run] [--timing]
 
-End-to-end driver: question -> stage 1 (fast model + numbered index -> JSON
-array of numbers) -> compile-records.sh -> stage 2 (strong model + compiled
+End-to-end driver: question -> stage 1 (fast model, numbered index as the
+system prompt -> JSON array of numbers) -> compile-records.sh -> stage 2 (strong model + compiled
 records -> answer).
 
 Required (exactly one):
@@ -161,8 +165,7 @@ Required (exactly one):
   --question-file PATH   the question, read from a file.
 
 Options:
-  --index-dir DIR    where index.txt/map.tsv/session.id/session.fingerprint
-                      live. Default: $HOWDOI_INDEX_DIR or
+  --index-dir DIR    where index.txt/map.tsv/roots.stamp live. Default: $HOWDOI_INDEX_DIR or
                       $(procedures_state_dir)/how-do-i-index — i.e.
                       ~/.knowledge/state/how-do-i-index when ~/.knowledge exists,
                       else the XDG state-dir fallback (see lib/stores.sh).
@@ -179,7 +182,7 @@ Options:
                       make no model calls. Requires an existing index.txt
                       (never builds one). Stage 2's prompt is a template.
   --timing             print a per-stage/attempt timing breakdown to
-                      stderr, always labeled cold, warm, or n/a.
+                      stderr; mode is always n/a (no sessions).
   --help, -h           show this help and exit 0.
 
 Env:
@@ -208,18 +211,6 @@ Reply with a JSON array of the numbers (integers) of the relevant records, most 
 
 ANSWER_INSTRUCTION='Answer the question using ONLY the reference records below. Cite which record(s) you drew from by their id/path. If the records do not contain enough information to answer, say so plainly rather than guessing.'
 
-# --- portable checksum: sha256 preferred, cksum as a last resort ---
-compute_fingerprint() {
-    local file="$1"
-    if command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$file" | awk '{print $1}'
-    elif command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$file" | awk '{print $1}'
-    else
-        cksum "$file" | awk '{print $1"-"$2}'
-    fi
-}
-
 # --- CLI-response JSON accessors. Each is defensive: unparseable/missing
 #     input yields a safe default rather than crashing the caller. ---
 resp_is_error() {
@@ -227,9 +218,6 @@ resp_is_error() {
 }
 resp_result_text() {
     jq -r '.result // ""' "$1" 2>/dev/null || echo ""
-}
-resp_session_id() {
-    jq -r '.session_id // ""' "$1" 2>/dev/null || echo ""
 }
 resp_duration_ms() {
     jq -r '.duration_ms // 0' "$1" 2>/dev/null || echo 0
@@ -368,21 +356,23 @@ stage_json() {
         '
 }
 
-# Single source of truth for the stage-1 prompt text (cold primes with the
-# full index; warm assumes it's already in the resumed session). attempt
-# 2+ appends a short reinforcement reminder — a genuine second attempt at
-# recovery, not a byte-identical repeat.
+# Single source of truth for the stage-1 SYSTEM prompt text: written to
+# stage1-system.txt for the real calls and printed by --dry-run. The index is
+# streamed from the file (not via a shell variable) so the bytes are exactly
+# index.txt's, which keeps the file byte-identical per index for the API cache.
+build_stage1_system_prompt() {
+    printf '%s\n\nIndex:\n' "$SELECT_INSTRUCTION"
+    cat "$INDEX_TXT"
+}
+
+# Stage-1 user message: the question only (the index is in the system prompt).
+# attempt 2+ appends a short reinforcement reminder — a genuine second attempt
+# at recovery, not a byte-identical repeat.
 build_stage1_prompt() {
-    local question="$1" mode="$2" attempt="$3" base
-    if [ "$mode" = "cold" ]; then
-        base="$(printf '%s\n\nIndex:\n%s\n\nQuestion:\n%s' "$SELECT_INSTRUCTION" "$INDEX_CONTENT" "$question")"
-    else
-        base="$(printf 'Question:\n%s\n\nReply with a JSON array of the relevant record numbers from the index established earlier in this session, most relevant first, or [] if none are relevant. Reply with ONLY the JSON array.' "$question")"
-    fi
+    local question="$1" attempt="$2"
+    printf 'Question:\n%s\n' "$question"
     if [ "$attempt" -ge 2 ]; then
-        printf '%s\n\nReminder: reply with ONLY a JSON array of integers (e.g. [3,7,12] or []). No prose, no explanation, no markdown code fences.\n' "$base"
-    else
-        printf '%s\n' "$base"
+        printf '\nReminder: reply with ONLY a JSON array of integers (e.g. [3,7,12] or []). No prose, no explanation, no markdown code fences.\n'
     fi
 }
 
@@ -405,11 +395,12 @@ run_claude_call() {
     # ~49k tokens/call; --tools "" + --exclude-dynamic-system-prompt-sections
     # cuts that to ~6k (8x). Both stages here are pure text-in/text-out, so
     # neither needs tools. MAX_THINKING_TOKENS=0 is exported at top of file.
+    # --no-session-persistence: no stage resumes anything, so keep no transcript.
     # HOWDOI_CLAUDE_BIN may be multi-word (e.g. "orwrap claude" for an
     # OpenRouter gateway), so split it into words before exec.
     local claude_cmd
     read -r -a claude_cmd <<<"$CLAUDE_BIN"
-    { time "${claude_cmd[@]}" -p --output-format json --model "$model" --tools "" --exclude-dynamic-system-prompt-sections "$@" <<<"$prompt" >"$out_file" 2>"$out_file.stderr"; } 2>"$time_file"
+    { time "${claude_cmd[@]}" -p --output-format json --model "$model" --tools "" --exclude-dynamic-system-prompt-sections --no-session-persistence "$@" <<<"$prompt" >"$out_file" 2>"$out_file.stderr"; } 2>"$time_file"
     CALL_STATUS=$?
     CALL_SECONDS="$(cat "$time_file" 2>/dev/null || true)"
     [ -n "$CALL_SECONDS" ] || CALL_SECONDS="0.000"
@@ -517,11 +508,13 @@ fi
 [ -n "$(printf '%s' "$QUESTION" | tr -d '[:space:]')" ] || die "question text is empty"
 
 export MAX_THINKING_TOKENS=0
+# The user's instruction files were injected into every call's messages
+# (measured 23.7k tokens re-written per query, 1.65k with this set); neither
+# stage should be steered by them.
+export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
 
 INDEX_TXT="$INDEX_DIR/index.txt"
 MAP_TSV="$INDEX_DIR/map.tsv"
-SESSION_ID_FILE="$INDEX_DIR/session.id"
-SESSION_FP_FILE="$INDEX_DIR/session.fingerprint"
 ROOTS_STAMP_FILE="$INDEX_DIR/roots.stamp"
 CURRENT_ROOTS="$(_stores_resolve_roots_spec)"
 
@@ -576,22 +569,13 @@ else
         printf '%s\n%s\n' "$CURRENT_ROOTS" "$(date +%s 2>/dev/null || echo 0)" > "$ROOTS_STAMP_TMP"
         mv "$ROOTS_STAMP_TMP" "$ROOTS_STAMP_FILE"
     fi
+    # Files left by <= 0.17.3, which resumed a stored session; nothing reads
+    # them now, so drop them rather than leave stale state behind.
+    rm -f "$INDEX_DIR/session.id" "$INDEX_DIR/session.fingerprint"
 fi
 
-INDEX_CONTENT="$(cat "$INDEX_TXT")"
-CURRENT_FP="$(compute_fingerprint "$INDEX_TXT")"
-
-WARM=false
-RESUME_SID=""
-if [ -f "$SESSION_ID_FILE" ] && [ -f "$SESSION_FP_FILE" ]; then
-    STORED_FP="$(cat "$SESSION_FP_FILE" 2>/dev/null || true)"
-    STORED_SID="$(cat "$SESSION_ID_FILE" 2>/dev/null || true)"
-    if [ -n "$STORED_FP" ] && [ "$STORED_FP" = "$CURRENT_FP" ] && [ -n "$STORED_SID" ]; then
-        WARM=true
-        RESUME_SID="$STORED_SID"
-    fi
-fi
-MODE_LABEL="cold"; $WARM && MODE_LABEL="warm"
+# Stage 1 keeps no session, so there is no cold/warm distinction to report.
+MODE_LABEL="n/a"
 
 if $DRY_RUN; then
     if $JSON_OUT; then
@@ -600,9 +584,10 @@ if $DRY_RUN; then
             --arg mode "$MODE_LABEL" \
             --arg select_model "$SELECT_MODEL" \
             --arg answer_model "$ANSWER_MODEL" \
-            --arg stage1_prompt "$(build_stage1_prompt "$QUESTION" "$MODE_LABEL" 1)" \
+            --arg stage1_system_prompt "$(build_stage1_system_prompt)" \
+            --arg stage1_prompt "$(build_stage1_prompt "$QUESTION" 1)" \
             --arg stage2_prompt_template "$(build_stage2_prompt "$QUESTION" "<compiled records go here — depend on stage 1 live selection, not available in --dry-run>")" \
-            '{dry_run: $dry_run, mode: $mode, select_model: $select_model, answer_model: $answer_model, stage1_prompt: $stage1_prompt, stage2_prompt_template: $stage2_prompt_template}'
+            '{dry_run: $dry_run, mode: $mode, select_model: $select_model, answer_model: $answer_model, stage1_system_prompt: $stage1_system_prompt, stage1_prompt: $stage1_prompt, stage2_prompt_template: $stage2_prompt_template}'
     else
         echo "=== how-do-i --dry-run ==="
         echo "index-dir: $INDEX_DIR"
@@ -610,8 +595,11 @@ if $DRY_RUN; then
         echo "select-model: $SELECT_MODEL"
         echo "answer-model: $ANSWER_MODEL"
         echo
-        echo "--- STAGE 1 PROMPT (select, model=$SELECT_MODEL, mode=$MODE_LABEL) ---"
-        build_stage1_prompt "$QUESTION" "$MODE_LABEL" 1
+        echo "--- STAGE 1 SYSTEM PROMPT (select, model=$SELECT_MODEL, sent as --system-prompt-file) ---"
+        build_stage1_system_prompt
+        echo
+        echo "--- STAGE 1 PROMPT (select, model=$SELECT_MODEL, user message) ---"
+        build_stage1_prompt "$QUESTION" 1
         echo
         echo "--- STAGE 2 PROMPT TEMPLATE (answer, model=$ANSWER_MODEL) ---"
         echo "(actual compiled records depend on stage 1 live selection; not available in --dry-run)"
@@ -631,6 +619,11 @@ command -v "${_claudewords[0]}" >/dev/null 2>&1 \
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/how-do-i.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
+# Written once so every attempt (and every run on the same index) passes a
+# byte-identical system prompt, which is what lets the API cache serve it.
+STAGE1_SYSTEM_FILE="$WORK/stage1-system.txt"
+build_stage1_system_prompt > "$STAGE1_SYSTEM_FILE" || die "could not write $STAGE1_SYSTEM_FILE"
+
 # --- stage 1: select, up to 2 attempts. Only an "unparseable" reply (not
 #     is_error, not a CLI-process failure) consumes the retry budget — see
 #     parse_selection's header comment. ---
@@ -646,30 +639,16 @@ RETRY_SAME_ATTEMPT=false
 
 while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
     resp_file="$WORK/stage1-attempt${ATTEMPT}.json"
-    prompt="$(build_stage1_prompt "$QUESTION" "$MODE_LABEL" "$ATTEMPT")"
+    prompt="$(build_stage1_prompt "$QUESTION" "$ATTEMPT")"
 
-    extra_args=()
+    extra_args=(--system-prompt-file "$STAGE1_SYSTEM_FILE")
     # Gateways behind ANTHROPIC_BASE_URL (e.g. OpenRouter) may silently drop
     # --json-schema: measured structured_output=null, result="null". After the
     # first such reply, retry under the plain text contract instead.
     $USE_SCHEMA && extra_args+=(--json-schema "$STAGE1_SCHEMA")
-    $WARM && extra_args+=(--resume "$RESUME_SID")
 
     run_claude_call "$resp_file" "$SELECT_MODEL" "$prompt" "${extra_args[@]}"
-    # A stored session can become unresumable (CLI/model/auth drift since it
-    # was primed). That must not brick the tool: drop the poisoned cache and
-    # re-prime cold ONCE. Measured live: resume of a stale session exits 1
-    # with "unrecognized_model".
     RETRY_SAME_ATTEMPT=false
-    if [ "$CALL_STATUS" -ne 0 ] && $WARM; then
-        echo "how-do-i: warm session unresumable — clearing stale cache and re-priming cold" >&2
-        rm -f "$INDEX_DIR/session.id" "$INDEX_DIR/session.fingerprint"
-        WARM=false
-        MODE_LABEL="cold"
-        RESUME_SID=""
-        ATTEMPT=$((ATTEMPT - 1))   # retry this attempt number, now cold
-        RETRY_SAME_ATTEMPT=true
-    fi
     # PLUGIN ADAPTATION: no upstream counterpart. orchard-codex's how-do-i.sh
     # always reaches the first-party Anthropic API, so it needs no gateway
     # fallback. The installed plugin can run on a box whose Claude Code is
@@ -689,8 +668,6 @@ while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$SEL_OK" = false ]; do
         CLAUDE_BIN="orwrap claude"
         read -r -a _claudewords <<<"$CLAUDE_BIN"
         ORWRAP_TRIED=true
-        rm -f "$INDEX_DIR/session.id" "$INDEX_DIR/session.fingerprint"
-        WARM=false; MODE_LABEL="cold"; RESUME_SID=""
         ATTEMPT=$((ATTEMPT - 1))
         RETRY_SAME_ATTEMPT=true
     fi
@@ -741,17 +718,6 @@ done
 if [ "$SEL_OK" != true ]; then
     last_text="$(resp_result_text "$LAST_RESP_FILE" | head -c 300)"
     die "stage 1 (select) did not return a parseable JSON array of numbers after $STAGE1_ATTEMPTS_MADE attempt(s). Last reply (truncated): $last_text"
-fi
-
-# Persist the session id/fingerprint after ANY successful stage-1 call (cold
-# or warm) — never after a failed one, so a failed prime/resume can't poison
-# the cache. Re-persisting on a warm success is a safety net in case a future
-# CLI ever rotates session_id across --resume calls; today it is observed to
-# echo the same id back, so this is normally a same-value rewrite.
-new_sid="$(resp_session_id "$LAST_RESP_FILE")"
-if [ -n "$new_sid" ]; then
-    printf '%s' "$new_sid" > "$SESSION_ID_FILE"
-    printf '%s' "$CURRENT_FP" > "$SESSION_FP_FILE"
 fi
 
 STAGE1_WALL_MS="$(awk -v s="$STAGE1_WALL_S" 'BEGIN { printf "%d", (s * 1000) + 0.5 }')"
