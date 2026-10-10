@@ -172,7 +172,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And the drain claim is released
     And neither batch.manifest.tmp nor batch.txt.part exists after a kill mid-range
 
-  # proves: hooks/tests/librarian-poke.bats "shared cap: after a scan slowed by 3s, claude runs under a timeout of at least 1s and under the full 120s"; hooks/tests/librarian-poke.bats "shared cap: the scan's own timeout still shows the full 120s cap"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still lets the drain run claude exactly once"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still advances the cursor"; hooks/tests/librarian-poke.bats "shared cap: a fast scan leaves claude a timeout within 2s of the full 120s cap"
+  # proves: hooks/tests/librarian-poke.bats "shared cap: after a scan slowed by 3s, claude runs under a timeout of at least 1s and under the full 120s"; hooks/tests/librarian-poke.bats "shared cap: the scan's own timeout still shows the full 120s cap"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still lets the drain run claude exactly once"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still advances the cursor"; hooks/tests/librarian-poke.bats "shared cap: a fast scan leaves claude nearly the full 120s cap"
   @integration
   Scenario: The scan and the drain share one runtime cap
     Given LIBRARIAN_MAX_RUNTIME_SEC of 120, timeout on PATH, and a recording timeout shim

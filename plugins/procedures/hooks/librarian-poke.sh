@@ -110,7 +110,7 @@ lp_num_or_default() {
 LIBRARIAN_SETTLE_SECS="${LIBRARIAN_SETTLE_SECS:-3}"
 case "$LIBRARIAN_SETTLE_SECS" in ''|*[!0-9]*) LIBRARIAN_SETTLE_SECS=3 ;; esac
 
-# Wall-clock cap on one drain; see LP_TIMEOUT below.
+# Wall-clock cap on the batch scan plus the drain together; see LP_TIMEOUT below.
 LIBRARIAN_MAX_RUNTIME_SEC="$(lp_num_or_default LIBRARIAN_MAX_RUNTIME_SEC "${LIBRARIAN_MAX_RUNTIME_SEC:-1800}" 1800 '^[0-9]+$')"
 
 # The batch scan and the drain share this one cap, so the claim TTL must
@@ -283,12 +283,12 @@ lp_stamp_drain() {
     date +%s > "$st/last-drain-start" 2>/dev/null || true
 }
 
-# lp_cooled_down [quiet] — 0 when no drain started within
-# LIBRARIAN_MIN_INTERVAL_SECS, 1 otherwise. A drain counts if it ran claude or
-# its scan was aborted mid-batch by the pressure re-check or killed by the
-# runtime cap (logged unless quiet: the gating
-# half checks every turn, and one log line per turn is noise). An absent or
-# unreadable stamp never blocks a drain.
+# lp_cooled_down [quiet] — returns 0 when no drain started within
+# LIBRARIAN_MIN_INTERVAL_SECS, 1 otherwise. A drain counts when it ran claude,
+# when its scan was aborted mid-batch by the pressure re-check, or when its
+# scan was killed by the runtime cap. A refusal is logged unless quiet is
+# given: the gating half checks every turn, and one log line per turn is
+# noise. An absent or unreadable stamp never blocks a drain.
 lp_cooled_down() {
     [ "$LIBRARIAN_MIN_INTERVAL_SECS" -gt 0 ] || return 0
     local last now
