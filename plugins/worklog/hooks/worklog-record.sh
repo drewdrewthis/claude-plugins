@@ -61,7 +61,7 @@
 # built-in list is narrower than gitleaks' rule set. On a non-Linux system a
 # gitleaks older than 8.22.0, or one whose version cannot be read, is not run:
 # gitleaks-too-old is noted once per session, before gitleaks-failed (issue
-# #245). If gitleaks created a file named "-" in the working directory of the
+# #245). If gitleaks created or changed a file named "-" in the working directory of the
 # session during the run, it can hold a raw report; the hook removes nothing and
 # notes gitleaks-report-file once per session, before gitleaks-failed. An
 # unreadable lib fails open (lib-unreadable:redact), and a redaction that dies

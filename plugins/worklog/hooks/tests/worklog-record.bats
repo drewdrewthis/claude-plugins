@@ -3891,6 +3891,80 @@ dash_file_turn() {
   [ "$output" = "True [] False True" ]
 }
 
+# dash_link_wd <empty|dangling> — a fresh WD whose `-` is a symbolic link to TGT,
+# a path in another fresh temporary directory: an empty regular file, or nothing.
+dash_link_wd() {
+  WD="$(mktemp -d "$SCRATCH/wd.XXXXXX")"
+  TGT="$(mktemp -d "$SCRATCH/tgt.XXXXXX")/target"
+  [ "$1" = empty ] && : > "$TGT"
+  ln -s "$TGT" "$WD/-"
+}
+
+# old_as_safe_wrapper — WRAP: a gitleaks that claims 8.30.1 and runs the real 8.21.2.
+old_as_safe_wrapper() {
+  require_old_gitleaks
+  WRAP="$SCRATCH/wrapbin"
+  mkdir -p "$WRAP"
+  printf '#!/usr/bin/env bash\nif [ "${1:-}" = version ]; then echo 8.30.1; exit 0; fi\nexec "%s" "$@"\n' "$WORKLOG_TEST_OLD_GITLEAKS" > "$WRAP/gitleaks"
+  chmod +x "$WRAP/gitleaks"
+}
+
+@test "dash path: a run claimed safe that writes through a dash link to an empty file makes the scan report failure and sets the report-file flag" {
+  misread_gitleaks
+  dash_link_wd empty
+  run scan_report "-" "$WD" "$MISREAD:$PATH"
+  [ "$output" = "True [] False True" ]
+}
+
+@test "dash path: a run claimed safe that writes through a dash link to an empty file leaves the link a link" {
+  misread_gitleaks
+  dash_link_wd empty
+  scan_report "-" "$WD" "$MISREAD:$PATH" >/dev/null
+  [ -L "$WD/-" ]
+}
+
+@test "dash path: a run claimed safe that writes through a dash link to an empty file leaves the bytes gitleaks wrote in the target" {
+  misread_gitleaks
+  dash_link_wd empty
+  scan_report "-" "$WD" "$MISREAD:$PATH" >/dev/null
+  [ "$(cat "$TGT")" = "stub report bytes" ]
+}
+
+@test "dash path: a run claimed safe that writes through a dangling dash link makes the scan report failure and sets the report-file flag" {
+  misread_gitleaks
+  dash_link_wd dangling
+  run scan_report "-" "$WD" "$MISREAD:$PATH"
+  [ "$output" = "True [] False True" ]
+}
+
+@test "dash path: a run claimed safe that writes through a dangling dash link leaves the link a link" {
+  misread_gitleaks
+  dash_link_wd dangling
+  scan_report "-" "$WD" "$MISREAD:$PATH" >/dev/null
+  [ -L "$WD/-" ]
+}
+
+@test "dash path: a run claimed safe that writes through a dangling dash link creates the target with the bytes gitleaks wrote" {
+  misread_gitleaks
+  dash_link_wd dangling
+  scan_report "-" "$WD" "$MISREAD:$PATH" >/dev/null
+  [ "$(cat "$TGT")" = "stub report bytes" ]
+}
+
+@test "dash path: the real gitleaks 8.21.2 claimed as 8.30.1 writing through a dash link to an empty file makes the scan report failure and sets the report-file flag" {
+  old_as_safe_wrapper
+  dash_link_wd empty
+  run scan_report "-" "$WD" "$WRAP:$PATH"
+  [ "$output" = "True [] False True" ]
+}
+
+@test "dash path: the real gitleaks 8.21.2 claimed as 8.30.1 writing through a dash link to an empty file leaves the link a link" {
+  old_as_safe_wrapper
+  dash_link_wd empty
+  scan_report "-" "$WD" "$WRAP:$PATH" >/dev/null
+  [ -L "$WD/-" ]
+}
+
 # --- hook, the dash path forced on either system ------------------------------
 #
 # Production code has no test switch. A sitecustomize.py on PYTHONPATH sets
@@ -4206,6 +4280,51 @@ found, failed = redact.scan("some text")
 print("%s %s %s %s" % (failed, found, redact.gitleaks_too_old, len(ran)))
 PY' _ "$WD" "$STUB" "$HOOKS/lib"
   [ "$output" = "True [] False 0" ]
+}
+
+# The version read and the scan share one budget: the scan gets what is left.
+# In-process: the clock reads 0 at the start and 4 after the version read.
+@test "dash path: a version read that costs part of the budget leaves the scan only the remainder" {
+  dash_wd none
+  WORKLOG_GITLEAKS_TIMEOUT=10 run bash -c 'cd "$1" && PATH="$2:$PATH" python3 - "$3" <<"PY"
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+redact._REPORT_PATH = "-"
+redact._gitleaks_version = lambda secs: (8, 30, 1)
+ticks = iter([0.0, 4.0])
+redact.time.monotonic = lambda: next(ticks, 1000.0)
+seen = []
+redact._run_gitleaks = lambda text, secs=None: (seen.append(secs) or ([], False))
+redact.scan("some text")
+print(len(seen) == 1 and seen[0] is not None and 0 < seen[0] <= 6)
+PY' _ "$WD" "$STUB" "$HOOKS/lib"
+  [ "$output" = "True" ]
+}
+
+# gitleaks 8.22.0 prints nothing on a clean scan: empty stdout is no findings, not a failure.
+empty_stdout_gitleaks() {
+  EMPTY="$(mktemp -d "$SCRATCH/empty.XXXXXX")"
+  cat > "$EMPTY/gitleaks" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = version ]; then echo 8.22.0; exit 0; fi
+cat >/dev/null
+exit 0
+SH
+  chmod +x "$EMPTY/gitleaks"
+}
+
+@test "dash path: a gitleaks that prints nothing on a clean scan returns no findings without failure" {
+  empty_stdout_gitleaks
+  dash_wd none
+  run scan_report "-" "$WD" "$EMPTY:$PATH"
+  [ "$output" = "False [] False False" ]
+}
+
+@test "a gitleaks that prints nothing on a clean scan returns no findings without failure" {
+  empty_stdout_gitleaks
+  run scan_report "/dev/stdout" "$SCRATCH" "$EMPTY:$PATH"
+  [ "$output" = "False [] False False" ]
 }
 
 @test "dash path: a timeout that is not a number makes the scan report failure without raising" {

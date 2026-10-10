@@ -14,9 +14,10 @@ Feature: Old gitleaks versions redact on Linux and are refused elsewhere
   scan fails and gitleaks is not run; "gitleaks version" is not called. On other
   systems it runs "gitleaks version" first; below 8.22.0, or with no readable
   version, "gitleaks stdin" is not run, the scan fails and the hook notes
-  gitleaks-failed and gitleaks-too-old. A "-" entry that appears during a run
-  the version called safe fails the scan, is left in place and is noted as
-  gitleaks-report-file. A "-" that existed before the run is ignored. With
+  gitleaks-failed and gitleaks-too-old. A "-" entry that appears or changes
+  during a run on a version read as safe fails the scan and is noted as
+  gitleaks-report-file. An unchanged "-" that existed before the run is
+  ignored. Nothing is removed. With
   8.21.2 a Linux turn is redacted; a turn on any other system is loud (unjudged
   row, no model call, built-in redaction still on). 8.19.0 and older on Linux
   exit 1, recorded as gitleaks-failed.
@@ -307,8 +308,36 @@ Feature: Old gitleaks versions redact on Linux and are refused elsewhere
     When the version call is slower than the timeout, or the version read uses up the whole budget
     Then the scan fails, gitleaks stdin is not run, and the too-old flag is set only in the first case
 
+  # proves: hooks/tests/worklog-record.bats "dash path: a version read that costs part of the budget leaves the scan only the remainder"
+  Scenario: The scan gets only the budget the version read left
+    Given the dash path is forced and the version read costs part of the timeout
+    When the scan runs
+    Then gitleaks stdin gets a timeout above zero and at most the remainder
+
+  # proves: hooks/tests/worklog-record.bats "dash path: a gitleaks that prints nothing on a clean scan returns no findings without failure"
+  # proves: hooks/tests/worklog-record.bats "a gitleaks that prints nothing on a clean scan returns no findings without failure"
+  Scenario: Empty stdout from gitleaks is a clean scan
+    Given a gitleaks 8.22.0 that prints nothing and exits 0 on a clean scan
+    When the scan runs on the dash path or the default path
+    Then it returns no findings, does not fail, and sets no flag
+
   # proves: hooks/tests/worklog-record.bats "dash path: a timeout that is not a number makes the scan report failure without raising"
   Scenario: A timeout that is not a number fails the scan
     Given the dash path is forced and WORKLOG_GITLEAKS_TIMEOUT is "abc"
     When the scan runs
     Then it reports failure and raises nothing
+
+  # proves: hooks/tests/worklog-record.bats "dash path: a run claimed safe that writes through a dash link to an empty file makes the scan report failure and sets the report-file flag"
+  # proves: hooks/tests/worklog-record.bats "dash path: a run claimed safe that writes through a dash link to an empty file leaves the link a link"
+  # proves: hooks/tests/worklog-record.bats "dash path: a run claimed safe that writes through a dash link to an empty file leaves the bytes gitleaks wrote in the target"
+  # proves: hooks/tests/worklog-record.bats "dash path: a run claimed safe that writes through a dangling dash link makes the scan report failure and sets the report-file flag"
+  # proves: hooks/tests/worklog-record.bats "dash path: a run claimed safe that writes through a dangling dash link leaves the link a link"
+  # proves: hooks/tests/worklog-record.bats "dash path: a run claimed safe that writes through a dangling dash link creates the target with the bytes gitleaks wrote"
+  # proves: hooks/tests/worklog-record.bats "dash path: the real gitleaks 8.21.2 claimed as 8.30.1 writing through a dash link to an empty file makes the scan report failure and sets the report-file flag"
+  # proves: hooks/tests/worklog-record.bats "dash path: the real gitleaks 8.21.2 claimed as 8.30.1 writing through a dash link to an empty file leaves the link a link"
+  # proves: hooks/tests/worklog-record.bats "dash path: gitleaks 8.30.1 with a symbolic link named dash before returns the finding and sets no flag"
+  Scenario: A run claimed safe that writes through a symbolic link named "-" fails the scan
+    Given the dash path is forced and "-" is a symbolic link to an empty file, or a dangling one
+    When a gitleaks read as safe writes its report through the link, or the real 8.21.2 does so behind a version-lying wrapper
+    Then the scan fails with the report-file flag set, the link stays a link and the target holds the written bytes
+    But an unchanged symbolic link named "-" is ignored and the finding is returned

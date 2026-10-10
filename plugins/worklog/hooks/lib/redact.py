@@ -302,12 +302,24 @@ def _report_path_usable():
 
 
 def _dash_entry():
-    """(inode, size, mtime) of the "-" entry in the working directory, or None."""
-    try:
-        st = os.lstat("-")
-        return st.st_ino, st.st_size, st.st_mtime_ns
-    except OSError:
-        return None
+    """Stat triples of the "-" entry, or None when it does not exist.
+
+    The pair is (the entry itself, what it points to). An old gitleaks writes
+    through a symlink, so the link alone can look unchanged. The second triple
+    is None when the target is missing (a dangling link).
+    """
+    # Known limits: a target that keeps no size or time (a device such as
+    # /dev/null), and a rewrite of the same size inside one timestamp step,
+    # are not seen.
+    def triple(stat):
+        try:
+            st = stat("-")
+            return st.st_ino, st.st_size, st.st_mtime_ns
+        except OSError:
+            return None
+
+    own = triple(os.lstat)
+    return None if own is None else (own, triple(os.stat))
 
 
 def _timeout_secs():
@@ -377,6 +389,8 @@ def scan(text):
         return [], True
     remaining = secs - (time.monotonic() - start)
     if remaining <= 0:
+        # A version read that times out is reported as an unreadable version
+        # (gitleaks_too_old). This branch covers a read that returned just at the limit.
         return [], True
     before = _dash_entry()
     result = _run_gitleaks(text, remaining)
