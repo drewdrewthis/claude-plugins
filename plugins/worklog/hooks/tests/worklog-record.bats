@@ -1968,6 +1968,13 @@ builtin_out() {
   python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import redact; sys.stdout.write(redact.builtin(sys.argv[2]))" "$HOOKS/lib" "$1"
 }
 
+# glued_chain <pairs> <tail> — <pairs> times a grafana then a shopify token,
+# then <tail>.
+glued_chain() {
+  python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * int(sys.argv[3]) + sys.argv[4])' \
+    "$(fake_grafana)" "$(fake_shopify)" "$1" "$2"
+}
+
 @test "an sk-lw key with a dot in the middle never lands in the worklog file" {
   KEY="$(fake_key "sk-""lw-" "aB3dE5gH7j" 10).$(fake_key "" "kL7mN9pQ1sT3vX5zA7cD9fG1hJ3" 30)"
   fixture_secret_prompt "$KEY"
@@ -2214,14 +2221,14 @@ if bad:
 # A chain still changing on the 8th pass fails closed.
 @test "a chain of glued tokens that needs more than 8 passes fails closed to one marker" {
   # 7 pairs is the shortest chain still changing on the 8th pass.
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 7)' "$(fake_grafana)" "$(fake_shopify)")"
+  chain="$(glued_chain 7 "")"
   out="$(builtin_out "$chain")"
   [ "$out" = "<redacted:glued-secrets>" ] || { echo "got: ${out:0:200}" >&2; return 1; }
 }
 
 @test "a chain of glued tokens that settles within the cap is redacted token by token" {
   # 6 pairs is the longest chain that settles within the cap.
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6)' "$(fake_grafana)" "$(fake_shopify)")"
+  chain="$(glued_chain 6 "")"
   out="$(builtin_out "$chain")"
   want="$(python3 -c 'import sys; sys.stdout.write("<redacted:grafana-token><redacted:shopify-token>" * 6)')"
   [ "$out" = "$want" ] || { echo "got: ${out:0:200}" >&2; return 1; }
@@ -2349,6 +2356,7 @@ _$(fake_do)"
 @test "known limit: with gitleaks, a word character glued in front of an npm token or aws key id still keeps it raw" {
   require_real_gitleaks
   [ "$(real_redact_texts "$(fake_npm)")" = "<redacted:npm-token>" ]
+  [ "$(real_redact_texts "$(fake_aws)")" = "<redacted:aws-access-key>" ]
   shopify="x$(fake_shopify)"
   out="$(real_redact_texts "$shopify")"
   [ "$out" != "$shopify" ]
@@ -2358,24 +2366,27 @@ _$(fake_do)"
   done
 }
 
-# gitleaks 8.30.1 behaviour: no built-in rule covers Pulumi, so only the
-# gitleaks pulumi-api-token rule can catch the token, and it misses it mid-path.
-# Accepted limit, tracked in issue 219. The path-end and query-string controls
-# show the token shape is otherwise found.
-@test "known limit: a pulumi token in the middle of a URL path is not found by gitleaks" {
+# gitleaks 8.30.1 behaviour: no built-in rule covers Pulumi, so with no keyword
+# in front of it, only the gitleaks pulumi-api-token rule can catch the token,
+# and it finds it only when whitespace, a quote, a backtick, a semicolon or
+# the end of the text follows. Any other next character leaves it raw.
+# Accepted for now in issue 219. The fix is issue 238.
+@test "known limit: a pulumi token is found by gitleaks only before whitespace, a quote, a backtick, a semicolon or the end of the text" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
   input="open https://app.example.com/$KEY/stacks/production to check"
   [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see $KEY."
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see $KEY, ok"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  input="see https://app.example.com/x?t=$KEY&a=1 ok"
+  [ "$(real_redact_texts "$input")" = "$input" ]
   [ "$(real_redact_texts "open https://app.example.com/$KEY")" = "open https://app.example.com/<redacted:pulumi-api-token>" ]
   [ "$(real_redact_texts "open https://app.example.com/x?t=$KEY")" = "open https://app.example.com/x?t=<redacted:pulumi-api-token>" ]
-}
-
-# glued_chain <pairs> <tail> — <pairs> times a grafana then a shopify token,
-# then <tail>.
-glued_chain() {
-  python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * int(sys.argv[3]) + sys.argv[4])' \
-    "$(fake_grafana)" "$(fake_shopify)" "$1" "$2"
+  [ "$(real_redact_texts "see $KEY now")" = "see <redacted:pulumi-api-token> now" ]
+  [ "$(real_redact_texts "say \"$KEY\" now")" = "say \"<redacted:pulumi-api-token>\" now" ]
+  [ "$(real_redact_texts "see $KEY. and again $KEY now")" = "see <redacted:pulumi-api-token>. and again <redacted:pulumi-api-token> now" ]
 }
 
 # The quote path runs redact.builtin once; the body path runs two stages, each
@@ -2389,14 +2400,16 @@ glued_chain() {
   [ "$body" != "<redacted:glued-secrets>" ]
   [[ "$body" == "<redacted:grafana-token><redacted:shopify-token>"* ]]
   [[ "$body" == *"<redacted:github-pat><redacted:glued-secrets>" ]]
-  [[ "$body" != *"$(fake_ghp | cut -c5-)"* ]]
-  [[ "$body" != *"$(fake_ghp2 | cut -c5-)"* ]]
+  body_free "$body" "$(fake_grafana | cut -c5-)" "$(fake_shopify | cut -c7-)" \
+    "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
 
   chain="$(glued_chain 6 " $(fake_aws2)$(fake_asia)")"
   [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
   body="$(builtin_redact_texts "$chain")"
   [[ "$body" != *"<redacted:glued-secrets>"* ]]
   [[ "$body" == *"<redacted:shopify-token> <redacted:aws-access-key>" ]]
+  body_free "$body" "$(fake_grafana | cut -c5-)" "$(fake_shopify | cut -c7-)" \
+    "$(fake_aws2 | cut -c5-)" "$(fake_asia | cut -c5-)"
 }
 
 # The hook cuts a redacted body to 200 characters, so a quote of a chain this
@@ -2410,6 +2423,18 @@ glued_chain() {
   [ "$(field '.requests|length')" -eq 0 ]
   body_free "$(cat "$WORKLOG_JSONL")" "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
   body_free "$(cat "$CLAUDE_STDIN_LOG")" "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
+
+  # Control: the same drive with a short chain keeps its request, so the 0
+  # above comes from the long chain and not from another failure.
+  : > "$WORKLOG_JSONL"
+  chain="$(glued_chain 1 "")"
+  # Its own turn uuid: the claim marker is keyed on the turn and would skip a repeat.
+  user_line "$U7" "$chain" > "$TX"
+  reply="$(jq -nc --arg u "$U7" --arg q "$chain" \
+    '{requests:[{text:"user saw a chain",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$reply"
+  [ "$(field '.requests|length')" -eq 1 ]
+  [ "$(field '.requests[0].quote')" = "<redacted:grafana-token><redacted:shopify-token>" ]
 }
 
 @test "six grafana shopify pairs then a glued ghp pair fail closed to one marker" {
