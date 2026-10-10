@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.5](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.4...procedures-v0.17.5) (2026-10-10)
+
+
+### Bug Fixes
+
+* **procedures:** run the headless librarian with a scoped allowlist, not auto mode ([#199](https://github.com/drewdrewthis/claude-plugins/issues/199)) ([fe9b664](https://github.com/drewdrewthis/claude-plugins/commit/fe9b66472e85e74de665ed0f8d9677f32d392836))
+* **worklog,procedures:** keep the worklog judge out of the mistake intake, give mistake rows a session, keep channel quotes whole ([#235](https://github.com/drewdrewthis/claude-plugins/issues/235)) ([d4da805](https://github.com/drewdrewthis/claude-plugins/commit/d4da805be02db3b0038fbd0185c88e120d7ee260))
+
 ## [0.17.4](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.3...procedures-v0.17.4) (2026-10-10)
 
 
