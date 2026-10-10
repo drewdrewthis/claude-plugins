@@ -94,7 +94,8 @@
 #              (nothing was timed).
 #   --dry-run  builds and prints the prompt(s) that WOULD be sent; makes NO
 #              model calls and requires an index.txt to already exist (it
-#              never builds one — see --rebuild below). Stage 2's prompt is
+#              never builds one — see --rebuild below); an index with no
+#              record line is refused. Stage 2's prompt is
 #              necessarily a TEMPLATE: the real one depends on stage 1's
 #              live selection, which --dry-run never performs.
 #
@@ -180,7 +181,9 @@ Options:
                       selection adds not_found:true and exits 0.
   --dry-run            build and print the prompt(s) that would be sent;
                       make no model calls. Requires an existing index.txt
-                      (never builds one). Stage 2's prompt is a template.
+                      (never builds one) holding at least one record line;
+                      a bad one is refused (fix: without --dry-run and with --rebuild).
+                      Stage 2's prompt is a template.
   --timing             print a per-stage/attempt timing breakdown to
                       stderr; mode is always n/a (no sessions).
   --help, -h           show this help and exit 0.
@@ -577,10 +580,21 @@ else
     rm -f "$INDEX_DIR/session.id" "$INDEX_DIR/session.fingerprint"
 fi
 
-# An empty or unreadable index would select nothing and print a confident
-# NOT FOUND — the same symptom class as issue #198 — so refuse to use it.
-[ -r "$INDEX_TXT" ] && [ -s "$INDEX_TXT" ] \
-    || die "index at $INDEX_TXT is missing, unreadable or empty — re-run with --rebuild"
+# An empty, unreadable, whitespace-only or record-less index would select
+# nothing and print a confident NOT FOUND — the same symptom class as issue
+# #198 — so refuse to use it. A usable index has at least one
+# "<number> :: " line, the form build-record-index.sh writes; C locale so
+# BSD and GNU grep treat invalid UTF-8 the same.
+if ! { [ -r "$INDEX_TXT" ] && LC_ALL=C grep -qE '^[0-9]+ :: ' "$INDEX_TXT"; }; then
+    # --rebuild next to --dry-run is a usage error, and a run without
+    # --dry-run reuses a present-but-bad index, so the dry-run hint names both.
+    if $DRY_RUN; then
+        index_hint="re-run without --dry-run and with --rebuild, or point --index-dir at a valid index"
+    else
+        index_hint="re-run with --rebuild"
+    fi
+    die "index at $INDEX_TXT is missing, unreadable, empty or holds no record — $index_hint"
+fi
 
 # Stage 1 keeps no session, so there is no cold/warm distinction to report.
 # The field stays so the --json/--timing output shape is stable.
@@ -589,21 +603,23 @@ MODE_LABEL="n/a"
 if $DRY_RUN; then
     if $JSON_OUT; then
         # The system prompt (~234 KB on a real index) exceeds Linux's 128 KB
-        # single-argument limit, so jq must read it from a file, not --arg.
-        DRY_SYSTEM_FILE="$(mktemp "${TMPDIR:-/tmp}/how-do-i-dry.XXXXXX")" || die "could not create a temp file"
-        build_stage1_system_prompt > "$DRY_SYSTEM_FILE" || { rm -f "$DRY_SYSTEM_FILE"; die "could not write the stage 1 system prompt"; }
-        jq -n \
+        # single-argument limit, so it must reach jq as a stream, never --arg.
+        # Piped, not written to a temp file, so a signal mid-render leaves
+        # nothing behind; captured, so a failed render prints no partial JSON.
+        # --rawfile, not -Rs: -Rs corrupts a multibyte char that straddles a
+        # 4096-byte read boundary.
+        dry_json="$(build_stage1_system_prompt | jq -n \
             --argjson dry_run true \
             --arg mode "$MODE_LABEL" \
             --arg select_model "$SELECT_MODEL" \
             --arg answer_model "$ANSWER_MODEL" \
-            --rawfile stage1_system_prompt "$DRY_SYSTEM_FILE" \
+            --rawfile stage1_system_prompt /dev/stdin \
             --arg stage1_prompt "$(build_stage1_prompt "$QUESTION" 1)" \
             --arg stage2_prompt_template "$(build_stage2_prompt "$QUESTION" "<compiled records go here — depend on stage 1 live selection, not available in --dry-run>")" \
-            '{dry_run: $dry_run, mode: $mode, select_model: $select_model, answer_model: $answer_model, stage1_system_prompt: $stage1_system_prompt, stage1_prompt: $stage1_prompt, stage2_prompt_template: $stage2_prompt_template}'
+            '{dry_run: $dry_run, mode: $mode, select_model: $select_model, answer_model: $answer_model, stage1_system_prompt: $stage1_system_prompt, stage1_prompt: $stage1_prompt, stage2_prompt_template: $stage2_prompt_template}')"
         dry_status=$?
-        rm -f "$DRY_SYSTEM_FILE"
-        [ "$dry_status" -eq 0 ] || die "could not render the --dry-run JSON (jq exit $dry_status)"
+        [ "$dry_status" -eq 0 ] || die "could not render the --dry-run JSON (exit $dry_status)"
+        printf '%s\n' "$dry_json"
     else
         echo "=== how-do-i --dry-run ==="
         echo "index-dir: $INDEX_DIR"
