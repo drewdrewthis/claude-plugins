@@ -400,7 +400,10 @@ flag tracks the phase.
 
 Prose-only skill — no scripts or hooks of its own, so no bats suite. Vendored
 from `orchard-codex@develop-sweatshop` (`skills/ship`); own-file references
-rewritten to `${CLAUDE_PLUGIN_ROOT}`.
+rewritten to `${CLAUDE_PLUGIN_ROOT}`. `references/monitor.md` also diverges by
+owner direction (#186, marked `PLUGIN ADAPTATION` in the file): the
+readiness-check path, the C1–C9 un-draft gate, the quoted-verdict ready report,
+and the REST watcher fallback.
 
 **Host dependencies not shipped by this plugin** (present on an orchard-codex
 checkout; absent on a box whose `~/.claude` is not one, e.g. drew-sweatshop —
@@ -408,8 +411,8 @@ the skill's prose loads and reads, but these do not run until installed
 separately):
 
 - Scripts: `~/.claude/scripts/session-truth`, `scripts/verify-ci-shard-tally.sh`,
-  `~/.claude/tooling/orchardist-watch/pr.sh` (the skill names a `gh pr checks --watch`
-  fallback for boxes without it), `records/procedures/github/scripts/tag.sh`.
+  `~/.claude/tooling/orchardist-watch/pr.sh` (the skill names a REST fallback for
+  boxes without it), `records/procedures/github/scripts/tag.sh`.
 - Readiness check, from the https://github.com/drewdrewthis/langwatch-sweatshop toolkit
   (not orchard-codex): `~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh`
   and its `lib/gh-checks-rest.sh`. The skill calls it by that path.

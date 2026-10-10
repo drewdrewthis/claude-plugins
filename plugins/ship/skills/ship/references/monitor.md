@@ -1,5 +1,7 @@
 # PR + MONITOR mode
 
+<!-- PLUGIN ADAPTATION (owner-directed, drewdrewthis/claude-plugins#186): the readiness-check path, the C1–C9 un-draft gate, the quoted-verdict ready report, and the REST watcher fallback diverge from orchard-codex@develop-sweatshop skills/ship. -->
+
 Open the PR, arm a watcher immediately, drive to green. The session that opens the PR owns watching it until it's ready — don't hand that off and walk away.
 
 ```bash
@@ -29,10 +31,13 @@ Open as draft or ready per repo convention (`gh pr create`) to get the PR number
    ```bash
    # orchard-codex host:
    ~/.claude/tooling/orchardist-watch/pr.sh <owner>/<repo> <N>
-   # any box without that script (e.g. drew-sweatshop):
-   gh pr checks <N> -R <owner>/<repo> --watch --fail-fast --interval 30
+   # any box without that script (e.g. drew-sweatshop) — REST only; `gh pr checks` is GraphQL, never poll it:
+   source ~/Projects/langwatch-sweatshop/modules/github/scripts/lib/gh-checks-rest.sh
+   sha=$(gh api repos/<owner>/<repo>/pulls/<N> --jq .head.sha)
+   while fetch_checks_rest <owner> <repo> "$sha" | jq -e 'length == 0 or any(.[]; (.status // "COMPLETED") != "COMPLETED" or .state == "PENDING")' >/dev/null; do sleep 30; done
+   fetch_checks_rest <owner> <repo> "$sha" | jq -r '.[] | "\(.conclusion // .state)\t\(.name // .context)"'
    ```
-   `pr.sh` is session-length: it watches CI checks, new comments, review threads, and pushes. The `gh pr checks` fallback watches CI only and is NOT session-length — it exits 0 when every check has finished, and non-zero on the first failed check. If it exits at once with "no checks reported", CI has not registered yet: wait 30s and re-arm — that is not a failure. Re-arm it after every push. Pass Logic C is your only review-thread signal there, so run it every iteration — after the fallback exits, keep iterating Step 2 yourself until the readiness check prints `overall: READY`; do not idle waiting for an event. Verify the watch armed within ~30s (baseline line or `WATCH-DEGRADED` for `pr.sh`; a checks table for the fallback) — don't assume it did. On a fallback box, `monitor_armed: true` (below) means a watch is running, or the last one ended with every check finished on the current HEAD.
+   `pr.sh` is session-length: it watches CI checks, new comments, review threads, and pushes. The REST fallback watches CI only and is NOT session-length — it waits until every check on that one head sha has finished, then prints one `<conclusion> <name>` line per check and exits. A line that does not start with `SUCCESS`, `SKIPPED` or `NEUTRAL` is a failed check; no lines at all means the fetch failed — re-arm. Re-arm it after every push, because the sha changed. Pass Logic C is your only review-thread signal there, so run it every iteration — after the fallback exits, keep iterating Step 2 yourself until the readiness check prints `overall: READY`; do not idle waiting for an event. Verify the watch armed within ~30s (baseline line or `WATCH-DEGRADED` for `pr.sh`; a running Monitor task for the fallback) — don't assume it did. On a fallback box, `monitor_armed: true` (below) means a watch is running, or the last one ended with every check finished on the current HEAD.
 
 Once verified alive, mark it in the flag:
 
@@ -40,7 +45,7 @@ Once verified alive, mark it in the flag:
 echo '{"pr": <N>, "phase": "monitor", "monitor_armed": true}' > "/tmp/claude-ship-flow-$CLAUDE_SESSION_ID"
 ```
 
-If the Monitor is later stopped before `done` (e.g. to fix something inline), set `"monitor_armed": false` (or drop the key) until it's re-armed — the Stop hook checks this key while `phase: monitor`. The same applies on the fallback when the watch exits on a failed check or belongs to an older HEAD: set `false` until you re-arm after the fix push.
+If the Monitor is later stopped before `done` (e.g. to fix something inline), set `"monitor_armed": false` (or drop the key) until it's re-armed — the Stop hook checks this key while `phase: monitor`. The same applies on the fallback when the watch printed a failed check or belongs to an older HEAD: set `false` until you re-arm after the fix push.
 
 ## Step 2 — Iteration loop (replaces ralph-loop)
 
@@ -71,16 +76,16 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
    - Verification battery means the targeted checks for the files you touched, then push and let CI run the full suite. Never run the repo's full test suite, full lint, or full typecheck locally on a langwatch PR — CI is the authority, and a local full-suite run is wasted time (orchard-codex #457, decision 2026-09-24-night-watch-direction-defaults-threads-suite-codeql).
 4. Exit the iteration.
 
-**E — CI check.** Use REST (`~/Projects/langwatch-sweatshop/modules/github/scripts/lib/gh-checks-rest.sh` `fetch_checks_rest`). If pending, wait inline — **never exit while CI is pending.** Cross-check githubstatus.com before treating a stall as your bug (provider outage short-circuit). The armed watcher (Step 1, item 3) IS the CI wait: never start a second poll loop and never block a turn on a full-CI wait — react to the first `conclusion=failure` event it emits (a per-check event arrives minutes before `CI DONE`). On the `gh pr checks` fallback, a non-zero exit with a failed row in the table is the failure signal.
+**E — CI check.** Use REST (`~/Projects/langwatch-sweatshop/modules/github/scripts/lib/gh-checks-rest.sh` `fetch_checks_rest`). If pending, wait inline — **never exit while CI is pending.** Cross-check githubstatus.com before treating a stall as your bug (provider outage short-circuit). The armed watcher (Step 1, item 3) IS the CI wait: never start a second poll loop and never block a turn on a full-CI wait — react to the first `conclusion=failure` event it emits (a per-check event arrives minutes before `CI DONE`). On the REST fallback, a printed line that does not start with `SUCCESS`, `SKIPPED` or `NEUTRAL` is the failure signal.
 
 **F — CI failure.** Check the draft gate (above), cross-check `gh run list` for the real failure, diagnose, fix, commit, push, exit.
 
 **G — Cross-check and finalize.**
-1. Verify shard tally — green checks are forgeable: `~/.claude/scripts/verify-ci-shard-tally.sh <owner>/<repo> <N>` (exit 1 = green unverified; must see a `Test Files N passed` tally line).
+1. Verify shard tally — green checks are forgeable: `~/.claude/scripts/verify-ci-shard-tally.sh <owner>/<repo> <N>` (exit 1 = green unverified; must see a `Test Files N passed` tally line). `ls` the script first: where it is absent (e.g. drew-sweatshop) G.1 cannot run — say so in the PR body, do not claim the shard tally was verified, and treat C2 of the readiness check as the only CI gate.
 2. Verify both typecheck steps ran if the repo splits them (LangWatch: `pnpm typecheck` AND `pnpm run typecheck:tests`).
 3. Finalize: PATCH the PR body (write-pr format), `gh pr ready`, assign, request reviewers, set the `pr-ready` phase label (`records/procedures/github/scripts/tag.sh -R <owner/repo> pr-ready <issue> <N>`).
    **Ship's terminal state is human-review-ready: non-draft, assigned, reviewers requested.** Un-drafting is the shipping worker's own action, gated on every criterion of `pr-ready-check` (C1–C9), not a subset: before `gh pr ready`, run the Step 5 item 1 command and un-draft only when its single `FAIL` line is `C1: PR is a draft` (the script fails C1 on every draft). Then re-run it and require `overall: READY` — that re-run is the Step 5 run. No fleet role (orchardist, assistant, planner) gates it, and "await the owner's un-draft" is not a ship step. The only reason to leave a green, proven PR in draft is an explicit owner instruction recorded on that PR. (Owner ruling 2026-09-08 on langwatch/langwatch#7959, which sat done-but-draft for half a day waiting on a gate nobody owned.) **Draft is only for not-yet-finished work: the PR flips to ready in the same turn that pushes the last commit** — not after a bot round, not after a wait, not on a later beat (owner standing rule 2026-09-23, Discord 1552124506657656853).
-4. Verify the Monitor is still alive (`pr.sh`), or that the last `gh pr checks` watch ended with every check finished on the current HEAD (fallback).
+4. Verify the Monitor is still alive (`pr.sh`), or that the last REST fallback watch ended with every check finished on the current HEAD.
 5. Only THEN consider emitting a completion signal — see Step 5.
 
 ### Verification discipline (every state-changing action gets re-fetched, not trusted)
