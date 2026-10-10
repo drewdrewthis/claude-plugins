@@ -14,14 +14,19 @@
 # leaks into the bats process, and so those pieces are testable without any
 # dependency on build-record-index.sh or compile-records.sh existing.
 #
-# Tests that exercise session-cache invalidate/reuse (section h) and the
-# --timing real-run label (section i) deliberately make stage 1 return an
-# EMPTY selection ("[]"), which short-circuits the run before stage 2 and
-# keeps them independent of compile-records.sh. They assert only on
-# session-cache artifacts and stub call args/stdin. Section (n) is what pins
-# the short-circuit itself.
+# Tests of the session-free stage 1 (section h, issue #198), the mode=n/a
+# --timing/--json label (section i) and the failure/leftover checks (section p)
+# mostly make stage 1 return an EMPTY selection ("[]"), which short-circuits
+# the run before stage 2 and keeps them independent of compile-records.sh.
+# They assert on stub call args/stdin, the system-prompt file the stub copies
+# at call time (call-N.system), the CLAUDE_CODE_DISABLE_CLAUDE_MDS value the
+# stub records (call-N.env) and leftover state. Section (n) pins the
+# short-circuit itself.
 #
 # Run: bats hooks/tests/how-do-i.bats
+
+# `run --separate-stderr` below needs bats 1.5.0.
+bats_require_minimum_version 1.5.0
 
 setup() {
   SCRIPT="$BATS_TEST_DIRNAME/../../scripts/how-do-i.sh"
@@ -79,6 +84,10 @@ seed_roots_stamp() {
 #   STUB_DIR/count            running invocation counter (auto-created)
 #   STUB_DIR/call-N.args      invocation N's args, one per line
 #   STUB_DIR/call-N.stdin     invocation N's stdin (the prompt sent)
+#   STUB_DIR/call-N.system    copy of the file named after --system-prompt-file,
+#                             taken AT CALL TIME (the script removes its work dir on exit)
+#   STUB_DIR/call-N.env       $CLAUDE_CODE_DISABLE_CLAUDE_MDS as seen by invocation N
+#   STUB_DIR/stderr-N         text echoed to stderr by invocation N (default: none)
 #   STUB_DIR/resp-N.json      canned stdout for invocation N (default: empty)
 #   STUB_DIR/exit-N           canned exit code for invocation N (default: 0)
 make_stub() {
@@ -93,6 +102,15 @@ n=$((n + 1))
 echo "$n" > "$STUB_DIR/count"
 printf '%s\n' "$@" > "$STUB_DIR/call-$n.args"
 cat > "$STUB_DIR/call-$n.stdin"
+printf '%s' "${CLAUDE_CODE_DISABLE_CLAUDE_MDS-}" > "$STUB_DIR/call-$n.env"
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "--system-prompt-file" ] && [ -f "$a" ]; then
+        cp "$a" "$STUB_DIR/call-$n.system"
+    fi
+    prev="$a"
+done
+[ -f "$STUB_DIR/stderr-$n" ] && cat "$STUB_DIR/stderr-$n" >&2
 if [ -f "$STUB_DIR/resp-$n.json" ]; then
     cat "$STUB_DIR/resp-$n.json"
 fi
@@ -189,17 +207,17 @@ STUB
   [ "$output" = "OK The answer is 42." ]
 }
 
-# ---------- (d) timing breakdown is reported per stage, cold vs warm labeled ----------
+# ---------- (d) timing breakdown is reported per stage ----------
 
-@test "internal-format-timing: wall/boot/api/cache breakdown sums correctly and labels cold" {
+@test "internal-format-timing: wall/boot/api/cache breakdown sums correctly and carries the mode label" {
   resp="$TMP/resp.json"
   jq -n '{duration_ms: 5000, duration_api_ms: 1200, usage: {cache_read_input_tokens: 36900, cache_creation_input_tokens: 21}}' > "$resp"
 
-  run bash "$SCRIPT" --internal-format-timing select 1 cold 7.500 "$resp"
+  run bash "$SCRIPT" --internal-format-timing select 1 n/a 7.500 "$resp"
   [ "$status" -eq 0 ]
   [[ "$output" == *"stage=select"* ]]
   [[ "$output" == *"attempt=1"* ]]
-  [[ "$output" == *"mode=cold"* ]]
+  [[ "$output" == *"mode=n/a"* ]]
   [[ "$output" == *"wall_ms=7500"* ]]
   [[ "$output" == *"cli_duration_ms=5000"* ]]
   [[ "$output" == *"api_ms=1200"* ]]
@@ -209,16 +227,6 @@ STUB
   [[ "$output" == *"cache_creation=21"* ]]
 }
 
-@test "internal-format-timing: labels warm distinctly from cold" {
-  resp="$TMP/resp.json"
-  jq -n '{duration_ms: 900, duration_api_ms: 300, usage: {cache_read_input_tokens: 100, cache_creation_input_tokens: 0}}' > "$resp"
-
-  run bash "$SCRIPT" --internal-format-timing answer 1 warm 2.100 "$resp"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"mode=warm"* ]]
-  [[ "$output" != *"mode=cold"* ]]
-}
-
 @test "internal-format-timing: floors cli_overhead_ms/spawn_teardown_ms at 0 instead of going negative" {
   resp="$TMP/resp.json"
   # A canned duration_ms larger than the measured wall time (e.g. millisecond-
@@ -226,7 +234,7 @@ STUB
   # "overhead" or "teardown" duration.
   jq -n '{duration_ms: 500, duration_api_ms: 50, usage: {cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}' > "$resp"
 
-  run bash "$SCRIPT" --internal-format-timing select 1 cold 0.014 "$resp"
+  run bash "$SCRIPT" --internal-format-timing select 1 n/a 0.014 "$resp"
   [ "$status" -eq 0 ]
   [[ "$output" == *"wall_ms=14"* ]]
   [[ "$output" == *"cli_duration_ms=500"* ]]
@@ -307,6 +315,37 @@ STUB
   [ ! -f "$stub_dir/count" ]
 }
 
+@test "--dry-run plain text prints a stage-1 SYSTEM prompt section with the instruction" {
+  stub="$TMP/fake-claude"; stub_dir="$TMP/stubdata"; mkdir -p "$stub_dir"; make_stub "$stub"
+  index_dir="$TMP/index-dir"; mkdir -p "$index_dir"
+  printf '1 :: some record about widgets\n' > "$index_dir/index.txt"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run
+
+  [[ "$output" == *"STAGE 1 SYSTEM PROMPT"* ]]
+  [[ "$output" == *"choosing which records from an index are relevant"* ]]
+}
+
+@test "--dry-run plain text prints the Index in the stage-1 system prompt section" {
+  stub="$TMP/fake-claude"; stub_dir="$TMP/stubdata"; mkdir -p "$stub_dir"; make_stub "$stub"
+  index_dir="$TMP/index-dir"; mkdir -p "$index_dir"
+  printf '1 :: some record about widgets\n' > "$index_dir/index.txt"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run
+
+  [[ "$output" == *"Index:"*"1 :: some record about widgets"* ]]
+}
+
+@test "--dry-run plain text reports mode: n/a" {
+  stub="$TMP/fake-claude"; stub_dir="$TMP/stubdata"; mkdir -p "$stub_dir"; make_stub "$stub"
+  index_dir="$TMP/index-dir"; mkdir -p "$index_dir"
+  printf '1 :: some record\n' > "$index_dir/index.txt"
+
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run
+
+  [[ "$output" == *"mode: n/a"* ]]
+}
+
 @test "--dry-run --json prints a JSON object with both prompts and makes zero calls" {
   stub="$TMP/fake-claude"
   stub_dir="$TMP/stubdata"
@@ -326,140 +365,403 @@ STUB
   [ ! -f "$stub_dir/count" ]
 }
 
-# ---------- (h) session-cache: index change invalidates, unchanged index reuses ----------
+@test "--dry-run --json carries stage1_system_prompt with the instruction and the index" {
+  stub="$TMP/fake-claude"; stub_dir="$TMP/stubdata"; mkdir -p "$stub_dir"; make_stub "$stub"
+  index_dir="$TMP/index-dir"; mkdir -p "$index_dir"
+  printf '1 :: some record about widgets\n' > "$index_dir/index.txt"
 
-@test "a changed index.txt invalidates the stored session id and forces a re-prime" {
-  stub="$TMP/fake-claude"
-  stub_dir="$TMP/stubdata"
-  mkdir -p "$stub_dir"
-  make_stub "$stub"
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run --json
 
-  index_dir="$TMP/index-dir"
-  mkdir -p "$index_dir"
-  printf '1 :: new content v2\n' > "$index_dir/index.txt"
-  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
-  seed_roots_stamp "$index_dir"
-  echo "stale-session-id" > "$index_dir/session.id"
-  echo "deadbeef-not-matching-anything" > "$index_dir/session.fingerprint"
-
-  jq -n '{is_error: false, session_id: "new-session-xyz", result: "[]"}' > "$stub_dir/resp-1.json"
-
-  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir"
-  # What's under test here is the session-cache behavior only; the empty
-  # selection just keeps the run short (see section n).
-
-  [ -f "$stub_dir/call-1.args" ]
-  ! grep -q -- '--resume' "$stub_dir/call-1.args"
-  [ -f "$stub_dir/call-1.stdin" ]
-  grep -q "Index:" "$stub_dir/call-1.stdin"
-
-  [ "$(cat "$index_dir/session.id")" = "new-session-xyz" ]
-  expected_fp="$(shasum -a 256 "$index_dir/index.txt" | awk '{print $1}')"
-  [ "$(cat "$index_dir/session.fingerprint")" = "$expected_fp" ]
+  echo "$output" | jq -e '.stage1_system_prompt | contains("choosing which records") and contains("Index:\n1 :: some record about widgets")' >/dev/null
 }
 
-@test "an unchanged index reuses the stored session id via --resume" {
-  stub="$TMP/fake-claude"
-  stub_dir="$TMP/stubdata"
-  mkdir -p "$stub_dir"
-  make_stub "$stub"
+@test "--dry-run --json stage1_prompt is the question with no Index: block" {
+  stub="$TMP/fake-claude"; stub_dir="$TMP/stubdata"; mkdir -p "$stub_dir"; make_stub "$stub"
+  index_dir="$TMP/index-dir"; mkdir -p "$index_dir"
+  printf '1 :: some record about widgets\n' > "$index_dir/index.txt"
 
-  index_dir="$TMP/index-dir"
-  mkdir -p "$index_dir"
-  printf '1 :: stable content\n' > "$index_dir/index.txt"
-  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
-  seed_roots_stamp "$index_dir"
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "how do widgets work" --index-dir "$index_dir" --dry-run --json
 
-  fp="$(shasum -a 256 "$index_dir/index.txt" | awk '{print $1}')"
-  echo "reused-session-123" > "$index_dir/session.id"
-  printf '%s' "$fp" > "$index_dir/session.fingerprint"
-
-  jq -n '{is_error: false, session_id: "reused-session-123", result: "[]"}' > "$stub_dir/resp-1.json"
-
-  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir"
-
-  [ -f "$stub_dir/call-1.args" ]
-  grep -q -- '--resume' "$stub_dir/call-1.args"
-  grep -q "reused-session-123" "$stub_dir/call-1.args"
-
-  [ -f "$stub_dir/call-1.stdin" ]
-  ! grep -q "^Index:" "$stub_dir/call-1.stdin"
-  grep -q "established earlier in this session" "$stub_dir/call-1.stdin"
-
-  [ "$(cat "$index_dir/session.id")" = "reused-session-123" ]
-  [ "$(cat "$index_dir/session.fingerprint")" = "$fp" ]
+  echo "$output" | jq -e '(.stage1_prompt | contains("how do widgets work")) and (.stage1_prompt | contains("Index:") | not)' >/dev/null
 }
 
-@test "a warm run's returned session_id is re-persisted too, in case the CLI ever rotates it on resume" {
-  stub="$TMP/fake-claude"
-  stub_dir="$TMP/stubdata"
-  mkdir -p "$stub_dir"
-  make_stub "$stub"
-
-  index_dir="$TMP/index-dir"
-  mkdir -p "$index_dir"
-  printf '1 :: stable content\n' > "$index_dir/index.txt"
-  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
-  seed_roots_stamp "$index_dir"
-
-  fp="$(shasum -a 256 "$index_dir/index.txt" | awk '{print $1}')"
-  echo "original-session-id" > "$index_dir/session.id"
-  printf '%s' "$fp" > "$index_dir/session.fingerprint"
-
-  # Stub returns a DIFFERENT session_id than the one being resumed, simulating
-  # a hypothetical CLI that rotates ids across --resume.
-  jq -n '{is_error: false, session_id: "rotated-session-id", result: "[]"}' > "$stub_dir/resp-1.json"
-
-  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir"
-
-  # The warm path really was taken (resumed the ORIGINAL id)...
-  grep -q "original-session-id" "$stub_dir/call-1.args"
-  # ...but the id stored for NEXT time follows whatever the CLI returned.
-  [ "$(cat "$index_dir/session.id")" = "rotated-session-id" ]
-  [ "$(cat "$index_dir/session.fingerprint")" = "$fp" ]
-}
-
-# ---------- (i) --timing labels a real (stubbed) run cold vs warm ----------
-
-@test "--timing prints a stage=select line labeled mode=cold on a real cold (stubbed) run" {
-  stub="$TMP/fake-claude"
-  stub_dir="$TMP/stubdata"
-  mkdir -p "$stub_dir"
-  make_stub "$stub"
-
-  index_dir="$TMP/index-dir"
-  mkdir -p "$index_dir"
+@test "--dry-run --json reports mode n/a" {
+  stub="$TMP/fake-claude"; stub_dir="$TMP/stubdata"; mkdir -p "$stub_dir"; make_stub "$stub"
+  index_dir="$TMP/index-dir"; mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
-  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
-  seed_roots_stamp "$index_dir"
 
+  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run --json
+
+  echo "$output" | jq -e '.mode == "n/a"' >/dev/null
+}
+
+@test "--dry-run --json on a real-sized index exits 0 with the full system prompt (argv limit)" {
+  stub="$TMP/fake-claude"; stub_dir="$TMP/stubdata"; mkdir -p "$stub_dir"; make_stub "$stub"
+  index_dir="$TMP/index-dir"; mkdir -p "$index_dir"
+  # A real index is ~234 KB; the system prompt must not ride in one jq argv.
+  awk 'BEGIN { for (i = 1; i <= 3000; i++) printf "%d :: some description text for record number %d that pads the line out\n", i, i }' > "$index_dir/index.txt"
+  [ "$(wc -c < "$index_dir/index.txt")" -gt 200000 ]
+  last_line="$(tail -n 1 "$index_dir/index.txt")"
+
+  run --separate-stderr env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run --json
+
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e . >/dev/null
+  echo "$output" | jq -e --arg last "$last_line" '.stage1_system_prompt | contains($last)' >/dev/null
+  echo "$output" | jq -e '.mode == "n/a"' >/dev/null
+}
+
+# An empty index selects nothing and would print a confident NOT FOUND — the
+# same symptom class as issue #198 — so the script must refuse it.
+empty_index_fixture() {
+  fresh_fixture
+  : > "$index_dir/index.txt"
+}
+
+@test "an empty index.txt aborts the run: exit 1, stderr says empty, zero CLI calls, no NOT FOUND" {
+  empty_index_fixture
+
+  run --separate-stderr env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"empty"* ]]
+  [[ "$output" != *"NOT FOUND"* ]]
+  [ ! -f "$stub_dir/count" ]
+}
+
+@test "--dry-run on an empty index.txt aborts the same way" {
+  empty_index_fixture
+
+  run --separate-stderr env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir" --dry-run
+
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"empty"* ]]
+  [[ "$output" != *"NOT FOUND"* ]]
+  [ ! -f "$stub_dir/count" ]
+}
+
+# ---------- (h) session-free stage 1: system-prompt file, no resume, no session state ----------
+#
+# Issue #198. Stage 1 used to --resume a stored session primed with the index,
+# so a rewriting proxy could compact that history and the selector collapsed
+# to false NOT FOUNDs. Now the select instruction + index ride in a
+# --system-prompt-file and the question is the only user message; nothing is
+# resumed and no session state is written. fresh_fixture / run_howdoi_ok are the
+# shared arrangement for sections (h)-(i); TMPDIR is pinned per test so the
+# work dir the script creates is observable (and its removal checkable).
+
+fresh_fixture() {
+  stub="$TMP/fake-claude"
+  stub_dir="$TMP/stubdata"
+  work_tmp="$TMP/work-tmp"
+  index_dir="$TMP/index-dir"
+  mkdir -p "$stub_dir" "$work_tmp" "$index_dir"
+  make_stub "$stub"
+  printf '1 :: widget record\n2 :: gadget record\n' > "$index_dir/index.txt"
+  printf '1\tid-one\tpath/one\n2\tid-two\tpath/two\n' > "$index_dir/map.tsv"
+  seed_roots_stamp "$index_dir"
+}
+
+# Runs the script against the fixture; extra args go through, QUESTION overrides "q".
+run_howdoi() {
+  run env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "${QUESTION:-q}" --index-dir "$index_dir" "$@"
+}
+
+# Success-path variant: also asserts the run exited 0, so a script that dies
+# early cannot satisfy the artifact checks that follow.
+run_howdoi_ok() {
+  run_howdoi "$@"
+  [ "$status" -eq 0 ]
+}
+
+# A bare `! grep` also passes when the file is missing (grep exits 2), so
+# require a non-empty file before claiming the pattern is absent from it.
+refute_in_file() {
+  local pattern="$1" file="$2"
+  [ -s "$file" ] || return 1
+  if grep -q -- "$pattern" "$file"; then return 1; fi
+}
+
+@test "stage 1 never carries --resume, even with a legacy session.id in the index dir" {
+  fresh_fixture
+  echo "legacy-session-id" > "$index_dir/session.id"
+  echo "legacy-fp" > "$index_dir/session.fingerprint"
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  refute_in_file '--resume' "$stub_dir/call-1.args"
+  # The legacy id itself must not leak into the args either.
+  refute_in_file 'legacy-session-id' "$stub_dir/call-1.args"
+}
+
+@test "stage 1 passes --system-prompt-file" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  grep -q -- '^--system-prompt-file$' "$stub_dir/call-1.args"
+}
+
+@test "stage 1 passes --no-session-persistence" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  grep -q -- '^--no-session-persistence$' "$stub_dir/call-1.args"
+}
+
+@test "the system prompt file holds the select instruction" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  grep -q "choosing which records from an index are relevant" "$stub_dir/call-1.system"
+}
+
+@test "the system prompt file holds the Index: header" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  grep -q "^Index:$" "$stub_dir/call-1.system"
+}
+
+@test "the system prompt file holds every line of index.txt" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  # index.txt's lines appear verbatim, in order, as the tail of the file.
+  tail -n 2 "$stub_dir/call-1.system" | diff - "$index_dir/index.txt"
+}
+
+@test "stage 1 stdin is the question" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  QUESTION="how do widgets work" run_howdoi_ok
+
+  [ "$(cat "$stub_dir/call-1.stdin")" = "$(printf 'Question:\nhow do widgets work')" ]
+}
+
+@test "stage 1 stdin carries no Index: block" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  refute_in_file "Index:" "$stub_dir/call-1.stdin"
+}
+
+@test "stage 1 stdin carries no index content" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  refute_in_file "widget record" "$stub_dir/call-1.stdin"
+}
+
+@test "two consecutive runs with an unchanged index send byte-identical system prompt files" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+  cp "$stub_dir/resp-1.json" "$stub_dir/resp-2.json"
+
+  QUESTION="first question" run_howdoi_ok
+  QUESTION="a different question" run_howdoi_ok
+
+  cmp "$stub_dir/call-1.system" "$stub_dir/call-2.system"
+}
+
+@test "the second of two consecutive runs does not carry --resume" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+  cp "$stub_dir/resp-1.json" "$stub_dir/resp-2.json"
+
+  run_howdoi_ok
+  run_howdoi_ok
+
+  refute_in_file '--resume' "$stub_dir/call-2.args"
+}
+
+@test "no call ever carries --resume, across a stage-1 retry" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "I need to read this carefully."}' > "$stub_dir/resp-1.json"
+  cp "$stub_dir/resp-1.json" "$stub_dir/resp-2.json"
+
+  run_howdoi
+
+  # Both attempts must have run, or the glob could match nothing.
+  [ -s "$stub_dir/call-1.args" ]
+  [ -s "$stub_dir/call-2.args" ]
+  for f in "$stub_dir"/call-*.args; do refute_in_file '--resume' "$f"; done
+}
+
+@test "on attempt 2 the retry reminder is appended to stdin" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "I need to read this carefully."}' > "$stub_dir/resp-1.json"
+  cp "$stub_dir/resp-1.json" "$stub_dir/resp-2.json"
+
+  run_howdoi
+
+  grep -q "Reminder: reply with ONLY a JSON array of integers" "$stub_dir/call-2.stdin"
+}
+
+@test "on attempt 2 stdin still starts with the question" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "I need to read this carefully."}' > "$stub_dir/resp-1.json"
+  cp "$stub_dir/resp-1.json" "$stub_dir/resp-2.json"
+
+  QUESTION="how do widgets work" run_howdoi
+
+  [ "$(head -n 2 "$stub_dir/call-2.stdin")" = "$(printf 'Question:\nhow do widgets work')" ]
+}
+
+@test "on attempt 2 the system prompt file is byte-identical to attempt 1" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "I need to read this carefully."}' > "$stub_dir/resp-1.json"
+  cp "$stub_dir/resp-1.json" "$stub_dir/resp-2.json"
+
+  run_howdoi
+
+  cmp "$stub_dir/call-1.system" "$stub_dir/call-2.system"
+}
+
+@test "on attempt 2 the system prompt path is the same as attempt 1" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "I need to read this carefully."}' > "$stub_dir/resp-1.json"
+  cp "$stub_dir/resp-1.json" "$stub_dir/resp-2.json"
+
+  run_howdoi
+
+  path1="$(grep -A1 -- '^--system-prompt-file$' "$stub_dir/call-1.args" | tail -n 1)"
+  path2="$(grep -A1 -- '^--system-prompt-file$' "$stub_dir/call-2.args" | tail -n 1)"
+  [ -n "$path1" ]
+  [ "$path1" = "$path2" ]
+}
+
+@test "the CLI is called with CLAUDE_CODE_DISABLE_CLAUDE_MDS=1" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  # Caller exports 0 so only the script itself can make the CLI see 1.
+  CLAUDE_CODE_DISABLE_CLAUDE_MDS=0 run_howdoi_ok
+
+  [ "$(cat "$stub_dir/call-1.env")" = "1" ]
+}
+
+@test "a legacy session.id is deleted on a normal run" {
+  fresh_fixture
+  echo "legacy-session-id" > "$index_dir/session.id"
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  [ ! -e "$index_dir/session.id" ]
+}
+
+@test "a legacy session.fingerprint is deleted on a normal run" {
+  fresh_fixture
+  echo "legacy-fp" > "$index_dir/session.fingerprint"
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  [ ! -e "$index_dir/session.fingerprint" ]
+}
+
+@test "a legacy session.id is deleted on a --rebuild run" {
+  fresh_fixture
+  echo "legacy-session-id" > "$index_dir/session.id"
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+  scripts_dir="$TMP/scripts"
+  make_build_sentinel_scripts_dir "$scripts_dir" "$TMP/build.log"
+
+  run env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir" --rebuild
+  [ "$status" -eq 0 ]
+
+  [ ! -e "$index_dir/session.id" ]
+}
+
+@test "a legacy session.fingerprint is deleted on a --rebuild run" {
+  fresh_fixture
+  echo "legacy-fp" > "$index_dir/session.fingerprint"
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+  scripts_dir="$TMP/scripts"
+  make_build_sentinel_scripts_dir "$scripts_dir" "$TMP/build.log"
+
+  run env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir" --rebuild
+  [ "$status" -eq 0 ]
+
+  [ ! -e "$index_dir/session.fingerprint" ]
+}
+
+@test "--dry-run leaves a legacy session.id in place" {
+  fresh_fixture
+  echo "legacy-session-id" > "$index_dir/session.id"
+  echo "legacy-fp" > "$index_dir/session.fingerprint"
+
+  run_howdoi_ok --dry-run
+
+  [ "$(cat "$index_dir/session.id")" = "legacy-session-id" ]
+}
+
+@test "--dry-run leaves a legacy session.fingerprint in place" {
+  fresh_fixture
+  echo "legacy-session-id" > "$index_dir/session.id"
+  echo "legacy-fp" > "$index_dir/session.fingerprint"
+
+  run_howdoi_ok --dry-run
+
+  [ "$(cat "$index_dir/session.fingerprint")" = "legacy-fp" ]
+}
+
+# ---------- (i) --timing and --json report mode n/a ----------
+
+@test "--timing prints a stage=select line labeled mode=n/a" {
+  fresh_fixture
   jq -n '{is_error: false, session_id: "s1", result: "[]", duration_ms: 900, duration_api_ms: 300, usage: {cache_read_input_tokens: 0, cache_creation_input_tokens: 500}}' > "$stub_dir/resp-1.json"
 
-  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir" --timing
+  run_howdoi_ok --timing
 
-  [[ "$output" == *"[how-do-i timing] stage=select attempt=1 mode=cold"* ]]
+  [[ "$output" == *"[how-do-i timing] stage=select attempt=1 mode=n/a"* ]]
 }
 
-@test "--timing prints a stage=select line labeled mode=warm on a real warm (stubbed) run" {
-  stub="$TMP/fake-claude"
-  stub_dir="$TMP/stubdata"
-  mkdir -p "$stub_dir"
-  make_stub "$stub"
+@test "--json reports stages.select.mode as n/a" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]", duration_ms: 400, duration_api_ms: 150, usage: {input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}' > "$stub_dir/resp-1.json"
 
-  index_dir="$TMP/index-dir"
-  mkdir -p "$index_dir"
-  printf '1 :: some record\n' > "$index_dir/index.txt"
-  printf '1\tid-one\tpath/one\n' > "$index_dir/map.tsv"
-  seed_roots_stamp "$index_dir"
-  fp="$(shasum -a 256 "$index_dir/index.txt" | awk '{print $1}')"
-  echo "warm-sess" > "$index_dir/session.id"
-  printf '%s' "$fp" > "$index_dir/session.fingerprint"
+  run --separate-stderr env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir" --json
+  [ "$status" -eq 0 ]
 
-  jq -n '{is_error: false, session_id: "warm-sess", result: "[]", duration_ms: 400, duration_api_ms: 150, usage: {cache_read_input_tokens: 36900, cache_creation_input_tokens: 21}}' > "$stub_dir/resp-1.json"
+  echo "$output" | jq -e '.stages.select.mode == "n/a"' >/dev/null
+}
 
-  run env HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" bash "$SCRIPT" --question "q" --index-dir "$index_dir" --timing
+@test "--help output names none of session.id, session.fingerprint, warm, --resume" {
+  run bash "$SCRIPT" --help
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
 
-  [[ "$output" == *"[how-do-i timing] stage=select attempt=1 mode=warm"* ]]
+  ! grep -qE 'session\.id|session\.fingerprint|warm|--resume' <<<"$output"
+}
+
+@test "the header comment names none of session.id, session.fingerprint, warm, --resume" {
+  header="$(sed '/^set -uo pipefail/q' "$SCRIPT")"
+  [ -n "$header" ]
+
+  ! grep -qE 'session\.id|session\.fingerprint|warm|--resume' <<<"$header"
 }
 
 # ---------- (j) flag validation / usage errors ----------
@@ -490,7 +792,7 @@ STUB
 
 # ---------- (k) missing claude binary aborts loudly, writes nothing to the cache ----------
 
-@test "an unresolvable claude binary aborts loudly and never writes session cache files" {
+@test "an unresolvable claude binary aborts loudly" {
   index_dir="$TMP/index-dir"
   mkdir -p "$index_dir"
   printf '1 :: some record\n' > "$index_dir/index.txt"
@@ -501,7 +803,6 @@ STUB
   run env HOWDOI_CLAUDE_BIN="$nonexistent" bash "$SCRIPT" --question "q" --index-dir "$index_dir"
   [ "$status" -eq 1 ]
   [[ "$output" == *"not found"* ]]
-  [ ! -f "$index_dir/session.id" ]
 }
 
 # PLUGIN ADAPTATION: no upstream counterpart — covers the plugin-local gateway
@@ -997,4 +1298,169 @@ EOF
   # byte-for-byte, so this pins content correctness, not just "changed").
   [ "$(sed -n '1p' "$index_dir/roots.stamp")" = "$CODEX_ROOT" ]
   [ -f "$index_dir/roots.stamp" ]
+}
+
+# ---------- (p) failure modes and leftovers (issue #198) ----------
+
+@test "a non-zero stage-1 CLI exit fails the run with exit 1" {
+  fresh_fixture
+  echo 3 > "$stub_dir/exit-1"
+  # A rejected call has no JSON on stdout; the CLI's complaint is on stderr.
+
+  run_howdoi
+
+  [ "$status" -eq 1 ]
+}
+
+@test "a non-zero stage-1 CLI exit surfaces the CLI's stderr text on stderr" {
+  fresh_fixture
+  echo 3 > "$stub_dir/exit-1"
+  echo "boom: unknown flag --system-prompt-file" > "$stub_dir/stderr-1"
+
+  run --separate-stderr env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir"
+
+  [[ "$stderr" == *"boom: unknown flag --system-prompt-file"* ]]
+}
+
+@test "a non-zero stage-1 CLI exit never prints NOT FOUND on stdout" {
+  fresh_fixture
+  echo 3 > "$stub_dir/exit-1"
+
+  run --separate-stderr env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$SCRIPT" --question "q" --index-dir "$index_dir"
+
+  [[ "$output" != *"NOT FOUND"* ]]
+}
+
+# Builds a bin dir with a failing fake `claude` and a failing fake `orwrap`.
+# Each appends one line (its name and argv) to $2 per call, so call count and
+# the --system-prompt-file path of each call are observable.
+make_failing_gateway_bin() {
+  local bin="$1" log="$2" name
+  mkdir -p "$bin"
+  for name in claude orwrap; do
+    cat > "$bin/$name" <<GATEWAY
+#!/usr/bin/env bash
+echo "$name \$*" >> "$log"
+cat > /dev/null
+echo "boom from $name" >&2
+exit 1
+GATEWAY
+    chmod +x "$bin/$name"
+  done
+}
+
+@test "with orwrap on PATH and raw claude failing, the run exits 1 after exactly 2 calls" {
+  fresh_fixture
+  bin="$TMP/bin"; log="$TMP/spawn.log"
+  make_failing_gateway_bin "$bin" "$log"
+
+  run env TMPDIR="$work_tmp" PATH="$bin:$PATH" HOWDOI_CLAUDE_BIN= bash "$SCRIPT" --question "q" --index-dir "$index_dir"
+
+  [ "$status" -eq 1 ]
+  [ "$(wc -l < "$log")" -eq 2 ]
+}
+
+@test "the orwrap retry reuses the same --system-prompt-file path as the raw call" {
+  fresh_fixture
+  bin="$TMP/bin"; log="$TMP/spawn.log"
+  make_failing_gateway_bin "$bin" "$log"
+
+  run env TMPDIR="$work_tmp" PATH="$bin:$PATH" HOWDOI_CLAUDE_BIN= bash "$SCRIPT" --question "q" --index-dir "$index_dir"
+
+  path1="$(sed -n '1p' "$log" | tr ' ' '\n' | grep -A1 -- '^--system-prompt-file$' | tail -n 1)"
+  path2="$(sed -n '2p' "$log" | tr ' ' '\n' | grep -A1 -- '^--system-prompt-file$' | tail -n 1)"
+  [ -n "$path1" ]
+  [ "$path1" = "$path2" ]
+}
+
+@test "the second failing call goes through orwrap claude" {
+  fresh_fixture
+  bin="$TMP/bin"; log="$TMP/spawn.log"
+  make_failing_gateway_bin "$bin" "$log"
+
+  run env TMPDIR="$work_tmp" PATH="$bin:$PATH" HOWDOI_CLAUDE_BIN= bash "$SCRIPT" --question "q" --index-dir "$index_dir"
+
+  [[ "$(sed -n '2p' "$log")" == "orwrap claude "* ]]
+}
+
+@test "a null structured_output reply on call 1: call 1 carries --json-schema" {
+  fresh_fixture
+  jq -n '{is_error: false, structured_output: null, result: "null", session_id: "s"}' > "$stub_dir/resp-1.json"
+  jq -n '{is_error: false, session_id: "s", result: "[]"}' > "$stub_dir/resp-2.json"
+
+  run_howdoi_ok
+
+  grep -q -- '^--json-schema$' "$stub_dir/call-1.args"
+}
+
+@test "a null structured_output reply on call 1: call 2 drops --json-schema" {
+  fresh_fixture
+  jq -n '{is_error: false, structured_output: null, result: "null", session_id: "s"}' > "$stub_dir/resp-1.json"
+  jq -n '{is_error: false, session_id: "s", result: "[]"}' > "$stub_dir/resp-2.json"
+
+  run_howdoi_ok
+
+  refute_in_file '^--json-schema$' "$stub_dir/call-2.args"
+}
+
+@test "a null structured_output reply: both calls carry --system-prompt-file" {
+  fresh_fixture
+  jq -n '{is_error: false, structured_output: null, result: "null", session_id: "s"}' > "$stub_dir/resp-1.json"
+  jq -n '{is_error: false, session_id: "s", result: "[]"}' > "$stub_dir/resp-2.json"
+
+  run_howdoi_ok
+
+  [ "$(grep -l -- '^--system-prompt-file$' "$stub_dir"/call-1.args "$stub_dir"/call-2.args | wc -l)" -eq 2 ]
+}
+
+@test "stage 2 carries --no-session-persistence" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[2]"}' > "$stub_dir/resp-1.json"
+  jq -n '{is_error: false, session_id: "s2", result: "The answer."}' > "$stub_dir/resp-2.json"
+  scripts_dir="$TMP/scripts"
+  make_sentinel_scripts_dir "$scripts_dir" "$TMP/compile.log"
+
+  run env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+  [ "$status" -eq 0 ]
+
+  grep -q -- '^--no-session-persistence$' "$stub_dir/call-2.args"
+}
+
+@test "stage 2 never carries --resume" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[2]"}' > "$stub_dir/resp-1.json"
+  jq -n '{is_error: false, session_id: "s2", result: "The answer."}' > "$stub_dir/resp-2.json"
+  scripts_dir="$TMP/scripts"
+  make_sentinel_scripts_dir "$scripts_dir" "$TMP/compile.log"
+
+  run env TMPDIR="$work_tmp" HOWDOI_CLAUDE_BIN="$stub" STUB_DIR="$stub_dir" \
+      bash "$scripts_dir/how-do-i.sh" --question "q" --index-dir "$index_dir"
+  [ "$status" -eq 0 ]
+
+  refute_in_file '--resume' "$stub_dir/call-2.args"
+}
+
+@test "a successful run leaves no how-do-i.* work dir under TMPDIR" {
+  fresh_fixture
+  jq -n '{is_error: false, session_id: "s1", result: "[]"}' > "$stub_dir/resp-1.json"
+
+  run_howdoi_ok
+
+  # The stub ran, so the script got past mktemp and the cleanup is real.
+  [ -s "$stub_dir/call-1.args" ]
+  [ -z "$(ls -d "$work_tmp"/how-do-i.* 2>/dev/null)" ]
+}
+
+@test "a failed run leaves no how-do-i.* work dir under TMPDIR" {
+  fresh_fixture
+  echo 3 > "$stub_dir/exit-1"
+
+  run_howdoi
+  [ "$status" -eq 1 ]
+
+  [ -s "$stub_dir/call-1.args" ]
+  [ -z "$(ls -d "$work_tmp"/how-do-i.* 2>/dev/null)" ]
 }
