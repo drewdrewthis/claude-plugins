@@ -32,7 +32,7 @@ Open as draft or ready per repo convention (`gh pr create`) to get the PR number
    # any box without that script (e.g. drew-sweatshop):
    gh pr checks <N> -R <owner>/<repo> --watch --fail-fast --interval 30
    ```
-   `pr.sh` is session-length: it watches CI checks, new comments, review threads, and pushes. The `gh pr checks` fallback watches CI only and is NOT session-length — it exits when every check has finished, or on the first failure (a non-zero exit is the failure signal). Re-arm it after every push. Pass Logic C is your only review-thread signal there, so run it every iteration. Verify the watch armed within ~30s (baseline line or `WATCH-DEGRADED` for `pr.sh`; a checks table for the fallback) — don't assume it did. On a fallback box, `monitor_armed: true` (below) means a watch is running, or the last one ended with every check finished on the current HEAD.
+   `pr.sh` is session-length: it watches CI checks, new comments, review threads, and pushes. The `gh pr checks` fallback watches CI only and is NOT session-length — it exits 0 when every check has finished, and non-zero on the first failed check. If it exits at once with "no checks reported", CI has not registered yet: wait 30s and re-arm — that is not a failure. Re-arm it after every push. Pass Logic C is your only review-thread signal there, so run it every iteration — after the fallback exits, keep iterating Step 2 yourself until the readiness check prints `overall: READY`; do not idle waiting for an event. Verify the watch armed within ~30s (baseline line or `WATCH-DEGRADED` for `pr.sh`; a checks table for the fallback) — don't assume it did. On a fallback box, `monitor_armed: true` (below) means a watch is running, or the last one ended with every check finished on the current HEAD.
 
 Once verified alive, mark it in the flag:
 
@@ -40,7 +40,7 @@ Once verified alive, mark it in the flag:
 echo '{"pr": <N>, "phase": "monitor", "monitor_armed": true}' > "/tmp/claude-ship-flow-$CLAUDE_SESSION_ID"
 ```
 
-If the Monitor is later stopped before `done` (e.g. to fix something inline), set `"monitor_armed": false` (or drop the key) until it's re-armed — the Stop hook checks this key while `phase: monitor`.
+If the Monitor is later stopped before `done` (e.g. to fix something inline), set `"monitor_armed": false` (or drop the key) until it's re-armed — the Stop hook checks this key while `phase: monitor`. The same applies on the fallback when the watch exits on a failed check or belongs to an older HEAD: set `false` until you re-arm after the fix push.
 
 ## Step 2 — Iteration loop (replaces ralph-loop)
 
@@ -71,7 +71,7 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
    - Verification battery means the targeted checks for the files you touched, then push and let CI run the full suite. Never run the repo's full test suite, full lint, or full typecheck locally on a langwatch PR — CI is the authority, and a local full-suite run is wasted time (orchard-codex #457, decision 2026-09-24-night-watch-direction-defaults-threads-suite-codeql).
 4. Exit the iteration.
 
-**E — CI check.** Use REST (`~/Projects/langwatch-sweatshop/modules/github/scripts/lib/gh-checks-rest.sh` `fetch_checks_rest`). If pending, wait inline — **never exit while CI is pending.** Cross-check githubstatus.com before treating a stall as your bug (provider outage short-circuit). The armed watcher (Step 1, item 3) IS the CI wait: never start a second poll loop and never block a turn on a full-CI wait — react to the first `conclusion=failure` event it emits (a per-check event arrives minutes before `CI DONE`). On the `gh pr checks` fallback, the watch exiting non-zero is the failure signal.
+**E — CI check.** Use REST (`~/Projects/langwatch-sweatshop/modules/github/scripts/lib/gh-checks-rest.sh` `fetch_checks_rest`). If pending, wait inline — **never exit while CI is pending.** Cross-check githubstatus.com before treating a stall as your bug (provider outage short-circuit). The armed watcher (Step 1, item 3) IS the CI wait: never start a second poll loop and never block a turn on a full-CI wait — react to the first `conclusion=failure` event it emits (a per-check event arrives minutes before `CI DONE`). On the `gh pr checks` fallback, a non-zero exit with a failed row in the table is the failure signal.
 
 **F — CI failure.** Check the draft gate (above), cross-check `gh run list` for the real failure, diagnose, fix, commit, push, exit.
 
@@ -79,9 +79,9 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
 1. Verify shard tally — green checks are forgeable: `~/.claude/scripts/verify-ci-shard-tally.sh <owner>/<repo> <N>` (exit 1 = green unverified; must see a `Test Files N passed` tally line).
 2. Verify both typecheck steps ran if the repo splits them (LangWatch: `pnpm typecheck` AND `pnpm run typecheck:tests`).
 3. Finalize: PATCH the PR body (write-pr format), `gh pr ready`, assign, request reviewers, set the `pr-ready` phase label (`records/procedures/github/scripts/tag.sh -R <owner/repo> pr-ready <issue> <N>`).
-   **Ship's terminal state is human-review-ready: non-draft, assigned, reviewers requested.** Un-drafting is the shipping worker's own action, gated on every criterion of `pr-ready-check` (C1–C9), not a subset: before `gh pr ready`, run the check (Step 3) and un-draft only when its single failed criterion is C1 with the reason `PR is a draft` (the script fails C1 on every draft; an open PR prints no C8 row — C8 is merged-only). Then re-run it and require `overall: READY`. No fleet role (orchardist, assistant, planner) gates it, and "await the owner's un-draft" is not a ship step. The only reason to leave a green, proven PR in draft is an explicit owner instruction recorded on that PR. (Owner ruling 2026-09-08 on langwatch/langwatch#7959, which sat done-but-draft for half a day waiting on a gate nobody owned.) **Draft is only for not-yet-finished work: the PR flips to ready in the same turn that pushes the last commit** — not after a bot round, not after a wait, not on a later beat (owner standing rule 2026-09-23, Discord 1552124506657656853).
+   **Ship's terminal state is human-review-ready: non-draft, assigned, reviewers requested.** Un-drafting is the shipping worker's own action, gated on every criterion of `pr-ready-check` (C1–C9), not a subset: before `gh pr ready`, run the Step 5 item 1 command and un-draft only when its single `FAIL` line is `C1: PR is a draft` (the script fails C1 on every draft). Then re-run it and require `overall: READY` — that re-run is the Step 5 run. No fleet role (orchardist, assistant, planner) gates it, and "await the owner's un-draft" is not a ship step. The only reason to leave a green, proven PR in draft is an explicit owner instruction recorded on that PR. (Owner ruling 2026-09-08 on langwatch/langwatch#7959, which sat done-but-draft for half a day waiting on a gate nobody owned.) **Draft is only for not-yet-finished work: the PR flips to ready in the same turn that pushes the last commit** — not after a bot round, not after a wait, not on a later beat (owner standing rule 2026-09-23, Discord 1552124506657656853).
 4. Verify the Monitor is still alive (`pr.sh`), or that the last `gh pr checks` watch ended with every check finished on the current HEAD (fallback).
-5. Only THEN consider emitting a completion signal — see Step 3.
+5. Only THEN consider emitting a completion signal — see Step 5.
 
 ### Verification discipline (every state-changing action gets re-fetched, not trusted)
 
@@ -123,7 +123,7 @@ This is the single source of truth — 9 criteria (C1–C9): open/non-draft/merg
 ~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh <owner> <repo> <N> | jq '{overall: .overall, failed: [.criteria[] | select(.passed != true) | .id]}'
 ```
 
-Callers MUST test `overall == "READY"` positively — never `overall != "NOT_READY"`.
+Callers MUST test `overall == "READY"` (or `"MERGED"`) positively — never `overall != "NOT_READY"`.
 
 ## Step 4 — Never claim ready on pending/failing CI
 
@@ -133,7 +133,7 @@ Pending CI obligates you to keep watching to a terminal conclusion — never han
 
 1. This command, run at the current HEAD, prints `overall: READY ✓` (or `overall: MERGED ●`). Keep the output — the report quotes it.
    ```bash
-   ~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh --format text <owner> <repo> <N> 2>&1 | grep -E '^overall:|^  FAIL|^ERROR|^error:'
+   ~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh --format text <owner> <repo> <N> 2>&1 | grep -E '^overall:|^  FAIL|^ERROR|^error:|No such file'
    ```
 2. Browser proof (or documented no-UI-surface exception) is embedded in the PR body.
 
@@ -146,7 +146,7 @@ Only then report ready/done to whoever is waiting on this.
 **The ready report quotes the verdict.** Paste the output of the command in item 1 into the report:
 
 - `overall: READY ✓` or `overall: MERGED ●` → quote that line. That is a ready (or merged) report.
-- No `overall:` line (script missing or crashed), or `overall: ERROR` → report BLOCKED and quote the `ERROR`/`error:` line, or say the command printed nothing. Do not set `done`.
+- No `overall:` line (script missing or crashed), or `overall: ERROR` → report BLOCKED and quote the `ERROR`/`error:`/`No such file` line, or say the command printed nothing. Do not set `done`.
 - `overall: NOT_READY ✗` → quote it with every `FAIL` line, and report not ready. Do not set `done`.
 
 A ready report without the quoted `overall:` line is not a ready report: the receiver treats it as not ready. Green CI is one criterion (C2) of nine — it is never the verdict.
