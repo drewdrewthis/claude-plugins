@@ -39,6 +39,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The redact differential fuzz test loads redact.py as it was at three
+      # regression commits. They live only on the PR 217 head: after the squash
+      # merge they are not reachable from main, so fetch that ref explicitly.
+      - name: Fetch PR 217 head (redact regression commits)
+        run: |
+          git fetch --no-tags origin refs/pull/217/head
+          for sha in cb0ab8458a40c2cbc6e8c91b80feed2b1a981231 \
+                     3854dc277b0c72fb1f306884329ed96d2c899d78 \
+                     f1f1f8ad37229c5736668503841da328746ee3cc; do
+            git cat-file -e "${sha}^{commit}" \
+              || { echo "::error::commit $sha missing after fetching refs/pull/217/head; the redact diff fuzz test cannot run"; exit 1; }
+          done
 
       # bats + jq from each OS's own package manager, so the suite runs against
       # the toolchain that platform actually ships — the whole reason the matrix
@@ -81,6 +96,12 @@ jobs:
 
       - name: worklog-record suite
         run: bats plugins/worklog/hooks/tests/worklog-record.bats
+
+      # Its own step so its duration shows in the CI UI; budget is 120 s per
+      # leg. Needs gitleaks (installed above) and bats >= 1.5.0 for
+      # `run --separate-stderr`.
+      - name: redact differential fuzz suite
+        run: bats plugins/worklog/hooks/tests/redact-diff-fuzz.bats
 
       # This suite also runs in procedures-tests.yml; it stays here because this
       # leg has no Homebrew bash, so macOS runs it on stock bash 3.2.
