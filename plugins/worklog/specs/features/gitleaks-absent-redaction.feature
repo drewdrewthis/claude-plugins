@@ -248,11 +248,13 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     When the built-in rules run
     Then the output equals the input
 
-  # proves: hooks/tests/worklog-record.bats "known limit: with gitleaks, a word character glued in front of a token still keeps the token raw"
-  Scenario: With gitleaks, a word character glued in front of a token keeps the token raw
+  # proves: hooks/tests/worklog-record.bats "known limit: with gitleaks, a word character glued in front of an npm token or aws key id still keeps it raw"
+  Scenario: With gitleaks, a word character glued in front of an npm token or AWS key id keeps it raw
     Given an npm token preceded by x, an npm token preceded by FOO_, and an AWS key id preceded by A
     When the real gitleaks runs
     Then each output equals its input
+    And the same npm token with nothing glued in front is redacted
+    And a Shopify token preceded by x is redacted and holds no raw body
 
   # proves: hooks/tests/worklog-record.bats "known limit: a pulumi token in the middle of a URL path is not found by gitleaks"
   Scenario: A Pulumi token in the middle of a URL path is not found by gitleaks
@@ -265,10 +267,20 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
   # proves: hooks/tests/worklog-record.bats "known limit: a body can settle where the same text as a quote hits the step cap"
   Scenario: A body can settle where the same text as a quote hits the step cap
     Given six grafana and shopify pairs followed by a glued ghp pair
-    When the text runs as a quote and as a body
-    Then the quote is exactly the glued-secrets marker
-    And the body is not the glued-secrets marker
-    And the body holds no raw token body
+    And six grafana and shopify pairs, a space, then two glued AWS key ids
+    When each text runs as a quote and as a body with gitleaks absent
+    Then each quote is exactly the glued-secrets marker
+    And the first body is not that marker and ends with the github-pat marker then the glued-secrets marker
+    And the second body holds no glued-secrets marker and ends with the shopify marker, a space, the aws marker
+    And no body holds a raw token body
+
+  # proves: hooks/tests/worklog-record.bats "known limit: a quote of a long glued chain is dropped by the hook and nothing raw is stored"
+  Scenario: A quote of a long glued chain is dropped by the hook and nothing raw is stored
+    Given a prompt of six grafana and shopify pairs followed by a glued ghp pair
+    And a model reply whose one request quotes the raw chain
+    When the hook runs with gitleaks absent
+    Then the row is stored with no requests
+    And neither the row nor the model stdin holds a raw ghp body
 
   # proves: hooks/tests/worklog-record.bats "six grafana shopify pairs then a glued ghp pair fail closed to one marker"
   Scenario: A settled chain plus a glued ghp pair fails closed

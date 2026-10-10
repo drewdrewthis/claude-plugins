@@ -36,13 +36,15 @@ rules' output, where its generic rule covers some of these and misses others.
 
 These limits are ACCEPTED (owner decision, issue #219:
 https://github.com/drewdrewthis/claude-plugins/issues/219). The glued-prefix
-limit is looked at again when the differential fuzz from issue #218 exists.
-It holds with gitleaks present too. Also accepted: a Pulumi token in the
-MIDDLE of a URL path (https://host/<token>/more/path) is not found by
-gitleaks 8.30.1, and no built-in rule covers Pulumi, so the whole usable
-token stays raw. Because the two stages above have separate step caps, a
-body can settle where the same quote hits the cap; the quote then does not
-match the body and the entry is dropped. That fails closed: nothing leaks.
+limit leaves the WHOLE usable token raw. With gitleaks present it still holds
+for some shapes (npm, AWS key id); gitleaks finds others (Shopify). It is
+looked at again when the differential fuzz from issue #218 exists. Also
+accepted: a Pulumi token in a URL path with a "/" after it
+(https://host/<token>/more/path) is not found by gitleaks 8.30.1, and no
+built-in rule covers Pulumi, so the whole usable token stays raw. Because the
+two stages above have separate step caps, a body can settle where the same
+text as a quote hits the cap; the quote is then dropped or matches only as
+the bare glued-secrets marker. No raw text either way.
 
 OVER-REDACTION IS ACCEPTABLE. A worklog row that loses a harmless long token is
 a visible, cheap loss; a key in a durable file (and in a model prompt) is not.

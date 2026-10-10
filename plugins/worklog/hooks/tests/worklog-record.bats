@@ -2343,10 +2343,16 @@ _$(fake_do)"
   [ "$(builtin_out "$input")" = "$input" ]
 }
 
-# gitleaks 8.30.1 does not cover this either. Accepted in issue 219; looked at
-# again when the fuzz from issue 218 exists.
-@test "known limit: with gitleaks, a word character glued in front of a token still keeps the token raw" {
+# gitleaks 8.30.1 does not find these glued shapes either (npm, aws key id), but
+# it does find others (Shopify). Accepted in issue 219; looked at again when the
+# fuzz from issue 218 exists.
+@test "known limit: with gitleaks, a word character glued in front of an npm token or aws key id still keeps it raw" {
   require_real_gitleaks
+  [ "$(real_redact_texts "$(fake_npm)")" = "<redacted:npm-token>" ]
+  shopify="x$(fake_shopify)"
+  out="$(real_redact_texts "$shopify")"
+  [ "$out" != "$shopify" ]
+  [[ "$out" != *"$(fake_shopify | cut -c7-)"* ]]
   for input in "x$(fake_npm)" "FOO_$(fake_npm)" "A$(fake_aws)"; do
     [ "$(real_redact_texts "$input")" = "$input" ]
   done
@@ -2354,8 +2360,8 @@ _$(fake_do)"
 
 # gitleaks 8.30.1 behaviour: no built-in rule covers Pulumi, so only the
 # gitleaks pulumi-api-token rule can catch the token, and it misses it mid-path.
-# Accepted limit, tracked in issue 219. The path-end control shows the token
-# shape is otherwise found, in a query string as well.
+# Accepted limit, tracked in issue 219. The path-end and query-string controls
+# show the token shape is otherwise found.
 @test "known limit: a pulumi token in the middle of a URL path is not found by gitleaks" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
@@ -2365,30 +2371,49 @@ _$(fake_do)"
   [ "$(real_redact_texts "open https://app.example.com/x?t=$KEY")" = "open https://app.example.com/x?t=<redacted:pulumi-api-token>" ]
 }
 
+# glued_chain <pairs> <tail> — <pairs> times a grafana then a shopify token,
+# then <tail>.
+glued_chain() {
+  python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * int(sys.argv[3]) + sys.argv[4])' \
+    "$(fake_grafana)" "$(fake_shopify)" "$1" "$2"
+}
+
 # The quote path runs redact.builtin once; the body path runs two stages, each
-# with its own step cap. The two differ for this chain, so a quote of this text
-# is dropped as not found in the body. It fails closed.
+# with its own step cap. The two paths differ for these chains. A quote of the
+# text is then either only the bare marker (chain 1) or not in the body at all
+# (chain 2). No raw text is kept either way.
 @test "known limit: a body can settle where the same text as a quote hits the step cap" {
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6 + sys.argv[3] + sys.argv[4])' \
-    "$(fake_grafana)" "$(fake_shopify)" "$(fake_ghp)" "$(fake_ghp2)")"
+  chain="$(glued_chain 6 "$(fake_ghp)$(fake_ghp2)")"
   [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
-  body="$(PATH="$(path_without_gitleaks)" python3 -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import redact
-texts, failed = redact.redact_texts([sys.argv[2]])
-sys.stdout.write(texts[0])
-' "$HOOKS/lib" "$chain")"
+  body="$(builtin_redact_texts "$chain")"
   [ "$body" != "<redacted:glued-secrets>" ]
   [[ "$body" == "<redacted:grafana-token><redacted:shopify-token>"* ]]
-  [[ "$body" != *"$chain"* ]]
+  [[ "$body" == *"<redacted:github-pat><redacted:glued-secrets>" ]]
   [[ "$body" != *"$(fake_ghp | cut -c5-)"* ]]
   [[ "$body" != *"$(fake_ghp2 | cut -c5-)"* ]]
+
+  chain="$(glued_chain 6 " $(fake_aws2)$(fake_asia)")"
+  [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
+  body="$(builtin_redact_texts "$chain")"
+  [[ "$body" != *"<redacted:glued-secrets>"* ]]
+  [[ "$body" == *"<redacted:shopify-token> <redacted:aws-access-key>" ]]
+}
+
+# The hook cuts a redacted body to 200 characters, so a quote of a chain this
+# long is dropped with or without the budget difference. It fails closed.
+@test "known limit: a quote of a long glued chain is dropped by the hook and nothing raw is stored" {
+  chain="$(glued_chain 6 "$(fake_ghp)$(fake_ghp2)")"
+  user_line "$U1" "$chain" > "$TX"
+  reply="$(jq -nc --arg u "$U1" --arg q "$chain" \
+    '{requests:[{text:"user saw a chain",quote:$q,uuid:$u}],outcomes:[],mistakes:[]}')"
+  drive_with "PATH=$(path_without_gitleaks)" -- "$reply"
+  [ "$(field '.requests|length')" -eq 0 ]
+  body_free "$(cat "$WORKLOG_JSONL")" "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
+  body_free "$(cat "$CLAUDE_STDIN_LOG")" "$(fake_ghp | cut -c5-)" "$(fake_ghp2 | cut -c5-)"
 }
 
 @test "six grafana shopify pairs then a glued ghp pair fail closed to one marker" {
-  chain="$(python3 -c 'import sys; sys.stdout.write((sys.argv[1] + sys.argv[2]) * 6 + sys.argv[3] + sys.argv[4])' \
-    "$(fake_grafana)" "$(fake_shopify)" "$(fake_ghp)" "$(fake_ghp2)")"
+  chain="$(glued_chain 6 "$(fake_ghp)$(fake_ghp2)")"
   [ "$(builtin_out "$chain")" = "<redacted:glued-secrets>" ]
 }
 
@@ -2565,6 +2590,18 @@ assert_glued_stored() {
     "$(jq -nc --arg u "$U1" --arg t "leaked $KEY" \
       '{requests:[{text:$t,quote:"do the thing",uuid:$u}],outcomes:[],mistakes:[]}')"
   [ "$(field '.requests[0].text')" = "leaked <redacted:npm-token>" ]
+}
+
+# builtin_redact_texts <text> — the text through redact_texts with gitleaks
+# absent, so only the built-in rules run (the body path).
+builtin_redact_texts() {
+  PATH="$(path_without_gitleaks)" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import redact
+texts, failed = redact.redact_texts([sys.argv[2]])
+sys.stdout.write(texts[0])
+' "$HOOKS/lib" "$1"
 }
 
 # real_redact_texts <text> — the text through redact_texts with the REAL
