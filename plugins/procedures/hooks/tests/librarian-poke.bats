@@ -518,6 +518,7 @@ EOF
 
 @test "fixtures ignore the system gitconfig (GIT_CONFIG_NOSYSTEM)" {
   # A poisoned system config is the only way to see the isolation; /etc/gitconfig is not writable in a test.
+  # Kept in each git-fixture suite on purpose: it pins that suite's own setup() call to the fixture helper.
   printf '[push]\n\tdefault = nothing\n' > "$BATS_TEST_TMPDIR/system.gitconfig"
   GIT_CONFIG_SYSTEM="$BATS_TEST_TMPDIR/system.gitconfig" run git -C "$BATS_TEST_TMPDIR" config --get push.default
   [ "$status" -eq 1 ]   # 1 = key not set; any other code means git itself failed

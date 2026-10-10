@@ -62,6 +62,7 @@ _inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
 #   $shim_dir  GIT_SHIM_DIR; a place for the snippet's own marker files
 # and may `exit` to swallow the call. One shared body keeps each test to just
 # the behaviour it fakes, so a respelled git call cannot slip past a copy.
+# The snippet is written into the shim verbatim and runs as shell: pass trusted test code only.
 # Every call touches $GIT_SHIM_DIR/invoked, so a test can prove the shim was on
 # PATH; without that, a "never called" assertion passes vacuously.
 # Limit: only ONE leading `-C <dir>` is parsed (the only global-option shape

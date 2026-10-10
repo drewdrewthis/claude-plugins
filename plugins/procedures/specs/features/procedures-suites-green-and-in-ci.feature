@@ -136,7 +136,7 @@ Feature: The procedures bats suites are green, hermetic, and run in CI
     When those two exports are removed in a copy
     Then the leak-guard test fails
 
-  # proves: hooks/tests/commit-records.bats "AC26: a store that gitignores .index/ still commits the record (index left local)"; command `PATH=<git 2.55 dir>:$PATH bats hooks/tests/commit-records.bats` gives 64 tests, 0 not ok, and the same test fails on the unfixed scripts/commit-records.sh; also green on git 2.39 and on both CI legs (git 2.55)
+  # proves: hooks/tests/commit-records.bats "AC26: a store that gitignores .index/ still commits the record (index left local)"; command `PATH=<git 2.55 dir>:$PATH bats hooks/tests/commit-records.bats` gives at least 64 tests, 0 not ok, and the same test fails on the unfixed scripts/commit-records.sh; also green on git 2.39 and on both CI legs (git 2.55)
   @integration
   Scenario: A store that gitignores .index still commits under git 2.55
     Given a store whose .gitignore excludes .index/ and tracks nothing under it
