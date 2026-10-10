@@ -277,6 +277,8 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     And the same token in double quotes is redacted
     And a text holding the token twice has both copies redacted
     And the same token followed by a literal backslash and n is redacted
+    And the same token followed by a percent 20 escape is redacted
+    And the same token followed by a literal backslash u 0020 escape is redacted
     And the same token after PULUMI_ACCESS_TOKEN= is redacted as a generic secret
 
   # proves: hooks/tests/worklog-record.bats "known limit: a body can settle where the same text as a quote hits the step cap"

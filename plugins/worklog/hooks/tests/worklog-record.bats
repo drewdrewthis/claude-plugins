@@ -2366,14 +2366,14 @@ _$(fake_do)"
   done
 }
 
-# The gitleaks 8.30.1 pulumi-api-token rule finds the token only when no
-# ASCII word character is directly in front of it and an ASCII space, tab,
-# newline, carriage return or form feed, a straight quote, a backtick, a
-# semicolon, a literal \n or \r escape or the end of the text directly
-# follows it. No built-in rule covers Pulumi, so anywhere else the whole
-# token stays raw, unless another rule matches around it (for example a
-# secret keyword in front). Accepted for now in issue 219. The fix is
-# issue 238.
+# No built-in rule covers Pulumi, and the gitleaks pulumi-api-token rule needs
+# a terminator directly after the token. Measured with gitleaks 8.30.1: the
+# whole token stays raw before the characters pinned below and directly after
+# an ASCII word character; it is found before ASCII whitespace, a straight
+# quote, a backtick, a semicolon, a literal \n or \r escape, a percent or \u
+# escape of one of these, or the end of the text, and when another rule
+# matches around it (for example a secret keyword in front). The lists are
+# measured, not complete. Accepted for now in issue 219. The fix is issue 238.
 @test "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front" {
   require_real_gitleaks
   KEY="$(fake_pulumi)"
@@ -2406,6 +2406,8 @@ _$(fake_do)"
   [ "$(real_redact_texts "say \"$KEY\" now")" = "say \"<redacted:pulumi-api-token>\" now" ]
   [ "$(real_redact_texts "see $KEY. and again $KEY now")" = "see <redacted:pulumi-api-token>. and again <redacted:pulumi-api-token> now" ]
   [ "$(real_redact_texts 'see '"$KEY"'\nmore')" = 'see <redacted:pulumi-api-token>\nmore' ]
+  [ "$(real_redact_texts 'see '"$KEY"'%20more')" = 'see <redacted:pulumi-api-token>%20more' ]
+  [ "$(real_redact_texts 'see '"$KEY"'\u0020more')" = 'see <redacted:pulumi-api-token>\u0020more' ]
   [ "$(real_redact_texts "PULUMI_ACCESS_TOKEN=$KEY")" = "PULUMI_ACCESS_<redacted:generic-secret>" ]
 }
 
