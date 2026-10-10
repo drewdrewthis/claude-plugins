@@ -113,5 +113,5 @@ Feature: Mistake rows carry the session and refuse a duplicate
 # AC4 -> The same session and range is a duplicate; Overlapping, touching and re-categorised ranges are duplicates; Other sessions, distant ranges and source-less rows do not match; A match in another store root counts; Earlier rows are never rewritten; Ten parallel identical calls leave one row
 # AC5 -> no scenario here: proven by two real librarian wakes over one fixture (one row, then a duplicate, file unchanged).
 #        The stored range overlaps the lines of the mistake (10-14 in the fixture); the librarian chooses the bounds.
-# AC11 ->The gate accepts source rows and old-flag calls still append
+# AC11 -> The gate accepts source rows and old-flag calls still append
 # (A4, no AC number) -> The librarian brief passes --source
