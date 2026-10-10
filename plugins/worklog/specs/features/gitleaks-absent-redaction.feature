@@ -270,7 +270,8 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     And a Pulumi token followed by a no-break space
     And a Pulumi token in curly double quotes
     And a Pulumi token followed by a space and a gitleaks allow comment on the same line
-    And a Pulumi token three lines after a gitleaks allow comment
+    And a Pulumi token on the last line of the text, with a gitleaks allow comment on an earlier line
+    And a Pulumi token after a gitleaks allow comment on the same line, with a further line after it
     When the real gitleaks runs
     Then each output equals its input
     And the same token at the end of the URL path is redacted
@@ -278,6 +279,7 @@ Feature: The worklog says when gitleaks is missing, and the built-ins cover the 
     And the same token followed by a space is redacted
     And the same token followed by a space and a note that is not a gitleaks allow comment is redacted
     And the same token followed by a gitleaks allow comment on a later line is redacted
+    And the same token on a line after a gitleaks allow comment, with a further line after it, is redacted
     And the same token in double quotes is redacted
     And a text holding the token twice has both copies redacted
     And the same token followed by a literal backslash and n is redacted

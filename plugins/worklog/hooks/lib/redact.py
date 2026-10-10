@@ -43,16 +43,19 @@ accepted for now: no built-in rule covers Pulumi, and the gitleaks
 pulumi-api-token rule needs a terminator directly after the token. Measured
 with gitleaks 8.30.1, the whole usable token stays raw before a period, a
 comma, "/", "&", a no-break space or a curly quote, and directly after an
-ASCII letter, digit or underscore. In the same measurement it was found before
-an ASCII space, tab, newline, carriage return or form feed, a straight quote, a
+ASCII letter, digit or underscore. In the same measurement it was found when
+no such character was directly in front of it and directly after it came an
+ASCII space, tab, newline, carriage return or form feed, a straight quote, a
 backtick, a semicolon, a literal "\\n" or "\\r" escape, a percent or "\\u"
 escape of one of these, or the end of the text, but not when a gitleaks allow
-comment (the word gitleaks, a colon, then allow) stood earlier in the scanned
-text or later on the same line: gitleaks then skipped the finding and the whole
-token stayed raw (measured 200 lines apart, and with the comment in an earlier
-text of the same batch). It was also redacted when another rule
+comment (the word gitleaks, a colon, then allow) stood on the same line as the
+token, or stood on an earlier line or in an earlier text of the batch while the
+token was on the last line of all the scanned text with no newline after it:
+gitleaks then skipped the finding and the whole token stayed raw. A comment on
+a later line did not hide it. It was also redacted when another rule
 matched around it (for example a secret keyword such as "token" in front of
-it). These lists are measured, not complete; the "known limit:" tests pin them.
+it with a separator). These lists are measured, not complete; the "known
+limit:" tests pin a sample of them.
 The fix is issue #238
 (https://github.com/drewdrewthis/claude-plugins/issues/238).
 Because the two stages above have separate step caps, a body can settle where

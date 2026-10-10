@@ -2374,9 +2374,11 @@ _$(fake_do)"
 # backtick, a semicolon, a literal \n or \r escape, a percent or \u escape of
 # one of these, or the end of the text, and when another rule matches around it
 # (for example a secret keyword in front). It was not found when a gitleaks
-# allow comment stood earlier in the scanned text or later on the same line
-# (measured 200 lines apart, and with the comment in an earlier text of the
-# same batch); a comment on a later line did not hide it. The lists are
+# allow comment stood on the same line as the token, or stood on an earlier
+# line (or in an earlier text of the batch) while the token was on the last
+# line of all the scanned text with no newline after it. With a further line
+# after the token's line, an earlier comment did not hide it; a comment on a
+# later line did not hide it. The tests pin a sample of these lists, which are
 # measured, not complete. Accepted for now in issue 219. The fix is issue 238.
 @test "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front" {
   require_real_gitleaks
@@ -2419,6 +2421,9 @@ _$(fake_do)"
   input="# $allow${nl}plain words here${nl}plain words here${nl}see $KEY now"
   [ "$(real_redact_texts "$input")" = "$input" ]
   [ "$(real_redact_texts "see $KEY now${nl}# $allow")" = "see <redacted:pulumi-api-token> now${nl}# $allow" ]
+  [ "$(real_redact_texts "# $allow${nl}see $KEY now${nl}trailer")" = "# $allow${nl}see <redacted:pulumi-api-token> now${nl}trailer" ]
+  input="# $allow see $KEY now${nl}trailer"
+  [ "$(real_redact_texts "$input")" = "$input" ]
   [ "$(real_redact_texts "see $KEY now # other note")" = "see <redacted:pulumi-api-token> now # other note" ]
   [ "$(real_redact_texts "PULUMI_ACCESS_TOKEN=$KEY")" = "PULUMI_ACCESS_<redacted:generic-secret>" ]
 }
