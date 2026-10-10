@@ -159,7 +159,7 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     Then the title starts with "fix(procedures):"
     And release-please owns plugin.json and the manifest
 
-  # proves: hooks/tests/librarian-poke.bats "scan cap: a batch scan killed by the runtime cap exits 0, claude never starts, nothing issued or advanced, claim released"; hooks/tests/librarian-poke.bats "scan cap: the log gains one 'batch scan exceeded' line naming the 1s cap and killed, and no failed or deferred line"; hooks/tests/librarian-poke.bats "scan cap: a killed scan writes last-drain-start; the next drain inside the cooldown runs no scan and logs one cooldown defer"
+  # proves: hooks/tests/librarian-poke.bats "scan cap: a batch scan killed by the runtime cap exits 0, claude never starts, nothing issued or advanced, claim released"; hooks/tests/librarian-poke.bats "scan cap: the log gains one 'batch scan exceeded' line naming the 1s cap and killed, and no failed or deferred line"; hooks/tests/librarian-poke.bats "scan cap: a killed scan writes last-drain-start; the next drain inside the cooldown runs no scan and logs one cooldown defer"; hooks/tests/librarian-poke.bats "scan cap: a scan killed mid-range leaves no batch.manifest.tmp"; hooks/tests/librarian-poke.bats "scan cap: a scan killed mid-range leaves no batch.txt.part"
   @integration
   Scenario: A batch scan killed by the runtime cap is a quiet defer
     Given a batch scan that outlives LIBRARIAN_MAX_RUNTIME_SEC of 1 and timeout on PATH
@@ -170,6 +170,27 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
     And the log has no "batch failed" line and no "batch deferred" line
     And last-drain-start is written, so the next drain inside the cooldown runs no scan and logs one cooldown defer
     And the drain claim is released
+    And neither batch.manifest.tmp nor batch.txt.part exists after a kill mid-range
+
+  # proves: hooks/tests/librarian-poke.bats "shared cap: after a scan slowed by 3s, claude runs under a timeout of at least 1s and under the full 120s"; hooks/tests/librarian-poke.bats "shared cap: the scan's own timeout still shows the full 120s cap"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still lets the drain run claude exactly once"; hooks/tests/librarian-poke.bats "shared cap: a slowed scan still advances the cursor"; hooks/tests/librarian-poke.bats "shared cap: a fast scan leaves claude a timeout within 2s of the full 120s cap"
+  @integration
+  Scenario: The scan and the drain share one runtime cap
+    Given LIBRARIAN_MAX_RUNTIME_SEC of 120, timeout on PATH, and a recording timeout shim
+    When a worker run drains after a batch scan slowed by about 3s
+    Then the timeout that wraps claude has a duration under 120 and at least 1
+    And the timeout that wraps the scan still shows 120
+    And claude runs once and the cursor advances
+    When the scan is fast instead
+    Then the timeout that wraps claude has a duration within 2 of 120
+
+  # proves: hooks/tests/librarian-poke.bats "early scan death: a scan SIGKILLed far below the cap logs one 'batch failed, drain skipped' line"; hooks/tests/librarian-poke.bats "early scan death: a scan SIGKILLed far below the cap is not logged as 'batch scan exceeded'"; hooks/tests/librarian-poke.bats "early scan death: a scan SIGKILLed far below the cap writes no last-drain-start"; hooks/tests/librarian-poke.bats "early scan death: a scan SIGKILLed far below the cap starts no claude"
+  @integration
+  Scenario: Only a real cap overrun is called one
+    Given LIBRARIAN_MAX_RUNTIME_SEC of 600 and a batch scan that dies with exit 137 almost at once
+    When a worker run drains
+    Then the log has exactly one "batch failed, drain skipped" line and no "batch scan exceeded" line
+    And no last-drain-start exists
+    And claude never starts
 
   # --- AC Coverage Map ---
   # AC 1  Load at or over the ceiling defers at spawn ........ Scenario "Load at or over the ceiling defers at spawn"
@@ -189,3 +210,5 @@ Feature: The librarian drain yields to a busy box, at spawn and while it scans
   # AC 15 A bad re-check interval cannot stop the drain ...... Scenario "A bad re-check interval cannot stop the drain"
   # AC 16 The version bump is automated ...................... Scenario "The version bump is automated"
   # AC 17 A killed batch scan is a quiet defer ............... Scenario "A batch scan killed by the runtime cap is a quiet defer"
+  # AC 18 Scan and drain share one runtime cap ............... Scenario "The scan and the drain share one runtime cap"
+  # AC 19 Only a real cap overrun is called one .............. Scenario "Only a real cap overrun is called one"

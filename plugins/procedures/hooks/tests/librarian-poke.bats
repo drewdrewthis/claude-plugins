@@ -1031,19 +1031,59 @@ bad_interval_drain() {
 
 # ---- AC 17: a batch scan killed by the runtime cap is a quiet defer ---------
 
-# A wc shim that sleeps 5s (bounded, and only when SLOW_WC is set) makes the
-# scan outlive a 1s cap deterministically. Needs GNU/BSD `timeout` on PATH.
-lp_slow_scan() {
+# Shims for the batch scan's external commands, first on PATH (idempotent).
+#   wc:   SLOW_WC=1 sleeps 5s on every call (the original AC 17 mechanism);
+#         SLOW_WC_ONCE=N sleeps N s on the first call made inside the batch script;
+#         KILL_WC=1 SIGKILLs the librarian-batch.sh bash (the topmost ancestor
+#         whose argv is `bash .../librarian-batch.sh`, found via /proc, never by
+#         name) so `timeout` reports 137 long before any cap.
+#   tail: SLOW_TAIL_PART=1 sleeps on a `tail ... <file>.part` call once
+#         batch.manifest.tmp exists, i.e. while both it and batch.txt.part exist.
+#         The sleep is bounded by the cap: `timeout` TERMs its whole group.
+lp_batch_shims() {
   command -v timeout >/dev/null 2>&1 || skip "timeout not on PATH"
-  local real; real="$(command -v wc)"
+  local rwc rtail; rwc="$(command -v wc)"; rtail="$(command -v tail)"
   mkdir -p "$STUB_BIN/shim"
   cat > "$STUB_BIN/shim/wc" <<SHIM
 #!/usr/bin/env bash
+in_batch() {
+  local p=\$\$ top="" cmd
+  while [ "\${p:-0}" -gt 1 ]; do
+    cmd="\$(tr '\\0' ' ' < /proc/\$p/cmdline 2>/dev/null)"
+    case "\$cmd" in bash\ *librarian-batch.sh*) top=\$p ;; esac
+    p="\$(sed 's/.*) //' /proc/\$p/stat 2>/dev/null | cut -d' ' -f2)"
+  done
+  echo "\$top"
+}
 [ -n "\${SLOW_WC:-}" ] && sleep 5
-exec "$real" "\$@"
+if [ -n "\${SLOW_WC_ONCE:-}\${KILL_WC:-}" ]; then
+  b="\$(in_batch)"
+  if [ -n "\$b" ]; then
+    if [ -n "\${SLOW_WC_ONCE:-}" ] && [ ! -e "$BATS_TEST_TMPDIR/wc-once" ]; then
+      : > "$BATS_TEST_TMPDIR/wc-once"; sleep "\$SLOW_WC_ONCE"
+    fi
+    [ -n "\${KILL_WC:-}" ] && kill -KILL "\$b"
+  fi
+fi
+exec "$rwc" "\$@"
 SHIM
-  chmod +x "$STUB_BIN/shim/wc"
-  PATH="$STUB_BIN/shim:$PATH"
+  cat > "$STUB_BIN/shim/tail" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do last="\$a"; done
+case "\$last" in
+  *.part)
+    [ -n "\${SLOW_TAIL_PART:-}" ] && [ -e "\${last%batch.txt.part}batch.manifest.tmp" ] && sleep 60 ;;
+esac
+exec "$rtail" "\$@"
+SHIM
+  chmod +x "$STUB_BIN/shim/wc" "$STUB_BIN/shim/tail"
+  case ":$PATH:" in *":$STUB_BIN/shim:"*) ;; *) PATH="$STUB_BIN/shim:$PATH" ;; esac
+}
+
+# A wc shim that sleeps 5s (bounded, and only when SLOW_WC is set) makes the
+# scan outlive a 1s cap deterministically. Needs GNU/BSD `timeout` on PATH.
+lp_slow_scan() {
+  lp_batch_shims
   unread_line
   SLOW_WC=1 LIBRARIAN_MAX_RUNTIME_SEC=1 wake
 }
@@ -1074,4 +1114,99 @@ SHIM
   claude_never_ran
   [ "$(lp_log_count 'batch scan exceeded')" -eq 1 ]
   [ "$(( $(lp_log_count 'deferred, cooldown') - before ))" -eq 1 ]
+}
+
+# AC 17 (cleanup): two transcripts, so the kill lands while the second range's
+# batch.txt.part exists and the first range's batch.manifest.tmp is already written.
+lp_kill_with_partials() {
+  lp_batch_shims
+  lp_extra other 2 1
+  unread_line
+  SLOW_TAIL_PART=1 LIBRARIAN_MAX_RUNTIME_SEC=20 wake
+}
+
+@test "scan cap: a scan killed mid-range leaves no batch.manifest.tmp" {
+  lp_kill_with_partials
+  [ ! -e "$(lp_state)/batch.manifest.tmp" ]
+}
+
+@test "scan cap: a scan killed mid-range leaves no batch.txt.part" {
+  lp_kill_with_partials
+  [ ! -e "$(lp_state)/batch.txt.part" ]
+}
+
+# ---- AC 18: scan and drain share one runtime cap ----------------------------
+
+# Records every `timeout` argv, then runs the real timeout by absolute path.
+lp_timeout_recorder() {
+  lp_batch_shims
+  local real; real="$(command -v timeout)"
+  mkdir -p "$BATS_TEST_TMPDIR/tshim"
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/timeout.rec"\nexec "%s" "$@"\n' "$BATS_TEST_TMPDIR" "$real" > "$BATS_TEST_TMPDIR/tshim/timeout"
+  chmod +x "$BATS_TEST_TMPDIR/tshim/timeout"
+  PATH="$BATS_TEST_TMPDIR/tshim:$PATH"
+}
+
+# lp_cap_of <grep-regex> — the duration argument of the one recorded timeout line matching it.
+lp_cap_of() {
+  grep -E -e "$1" "$BATS_TEST_TMPDIR/timeout.rec" | sed -E 's/.*--kill-after=[0-9]+ ([0-9.]+) .*/\1/'
+}
+
+lp_shared_cap_run() {
+  lp_timeout_recorder
+  unread_line
+  SLOW_WC_ONCE="$1" LIBRARIAN_MAX_RUNTIME_SEC=120 wake
+}
+
+@test "shared cap: after a scan slowed by 3s, claude runs under a timeout of at least 1s and under the full 120s" {
+  lp_shared_cap_run 3
+  awk -v d="$(lp_cap_of ' claude( |$)')" 'BEGIN { exit !(d != "" && d < 120 && d >= 1) }'
+}
+
+@test "shared cap: the scan's own timeout still shows the full 120s cap" {
+  lp_shared_cap_run 3
+  [ "$(lp_cap_of 'librarian-batch\.sh')" = "120" ]
+}
+
+@test "shared cap: a slowed scan still lets the drain run claude exactly once" {
+  lp_shared_cap_run 3
+  [ "$(wc -l < "$CLAUDE_LOG")" -eq 1 ]
+}
+
+@test "shared cap: a slowed scan still advances the cursor" {
+  lp_shared_cap_run 3
+  [ "$(cat "$(lp_state)/cursors/$SID.line")" = "1" ]
+}
+
+@test "shared cap: a fast scan leaves claude a timeout within 2s of the full 120s cap" {
+  lp_shared_cap_run 0
+  awk -v d="$(lp_cap_of ' claude( |$)')" 'BEGIN { exit !(d != "" && d >= 118 && d <= 120) }'
+}
+
+# ---- AC 19: only a real cap overrun is called one ---------------------------
+
+lp_scan_dies_early() {
+  lp_batch_shims
+  unread_line
+  KILL_WC=1 LIBRARIAN_MAX_RUNTIME_SEC=600 wake
+}
+
+@test "early scan death: a scan SIGKILLed far below the cap logs one 'batch failed, drain skipped' line" {
+  lp_scan_dies_early
+  [ "$(lp_log_count 'batch failed, drain skipped')" -eq 1 ]
+}
+
+@test "early scan death: a scan SIGKILLed far below the cap is not logged as 'batch scan exceeded'" {
+  lp_scan_dies_early
+  [ "$(lp_log_count 'batch scan exceeded')" -eq 0 ]
+}
+
+@test "early scan death: a scan SIGKILLed far below the cap writes no last-drain-start" {
+  lp_scan_dies_early
+  [ ! -e "$(lp_state)/last-drain-start" ]
+}
+
+@test "early scan death: a scan SIGKILLed far below the cap starts no claude" {
+  lp_scan_dies_early
+  claude_never_ran
 }
