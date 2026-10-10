@@ -2369,10 +2369,12 @@ _$(fake_do)"
 # No built-in rule covers Pulumi, and the gitleaks pulumi-api-token rule needs
 # a terminator directly after the token. Measured with gitleaks 8.30.1: the
 # whole token stays raw before the characters pinned below and directly after
-# an ASCII word character; it is found before ASCII whitespace, a straight
-# quote, a backtick, a semicolon, a literal \n or \r escape, a percent or \u
-# escape of one of these, or the end of the text, and when another rule
-# matches around it (for example a secret keyword in front). The lists are
+# an ASCII word character. In the same measurement it was found before an ASCII
+# space, tab, newline, carriage return or form feed, a straight quote, a
+# backtick, a semicolon, a literal \n or \r escape, a percent or \u escape of
+# one of these, or the end of the text, and when another rule matches around it
+# (for example a secret keyword in front). It was not found when a gitleaks
+# allow comment was on the same line or the line before. The lists are
 # measured, not complete. Accepted for now in issue 219. The fix is issue 238.
 @test "known limit: a pulumi token stays raw when punctuation follows it or a word character is glued in front" {
   require_real_gitleaks
@@ -2408,6 +2410,10 @@ _$(fake_do)"
   [ "$(real_redact_texts 'see '"$KEY"'\nmore')" = 'see <redacted:pulumi-api-token>\nmore' ]
   [ "$(real_redact_texts 'see '"$KEY"'%20more')" = 'see <redacted:pulumi-api-token>%20more' ]
   [ "$(real_redact_texts 'see '"$KEY"'\u0020more')" = 'see <redacted:pulumi-api-token>\u0020more' ]
+  allow="gitleaks"":allow"
+  input="see $KEY now # $allow"
+  [ "$(real_redact_texts "$input")" = "$input" ]
+  [ "$(real_redact_texts "see $KEY now # other note")" = "see <redacted:pulumi-api-token> now # other note" ]
   [ "$(real_redact_texts "PULUMI_ACCESS_TOKEN=$KEY")" = "PULUMI_ACCESS_<redacted:generic-secret>" ]
 }
 

@@ -43,11 +43,13 @@ accepted for now: no built-in rule covers Pulumi, and the gitleaks
 pulumi-api-token rule needs a terminator directly after the token. Measured
 with gitleaks 8.30.1, the whole usable token stays raw before a period, a
 comma, "/", "&", a no-break space or a curly quote, and directly after an
-ASCII letter, digit or underscore. It is found before an ASCII space, tab,
-newline, carriage return or form feed, a straight quote, a backtick, a
-semicolon, a literal "\\n" or "\\r" escape, a percent or "\\u" escape of one
-of these, or the end of the text, and it is also redacted when another rule
-matches around it (for example a secret keyword such as "token" in front of
+ASCII letter, digit or underscore. In the same measurement it was found before
+an ASCII space, tab, newline, carriage return or form feed, a straight quote, a
+backtick, a semicolon, a literal "\\n" or "\\r" escape, a percent or "\\u"
+escape of one of these, or the end of the text, but not when a "gitleaks:allow"
+comment was on the same line or the line before (gitleaks then skips the
+finding and the whole token stays raw). It was also redacted when another rule
+matched around it (for example a secret keyword such as "token" in front of
 it). These lists are measured, not complete; the "known limit:" tests pin them.
 The fix is issue #238
 (https://github.com/drewdrewthis/claude-plugins/issues/238).
