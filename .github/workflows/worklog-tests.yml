@@ -150,8 +150,9 @@ jobs:
               last="$(sed -E 's/.* last_change=([0-9a-f]+)$/\1/' <<<"$line")"
               [ "$ref" = "$(git rev-parse "$last^1")" ] || { echo "reference is not the parent of the last change"; exit 1; }
               lib=plugins/worklog/hooks/lib/redact.py
-              git diff --quiet "$last" HEAD -- "$lib" || { echo "library differs between last_change and HEAD"; exit 1; }
-              if git diff --quiet "$last^1" "$last" -- "$lib"; then echo "library did not change in last_change"; exit 1; fi ;;
+              # Blob ids, not git diff: a mode-only commit is not a library change.
+              [ "$(git rev-parse "$last:$lib")" = "$(git rev-parse "HEAD:$lib")" ] || { echo "library differs between last_change and HEAD"; exit 1; }
+              if [ "$(git rev-parse "$last^1:$lib")" = "$(git rev-parse "$last:$lib")" ]; then echo "library did not change in last_change"; exit 1; fi ;;
             *) echo "unknown reference rule"; exit 1 ;;
           esac
 
