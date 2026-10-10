@@ -61,8 +61,14 @@ yandex-access-token (rubygems-api-token and twitter-bearer-token can be
 redacted in part). (4) Texts beyond the copy budget (the copy budget,
 _COPY_BUDGET, in bytes of original text per batch, smallest texts first) get no copies; for them a gitleaks-only
 token before punctuation stays raw. (5) Without gitleaks nothing changes:
-gitleaks-only shapes stay raw. (6) gitleaks older than 8.22.0 gives the hook no
-findings (https://github.com/drewdrewthis/claude-plugins/issues/245). (7) The
+gitleaks-only shapes stay raw. (6) gitleaks 8.19.0 and older cannot run the stdin
+call, so the scan fails on every system and the row is stored unjudged
+(gitleaks-failed). The minimum version is 8.19.1 on Linux and 8.22.0 on other
+systems. There, an older or unreadable version is not run: the row is stored
+unjudged (gitleaks-failed, gitleaks-too-old) and only the built-in rules redact
+(https://github.com/drewdrewthis/claude-plugins/issues/245). If a file named "-"
+appears or changes during a run, the scan fails and gitleaks-report-file is noted;
+the hook removes nothing. (7) The
 copies make the one gitleaks run larger (about 0.5 to 0.9 MB more), so a batch that is
 close to the gitleaks time limit without them can pass it with them; the row is
 then stored unjudged (gitleaks-failed), never unredacted.
@@ -78,7 +84,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
+import sys
+import time
 
 _PEM = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
@@ -260,23 +269,84 @@ def gitleaks_present():
     return bool(shutil.which("gitleaks"))
 
 
-def scan(text):
-    """One gitleaks run over `text`. Returns (findings, failed).
+# Where gitleaks writes its JSON report. Linux only: /dev/stdout gives the
+# report on stdout from 8.19.1 on, but macOS gives no report there (measured
+# on 8.21.2 and 8.30.1). Other systems use "-", which is stdout from 8.22.0 on.
+# https://github.com/drewdrewthis/claude-plugins/issues/245
+_REPORT_PATH = "/dev/stdout" if sys.platform.startswith("linux") else "-"
 
-    findings is [(secret, rule_id)]. Absent gitleaks is (not failed): nothing
-    was attempted; the caller reports absence via gitleaks_present().
+# First gitleaks version where the report path "-" means stdout. Older versions
+# write the raw report to a file named "-" in the working directory.
+_MIN_DASH_VERSION = (8, 22, 0)
+
+# Set by scan(); the hook reads them to note gitleaks-too-old (non-Linux gitleaks
+# older than _MIN_DASH_VERSION or unreadable, so it was not run) and
+# gitleaks-report-file (a "-" file appeared or changed during a run; the hook never removes it).
+gitleaks_too_old = False
+report_file_left = False
+
+
+def _report_path_usable():
+    """False when the report path is absent or a regular file.
+
+    With a writable /dev that has no stdout entry, gitleaks creates a regular
+    file there with the raw secret and prints nothing (measured on 8.21.2 and
+    8.30.1). lstat, not stat, so a closed stdout of this process does not trip
+    the guard. Known limit: a /dev/stdout that is a symlink to a regular file
+    passes this guard (it needs a replaced /dev/stdout).
     """
-    if not gitleaks_present() or not text.strip():
-        return [], False
     try:
-        secs = int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
+        return not stat.S_ISREG(os.lstat(_REPORT_PATH).st_mode)
+    except OSError:
+        return False
+
+
+def _dash_entry():
+    """Stat triples of the "-" entry, or None when it does not exist.
+
+    The pair is (the entry itself, what it points to). An old gitleaks writes
+    through a symlink, so the link alone can look unchanged. The second triple
+    is None when the target is missing (a dangling link).
+    """
+    # Known limits: a target that keeps no size or time (a device such as
+    # /dev/null), and a rewrite of the same size inside one timestamp step,
+    # are not seen.
+    def triple(stat):
+        try:
+            st = stat("-")
+            return st.st_ino, st.st_size, st.st_mtime_ns
+        except OSError:
+            return None
+
+    own = triple(os.lstat)
+    return None if own is None else (own, triple(os.stat))
+
+
+def _timeout_secs():
+    return int(os.environ.get("WORKLOG_GITLEAKS_TIMEOUT", "15"))
+
+
+def _gitleaks_version(secs):
+    """The (major, minor, patch) of `gitleaks version`, or None when unreadable."""
+    try:
+        p = subprocess.run(["gitleaks", "version"], capture_output=True, timeout=secs)
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", p.stdout.decode("utf-8", "replace"))
+        return tuple(int(g) for g in m.groups()) if p.returncode == 0 and m else None
+    except Exception:
+        return None
+
+
+def _run_gitleaks(text, secs=None):
+    try:
+        secs = _timeout_secs() if secs is None else secs
         p = subprocess.run(
             ["gitleaks", "stdin", "--no-banner", "--exit-code", "0",
-             "--report-format", "json", "--report-path", "-", "--log-level", "error",
+             "--report-format", "json", "--report-path", _REPORT_PATH, "--log-level", "error",
              "--ignore-gitleaks-allow"],
             input=text.encode("utf-8", "replace"), capture_output=True, timeout=secs)
         if p.returncode != 0:
             return [], True
+        # gitleaks 8.22.0 prints nothing on a clean scan, so empty stdout is not a failure.
         found = json.loads(p.stdout.decode("utf-8", "replace") or "[]")
         out = [(f["Secret"], f.get("RuleID") or "gitleaks") for f in found
                if isinstance(f, dict) and isinstance(f.get("Secret"), str)
@@ -286,6 +356,51 @@ def scan(text):
         return out, False
     except Exception:
         return [], True
+
+
+def scan(text):
+    """One gitleaks run over `text`. Returns (findings, failed).
+
+    findings is [(secret, rule_id)]. Absent gitleaks is (not failed): nothing
+    was attempted; the caller reports absence via gitleaks_present().
+    """
+    global gitleaks_too_old, report_file_left
+    if not gitleaks_present() or not text.strip():
+        return [], False
+    if _REPORT_PATH != "-":
+        if not _report_path_usable():
+            return [], True
+        return _run_gitleaks(text)
+    # The version is read first: gitleaks older than 8.22.0 writes its raw report
+    # to a file named "-", and removing that file afterwards races with a second
+    # hook run in the same directory (issue #245,
+    # https://github.com/drewdrewthis/claude-plugins/issues/245). The hook removes nothing.
+    # The claim TTL in worklog-record.sh counts one WORKLOG_GITLEAKS_TIMEOUT per
+    # batch, so the version read and the scan share that one budget.
+    try:
+        secs = _timeout_secs()
+    except ValueError:
+        # A timeout that is not a number fails the scan, as it does on Linux.
+        return [], True
+    start = time.monotonic()
+    version = _gitleaks_version(secs)
+    if version is None or version < _MIN_DASH_VERSION:
+        gitleaks_too_old = True
+        return [], True
+    remaining = secs - (time.monotonic() - start)
+    if remaining <= 0:
+        # A version read that times out is reported as an unreadable version
+        # (gitleaks_too_old). This branch covers a read that returned just at the limit.
+        return [], True
+    before = _dash_entry()
+    result = _run_gitleaks(text, remaining)
+    if _dash_entry() != before:
+        # The version was misread: a report file is new or was rewritten, so stdout
+        # holds no findings. An old gitleaks also rewrites a "-" that was there before.
+        # Nothing is removed. An unchanged "-" that was already there stays ignored.
+        report_file_left = True
+        return [], True
+    return result
 
 
 _MARK = "<redacted:"
