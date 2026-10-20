@@ -37,7 +37,7 @@ Open as draft or ready per repo convention (`gh pr create`) to get the PR number
    until fetch_checks_rest <owner> <repo> "$sha" | jq -es '.[0] // [] | length > 0 and all(.[]; (.status // "COMPLETED") == "COMPLETED" and .state != "PENDING")' >/dev/null; do sleep 30; done
    echo "CI finished $sha"
    ```
-   `pr.sh` is session-length: it watches CI checks, new comments, review threads, and pushes. The REST fallback watches CI only and is NOT session-length — it prints `watching <sha>`, waits until no check on that one head sha is pending, prints `CI finished <sha>` and exits. It does not judge the result: the raw check list holds superseded runs (an old `CANCELLED` beside a newer `SUCCESS`), so read the CI verdict from the C2 line of the Step 5 item 1 command, which collapses them. A red check shows only when the whole run has finished. Re-arm it after every push, because the sha changed. Pass Logic C is your only review-thread signal there, so run it every iteration — after the fallback exits, keep iterating Step 2 yourself until the readiness check prints `overall: READY`; do not idle waiting for an event. Verify the watch armed within ~30s (baseline line or `WATCH-DEGRADED` for `pr.sh`; the `watching <sha>` line for the fallback) — don't assume it did. On a fallback box, `monitor_armed: true` (below) means a watch is running, or the last one ended with every check finished on the current HEAD.
+   `pr.sh` is session-length: it watches CI checks, new comments, review threads, and pushes. The REST fallback watches CI only and is NOT session-length — it prints `watching <sha>`, waits until no check on that one head sha is pending, prints `CI finished <sha>` and exits. It does not judge the result: the raw check list holds superseded runs (an old `CANCELLED` beside a newer `SUCCESS`), so read the CI verdict from the C2 line of the Step 5 item 1 command, which collapses them. A red check shows only when the whole run has finished. Re-arm it after every push, because the sha changed. Pass Logic C is your only review-thread signal there, so run it every iteration — after the fallback exits, keep iterating Step 2 yourself until the readiness check prints `overall: READY` or `overall: AWAITING_HUMAN`; do not idle waiting for an event. Verify the watch armed within ~30s (baseline line or `WATCH-DEGRADED` for `pr.sh`; the `watching <sha>` line for the fallback) — don't assume it did. On a fallback box, `monitor_armed: true` (below) means a watch is running, or the last one ended with every check finished on the current HEAD.
 
 Once verified alive, mark it in the flag:
 
@@ -54,7 +54,7 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
 - If analyzing >5 min with 0 files written, stop and write the smallest fix.
 - Don't delegate the whole task to one sub-agent — you (this session) own conflict resolution and final commits; delegate discrete pieces.
 - Bound any wait on a code-quality bot to ~15 min.
-- **Stop at ready.** Don't keep re-verifying past a clean `pr-ready-check.sh` result.
+- **Stop at ready.** Don't keep re-verifying past a clean `pr-ready-check.sh` result (`READY` or `AWAITING_HUMAN`).
 - Rate-limit errors are never blockers by themselves — check GraphQL vs REST bucket separately: `gh api rate_limit`.
 
 ### Pass Logic
