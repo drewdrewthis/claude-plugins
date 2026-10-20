@@ -34,7 +34,7 @@ Write/update `/tmp/claude-ship-flow-$CLAUDE_SESSION_ID` at every phase transitio
 echo '{"pr": <N or null>, "phase": "implement|review|browser-qa|monitor|done"}' > "/tmp/claude-ship-flow-$CLAUDE_SESSION_ID"
 ```
 
-A Stop hook (`~/.claude/hooks/ship-flow-stop.sh`) reads this file and blocks premature completion. Set `"phase": "done"` **only** after `pr-ready-check.sh` exits 0/READY **and** browser proof (or documented no-UI-surface exception) is embedded in the PR body. Setting `done` early defeats the hook's purpose — don't.
+A Stop hook (`~/.claude/hooks/ship-flow-stop.sh`) reads this file and blocks premature completion. Set `"phase": "done"` **only** after `pr-ready-check.sh` exits 0 (READY, AWAITING_HUMAN or MERGED) **and** browser proof (or documented no-UI-surface exception) is embedded in the PR body. Setting `done` early defeats the hook's purpose — don't.
 
 ## Resuming mid-flow
 
