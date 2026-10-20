@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/drewdrewthis/claude-plugins/compare/ship-v0.2.0...ship-v0.3.0) (2026-10-20)
+
+
+### Features
+
+* **ship:** treat AWAITING_HUMAN as the terminal human-review-ready state ([#257](https://github.com/drewdrewthis/claude-plugins/issues/257)) ([2b15a8a](https://github.com/drewdrewthis/claude-plugins/commit/2b15a8af624c488d6d376d0232aab1f929e560a3))
+
 ## [0.2.0](https://github.com/drewdrewthis/claude-plugins/compare/ship-v0.1.0...ship-v0.2.0) (2026-10-10)
 
 
