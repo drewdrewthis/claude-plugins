@@ -1,6 +1,6 @@
 # PR + MONITOR mode
 
-<!-- PLUGIN ADAPTATION (owner-directed, drewdrewthis/claude-plugins#186): on a re-sync from orchard-codex, keep this file's readiness-check path, C1–C13 un-draft gate, quoted-verdict report and REST watcher fallback. -->
+<!-- PLUGIN ADAPTATION (owner-directed, drewdrewthis/claude-plugins#186): on a re-sync from orchard-codex, keep this file's readiness-check path, C1–C9, C11–C13 un-draft gate, quoted-verdict report and REST watcher fallback. -->
 
 Open the PR, arm a watcher immediately, drive to green. The session that opens the PR owns watching it until it's ready — don't hand that off and walk away.
 
