@@ -1,6 +1,6 @@
 # PR + MONITOR mode
 
-<!-- PLUGIN ADAPTATION (owner-directed, drewdrewthis/claude-plugins#186): on a re-sync from orchard-codex, keep this file's readiness-check path, C1–C9 un-draft gate, quoted-verdict report and REST watcher fallback. -->
+<!-- PLUGIN ADAPTATION (owner-directed, drewdrewthis/claude-plugins#186): on a re-sync from orchard-codex, keep this file's readiness-check path, C1–C13 un-draft gate, quoted-verdict report and REST watcher fallback. -->
 
 Open the PR, arm a watcher immediately, drive to green. The session that opens the PR owns watching it until it's ready — don't hand that off and walk away.
 
@@ -49,7 +49,7 @@ If the Monitor is later stopped before `done` (e.g. to fix something inline), se
 
 ## Step 2 — Iteration loop (replaces ralph-loop)
 
-Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.sh`. Loop until READY or MERGED. **Anti-wedge rules:**
+Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.sh`. Loop until READY, AWAITING_HUMAN or MERGED. **Anti-wedge rules:**
 - Commit incrementally every iteration you touch code, and **push every commit immediately** — `origin/<branch>` must equal `HEAD` at the end of every turn (owner standing rule 2026-09-23). Unfinished work lives in a draft PR on the remote, never only on the box.
 - If analyzing >5 min with 0 files written, stop and write the smallest fix.
 - Don't delegate the whole task to one sub-agent — you (this session) own conflict resolution and final commits; delegate discrete pieces.
@@ -84,7 +84,7 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
 1. Verify shard tally — green checks are forgeable: `~/.claude/scripts/verify-ci-shard-tally.sh <owner>/<repo> <N>` (exit 1 = green unverified; must see a `Test Files N passed` tally line). `ls` the script first: where it is absent (e.g. drew-sweatshop) G.1 cannot run — say so in the PR body, do not claim the shard tally was verified, and treat C2 of the readiness check as the only CI gate.
 2. Verify both typecheck steps ran if the repo splits them (LangWatch: `pnpm typecheck` AND `pnpm run typecheck:tests`).
 3. Finalize: PATCH the PR body (write-pr format), `gh pr ready`, assign, request reviewers, set the `pr-ready` phase label (`records/procedures/github/scripts/tag.sh -R <owner/repo> pr-ready <issue> <N>`).
-   **Ship's terminal state is human-review-ready: non-draft, assigned, reviewers requested.** Un-drafting is the shipping worker's own action, gated on every criterion of `pr-ready-check` (C1–C9), not a subset: before `gh pr ready`, run the Step 5 item 1 command and un-draft only when its single `FAIL` line is `C1: PR is a draft` (the script fails C1 on every draft). Then re-run it and require `overall: READY` — that re-run is the Step 5 run. No fleet role (orchardist, assistant, planner) gates it, and "await the owner's un-draft" is not a ship step. The only reason to leave a green, proven PR in draft is an explicit owner instruction recorded on that PR. (Owner ruling 2026-09-08 on langwatch/langwatch#7959, which sat done-but-draft for half a day waiting on a gate nobody owned.) **Draft is only for not-yet-finished work: the PR flips to ready in the same turn that pushes the last commit** — not after a bot round, not after a wait, not on a later beat (owner standing rule 2026-09-23, Discord 1552124506657656853).
+   **Ship's terminal state is human-review-ready: non-draft, assigned, reviewers requested.** Un-drafting is the shipping worker's own action, gated on every criterion of `pr-ready-check` (C1–C9, C11–C13), not a subset: before `gh pr ready`, run the Step 5 item 1 command and un-draft only when its single `FAIL` line is `C1: PR is a draft` (the script fails C1 on every draft; `WAIT` lines for a human approval still owed are allowed, and C12 on a draft defers to C1). Then re-run it and require `overall: READY` or `overall: AWAITING_HUMAN` — that re-run is the Step 5 run. No fleet role (orchardist, assistant, planner) gates it, and "await the owner's un-draft" is not a ship step. The only reason to leave a green, proven PR in draft is an explicit owner instruction recorded on that PR. (Owner ruling 2026-09-08 on langwatch/langwatch#7959, which sat done-but-draft for half a day waiting on a gate nobody owned.) **Draft is only for not-yet-finished work: the PR flips to ready in the same turn that pushes the last commit** — not after a bot round, not after a wait, not on a later beat (owner standing rule 2026-09-23, Discord 1552124506657656853).
 4. Verify the Monitor is still alive (`pr.sh`), or that the last REST fallback watch ended with every check finished on the current HEAD.
 5. Only THEN consider emitting a completion signal — see Step 5.
 
@@ -118,9 +118,9 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
 ~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh <owner> <repo> <N>
 ```
 
-The script lives in the https://github.com/drewdrewthis/langwatch-sweatshop toolkit, not in this plugin. (Also `just pr-ready` in the toolkit, where `just` is installed.) Exit code of the bare command: 0 = `READY` or `MERGED`, 1 = `NOT_READY`, 2 = `ERROR` — a pipe into `jq` or `grep` hides it, so read `overall` there. If the path is missing on your box, that is a blocker to report — do not substitute your own reading of the criteria.
+The script lives in the https://github.com/drewdrewthis/langwatch-sweatshop toolkit, not in this plugin. (Also `just pr-ready` in the toolkit, where `just` is installed.) Exit code of the bare command: 0 = `READY`, `AWAITING_HUMAN` or `MERGED`, 1 = `NOT_READY`, 2 = `ERROR` — a pipe into `jq` or `grep` hides it, so read `overall` there. If the path is missing on your box, that is a blocker to report — do not substitute your own reading of the criteria.
 
-This is the single source of truth — 9 criteria (C1–C9): open/non-draft/mergeable; CI green (supersede-aware; the shard tally is the separate G.1 script); review verdict READY at HEAD by a known reviewer; zero unresolved review signals (threads AND top-level comments, outdated-but-unresolved still counts as blocking); write-pr format present (`## Human verification` + `## How I can prove I was successful`); use-proof embedded (no backend-only exemption — non-UI surfaces prove via real invocation screenshots); no unfiled deferments; merged short-circuits to done; a raw capture from the running app in the proof section (C9: an HTTP status line, a `$ cmd` line with its output, or a linked `.txt`/`.log` — images alone do not pass; a UI-only PR declares `<!-- ui-only -->`).
+This is the single source of truth — 12 criteria (C1–C9, C11–C13; C10 is reserved): open/non-draft/mergeable; CI green (supersede-aware; the shard tally is the separate G.1 script); review verdict READY at HEAD by a known reviewer; zero unresolved review signals (threads AND top-level comments, outdated-but-unresolved still counts as blocking); write-pr format present (`## Human verification` + `## How I can prove I was successful`); use-proof embedded (no backend-only exemption — non-UI surfaces prove via real invocation screenshots); no unfiled deferments; merged short-circuits to done; a raw capture from the running app in the proof section (C9: an HTTP status line, a `$ cmd` line with its output, or a linked `.txt`/`.log` — images alone do not pass; a UI-only PR declares `<!-- ui-only -->`); C11 review gate (fails on `reviewDecision` CHANGES_REQUESTED or REVIEW_REQUIRED; a human approval on HEAD passes); C12 merge state (`mergeStateStatus` must allow the merge; on a draft it defers to C1); C13 needs answer (no conversation or inline comment still waiting on an answer). `AWAITING_HUMAN` (exit 0) means every criterion passes except a human approval still owed (shown as `WAIT`, not `FAIL`); `READY` means ready to merge.
 
 ⚠ No criterion reads `reviewDecision` directly — cross-check separately: `gh pr view <N> --json reviewDecision,mergeStateStatus`. `REVIEW_REQUIRED` blocks as hard as `CHANGES_REQUESTED`. The merge gate is the **union** of branch protection AND repository rulesets — check both.
 
@@ -128,7 +128,7 @@ This is the single source of truth — 9 criteria (C1–C9): open/non-draft/merg
 ~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh <owner> <repo> <N> | jq '{overall: .overall, failed: [.criteria[] | select(.passed != true) | .id]}'
 ```
 
-Callers MUST test `overall == "READY"` (or `"MERGED"`) positively — never `overall != "NOT_READY"`.
+Callers MUST test `overall == "READY"`, `"AWAITING_HUMAN"` or `"MERGED"` positively — never `overall != "NOT_READY"`.
 
 ## Step 4 — Never claim ready on pending/failing CI
 
@@ -136,9 +136,9 @@ Pending CI obligates you to keep watching to a terminal conclusion — never han
 
 ## Step 5 — Set `done` only when both are true
 
-1. This command, run at the current HEAD, prints `overall: READY ✓` (or `overall: MERGED ●`). Keep the output — the report quotes it.
+1. This command, run at the current HEAD, prints `overall: READY ✓`, `overall: AWAITING_HUMAN ◐` or `overall: MERGED ●`. Keep the output — the report quotes it.
    ```bash
-   ~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh --format text <owner> <repo> <N> 2>&1 | grep -E '^overall:|^  FAIL|^ERROR|^error:|No such file'
+   ~/Projects/langwatch-sweatshop/modules/github/scripts/pr-ready-check.sh --format text <owner> <repo> <N> 2>&1 | grep -E '^overall:|^  FAIL|^  WAIT|^ERROR|^error:|No such file'
    ```
 2. Browser proof (or documented no-UI-surface exception) is embedded in the PR body.
 
@@ -150,8 +150,8 @@ Only then report ready/done to whoever is waiting on this.
 
 **The ready report quotes the verdict.** Paste the output of the command in item 1 into the report:
 
-- `overall: READY ✓` or `overall: MERGED ●` → quote that line. That is a ready (or merged) report.
+- `overall: READY ✓`, `overall: AWAITING_HUMAN ◐` or `overall: MERGED ●` → quote that line (and any `WAIT` lines). That is a ready-for-review (or merged) report. `AWAITING_HUMAN` is ship's terminal state: only the human approval is owed, so stop and report; do not loop.
 - No `overall:` line (script missing or crashed), or `overall: ERROR` → report BLOCKED and quote the `ERROR`/`error:`/`No such file` line, or say the command printed nothing. Do not set `done`.
 - `overall: NOT_READY ✗` → quote it with every `FAIL` line, and report not ready. Do not set `done`.
 
-A ready report without the quoted `overall:` line is not a ready report: the receiver treats it as not ready. Green CI is one criterion (C2) of nine — it is never the verdict.
+A ready report without the quoted `overall:` line is not a ready report: the receiver treats it as not ready. Green CI is one criterion (C2) of twelve — it is never the verdict.
