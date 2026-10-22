@@ -1,6 +1,6 @@
 ---
 name: just-recipes
-description: Use when running project commands/tasks in any repo, when the user says "just", "recipe", "run the deploy/test/build task", or before composing an ad hoc shell command that a recipe likely covers. Prefer named just recipes over ad hoc shell — an optional global library at ~/.claude/just/justfile (if your machine provides it) applies even where the repo has no justfile.
+description: REQUIRED before you compose any ad hoc shell command in a repo, and whenever the user says "just", "recipe", or names a deploy/test/build task. Run `just --list` first (where the repo has no justfile, `just --justfile ~/.claude/just/justfile --list` if your machine provides that global library) and use the named recipe when one covers the task; when none does and the task will repeat, add a recipe. Agents that skip it re-type shell that a recipe already does safely, and lose the guardrails the recipe holds.
 ---
 
 # just-recipes
