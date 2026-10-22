@@ -25,7 +25,28 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      # GitHub's GraphQL API sometimes answers "Something went wrong while executing
+      # your query"; release-please retries only 502s, so one such answer fails the run.
+      # A rerun is safe (it updates its own PRs), so try up to 3 times.
+      - id: rp1
+        uses: googleapis/release-please-action@v4
+        continue-on-error: true
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      - if: steps.rp1.outcome == 'failure'
+        run: sleep 30
+      - id: rp2
+        if: steps.rp1.outcome == 'failure'
+        uses: googleapis/release-please-action@v4
+        continue-on-error: true
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      - if: steps.rp2.outcome == 'failure'
+        run: sleep 60
+      - if: steps.rp2.outcome == 'failure'
+        uses: googleapis/release-please-action@v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
