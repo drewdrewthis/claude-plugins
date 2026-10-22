@@ -1,6 +1,6 @@
 ---
 name: just-recipes
-description: REQUIRED before you compose any ad hoc shell command in a repo, and whenever the user says "just", "recipe", or names a deploy/test/build task. Run `just --list` first (where the repo has no justfile, `just --justfile ~/.claude/just/justfile --list` if your machine provides that global library) and use the named recipe when one covers the task; when none does and the task will repeat, add a recipe. Agents that skip it re-type shell that a recipe already does safely, and lose the guardrails the recipe holds.
+description: REQUIRED before you compose any non-trivial shell command in a repo, and whenever the user says "just", "recipe", or names a deploy/test/build task. How: run `just --list` first (and the global library, `just --justfile ~/.claude/just/justfile --list`) and use the named recipe that covers the task. When none does and the task will repeat, add a recipe to the shared justfile, with a one-line comment that says what it does and a usage example. Never leave the know-how in a one-off script, a /tmp helper or a notes file (such as an api.md): it belongs in a recipe, so every agent finds it with `just --list`. Agents that skip this re-type shell a recipe already does safely, and hide what they learned from the next agent.
 ---
 
 # just-recipes
