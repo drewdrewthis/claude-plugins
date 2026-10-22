@@ -1,6 +1,7 @@
 ---
 name: just-recipes
-description: REQUIRED before you compose any shell command in a repo (plain lookups like ls, cat, pwd aside), and whenever the user says "just", "recipe", or names a deploy/test/build task. How — run `just --list` first (and the global library, `just --justfile ~/.claude/just/justfile --list`, if your machine provides it) and use the named recipe that covers the task. When none does and the task will repeat, add a recipe to the project's justfile (or your toolkit repo's, never dotclaude), with a one-line doc comment that says what it does. Never leave the know-how in a one-off script, a /tmp helper or a notes file (such as an api.md); it belongs in a recipe, so every agent finds it with `just --list`.
+description: Runs project tasks through named `just` recipes and grows the recipe library. Lists recipes with `just --list` (plus the global library, `just --justfile ~/.claude/just/justfile --list`, when the machine has it) and runs the recipe that covers the task. When none does and the task will repeat, adds a recipe with a one-line doc comment to the project's justfile instead of a one-off script, a /tmp helper or a notes file; the global library changes only through the repo that ships it. Required before any shell command other than plain lookups (ls, cat, cd, pwd, echo, which).
+when_to_use: Use when the user asks to run, test, build, deploy, lint or release something in a repo, says "just" or "recipe", or asks to set up a task they will repeat.
 ---
 
 # just-recipes
@@ -51,6 +52,8 @@ One kebab-case recipe per intent, flat namespace. Chooser stubs (e.g. `just log`
 - Destructive actions must look destructive in the name: `kill-session`, `delete-server`, `drop-db` — never a bare noun or euphemism. This naming is authoring guidance, not a safety check (see Boundaries).
 - Keep recipes thin: nontrivial logic goes in a script the recipe calls, not inline in the justfile.
 - Add a doc comment line directly above each recipe — `just --list` surfaces it.
+- Add the recipe where its owners keep it: the project's justfile, or, for a task across repos, the repo that ships the global library. Never edit the installed global library file directly.
+- The know-how goes in the recipe (or the script it calls), not in a one-off shell line, a /tmp helper or a notes file such as `api.md`: `just --list` is how the next agent finds it.
 
 ## Boundaries
 
