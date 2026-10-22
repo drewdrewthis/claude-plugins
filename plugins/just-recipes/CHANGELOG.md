@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/drewdrewthis/claude-plugins/compare/just-recipes-v0.4.1...just-recipes-v0.5.0) (2026-10-22)
+
+
+### Features
+
+* **just-recipes:** description per Anthropic's skill guide, with a trigger eval suite ([#261](https://github.com/drewdrewthis/claude-plugins/issues/261)) ([a497626](https://github.com/drewdrewthis/claude-plugins/commit/a497626c011e31fdc646c68bfd447af324f68d78))
+
+
+### Bug Fixes
+
+* **just-recipes:** strong skill description, like the convoz skill ([#259](https://github.com/drewdrewthis/claude-plugins/issues/259)) ([d48e65e](https://github.com/drewdrewthis/claude-plugins/commit/d48e65e2d514ebb52d9df415f380d3bd39932794))
+
 ## [0.4.1](https://github.com/drewdrewthis/claude-plugins/compare/just-recipes-v0.4.0...just-recipes-v0.4.1) (2026-10-10)
 
 
