@@ -7,6 +7,8 @@ name: release-please
 on:
   push:
     branches: [main]
+  # Re-run by hand when GitHub drops a push event: gh workflow run release-please.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
