@@ -1,6 +1,7 @@
 ---
 name: just-recipes
-description: REQUIRED before you compose any shell command in a repo (plain lookups like ls, cat, pwd aside), and whenever the user says "just", "recipe", or names a deploy/test/build task. How — run `just --list` first (and the global library, `just --justfile ~/.claude/just/justfile --list`, if your machine provides it) and use the named recipe that covers the task. When none does and the task will repeat, add a recipe to the project's justfile (or your toolkit repo's, never dotclaude), with a one-line doc comment that says what it does. Never leave the know-how in a one-off script, a /tmp helper or a notes file (such as an api.md); it belongs in a recipe, so every agent finds it with `just --list`.
+description: Runs project tasks through named `just` recipes and grows the shared recipe library. Lists recipes with `just --list` (plus the global library, `just --justfile ~/.claude/just/justfile --list`, when the machine has it) and runs the recipe that covers the task. When none does and the task will repeat, adds a recipe with a one-line doc comment to the project's justfile (or a toolkit repo's, never ~/.claude) instead of a one-off script, a /tmp helper or a notes file. MUST be loaded before any shell command that builds, tests, deploys, lints, releases or queries a service.
+when_to_use: Use when the user asks to run, test, build, deploy, lint, release or check something in a repo, says "just" or "recipe", or asks to set up a task they will repeat.
 ---
 
 # just-recipes
