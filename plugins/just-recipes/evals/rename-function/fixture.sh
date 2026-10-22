@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared scaffold: a small git repo whose justfile already has the common tasks.
+# Scaffold (same in every case; a case runs only its own script): a small git repo whose justfile already has the common tasks.
 set -e
 git init -q .
 mkdir -p src
