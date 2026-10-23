@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/drewdrewthis/claude-plugins/compare/decide-v0.2.0...decide-v0.3.0) (2026-10-23)
+
+
+### Features
+
+* **decide:** make /decide the stated way to decide and recommend ([#264](https://github.com/drewdrewthis/claude-plugins/issues/264)) ([b053f3a](https://github.com/drewdrewthis/claude-plugins/commit/b053f3a13f7cb6a0aada4c37a7a282b136b969d9))
+
 ## [0.2.0](https://github.com/drewdrewthis/claude-plugins/compare/decide-v0.1.0...decide-v0.2.0) (2026-10-09)
 
 
