@@ -1,6 +1,6 @@
 # /decide — decision record schema
 
-Filename: `~/.knowledge/modules/shared/records/decisions/<YYYY-MM-DD>-<slug>.md` (always global — see Decision-record store above). No catalog file to update: the frontmatter `keywords` are the index (see `~/.knowledge/modules/shared/records/principles/file-directory.md`). Carry the uniform six-key frontmatter so the record passes the frontmatter lint and is discoverable by the router:
+Filename: `~/.knowledge/modules/shared/records/decisions/<YYYY-MM-DD>-<slug>.md` (always global — see "Decision-record store" in `../SKILL.md`). No catalog file to update: the frontmatter `keywords` are the index (see `~/.knowledge/modules/shared/records/principles/file-directory.md`). Carry the uniform six-key frontmatter so the record passes the frontmatter lint and is discoverable by the router:
 
 ```
 ---

@@ -67,11 +67,12 @@ These are *reversible with loud blast radius*, escalating on the floor test, not
       | consequence | severity×prob | reversibility | floor | verdict |
     ACCEPTED RESIDUALS: <named — what we're proceeding with>
     PROCEEDING DESPITE: <named uncertainty — separate from residuals>
+    CONFIDENCE / WOULD CHANGE IF: <how sure; what would flip it>
     AUTONOMY VERDICT: decided-and-acting  |  escalating to human (reason)
     ```
 
 18. **Act.** If the autonomy verdict is decide-and-act: carry out the decision. Don't stop at the record and wait. If escalating: hand the record to the human — they're approving a specific, decomposed call, not answering an open "what should I do?".
-19. **Write a decision-record file** (schema below). Its frontmatter `keywords` make it discoverable — there is no catalog file to update. State plainly you are writing a *new* file this run — don't describe a file you just wrote as pre-existing.
+19. **Write a decision-record file** (schema in `record-schema.md`). Its frontmatter `keywords` make it discoverable — there is no catalog file to update. State plainly you are writing a *new* file this run — don't describe a file you just wrote as pre-existing.
 20. **Queue the outcome update:** note `resolve_after` so a future Phase 0 fills in how it turned out.
 
 ### Phase 7 — Plan the chosen path

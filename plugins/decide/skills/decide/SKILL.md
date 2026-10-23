@@ -1,6 +1,6 @@
 ---
 name: decide
-description: The procedure for every decision and recommendation an agent makes. Use it whenever you choose between options or approaches, when someone asks "what do you recommend?", "which is better?" or "should we do X?", whenever you are about to ask the user "what should I do?", "which do you prefer?" or "should I proceed?", and before you carry out a request that cannot be undone (deleting data or backups, production or shared-system changes). It makes the call yourself, acts on reversible calls and reports after, escalates only one-way doors (with your recommendation), and writes an auditable decision record.
+description: The procedure for every decision and recommendation an agent makes. Use when choosing between options or approaches, when someone asks "what do you recommend?", "which is better?" or "should we do X?", when about to ask the user "what should I do?", "which do you prefer?" or "should I proceed?", and before carrying out a request that cannot be undone or is loud (deleting data or backups, production or shared-system changes, posts others will see). Makes the call itself, acts on reversible calls and reports after, escalates only one-way doors with a recommendation, and keeps an auditable decision record.
 argument-hint: "<the decision or recommendation in front of you>"
 ---
 
@@ -18,7 +18,7 @@ Every decision and every recommendation you make goes through this procedure. Th
 
 1. **Decide and act yourself** when the path is reversible, the worst case is survivable (the floor test), and it is not a values call you cannot infer. This is most decisions. Act, then report what you did and why. Do not ask first, and do not ask after ("want me to commit?").
 2. **A recommendation is one answer.** Name the option you would pick, the main reason it fits this situation, how sure you are, and what would change your mind. Do not give a neutral menu, "it depends" without a pick, or "your call".
-3. **Escalate only one-way doors:** irreversible, a ruin-class floor, a loud or wide blast radius in shared or public systems, or a real values call (examples in `references/full-procedure.md`, Phase 3). Bring your recommendation and the reasoning, so the human approves one specific call, not an open question.
+3. **Escalate only one-way doors:** irreversible, a ruin-class floor, a loud or wide blast radius in shared or public systems, or a real values call. Examples: deleting data or backups; production deploys and data changes; force-push or merge to a shared branch; rotating keys; Slack, Discord, email or other posts others will see; customer-facing replies; public PRs or comments outside your own repos; wide multi-package refactor commits. Bring your recommendation and the reasoning, so the human approves one specific call, not an open question.
 4. **Do what you decided now.** Defer only work that must wait for an outside event (a CI run, a deploy, a reply), and arm a real wake for it.
 
 Watch for the deferral reflex: the moment you are about to ask "what should I do?", list options for the human to pick, hedge out of a call, or apply a skill before you have decided its target. Stop and run this instead. The subtle forms (ranked options waiting for an OK, end-of-turn permission asks, hedge-stacking, analysis-as-license-to-ask) are in `references/deferral-patterns.md`; read it when you are not sure whether you are deferring.
@@ -37,7 +37,7 @@ Watch for the deferral reflex: the moment you are about to ask "what should I do
 
 ### Phase 0 — Triage + prior-record check
 
-1. **Resolve stale pending records.** Find pending records by frontmatter: `grep -rl 'status: pending' ~/.knowledge/modules/shared/records/decisions/`. For any record whose plan should have concluded, resolve it now — fill in outcome / consequences-materialized / process-soundness / regrets, and flip `status:` to `resolved`. This closes the decision loop.
+1. **Resolve stale pending records** (once per session, not on every call). Find pending records by frontmatter: `grep -rl 'status: pending' ~/.knowledge/modules/shared/records/decisions/`. For any record whose plan should have concluded, resolve it now — fill in outcome / consequences-materialized / process-soundness / regrets, and flip `status:` to `resolved`. This closes the decision loop.
 2. **Check for a known case.** Does this decision resemble a past case? If so, pull the file and **quote its outcome and process-soundness explicitly** — not just "a similar case exists." State whether you're fast-pathing on it or treating the new decision as a variant. **Then check `wisdom-as-confirmation-bias`:** is the case shape actually a match for the *situation*, or am I cite-matching by tag against a path I was already on? A case used as armor against a correction is not precedent — it's rationalization. Test: would I pull this same case if the chosen path were the opposite?
 3. **Triage — three weights.** Pick one:
    - **Fast-path** — trivial AND instantly reversible AND matches a known-good case (or is plainly obvious). Decide in a line, act, log only if non-obvious. No record template needed.
@@ -64,8 +64,8 @@ Watch for the deferral reflex: the moment you are about to ask "what should I do
 For Lite-weight decisions, run this 3-step variant. Skip Phases 1-5; produce a 3-line record.
 
 1. **State the goal in one line.** What outcome am I after?
-2. **State the chief risk in one line.** What's the worst plausible undesirable consequence, and is it (a) reversible, (b) clears the floor test? If both yes → proceed. If either no → escalate to Full procedure.
-3. **Act.** Then write the lite decision-record file `~/.knowledge/modules/shared/records/decisions/<YYYY-MM-DD>-<slug>.md` with conformant frontmatter (so it passes the lint and the router can find it) plus the 3-line body:
+2. **State the chief risk in one line.** What's the worst plausible undesirable consequence, and is it (a) reversible, (b) clears the floor test, (c) not on the rule 3 list? If all yes → proceed. If any no → escalate to Full procedure.
+3. **Act.** Then, if the call was not obvious (someone could fairly question it later), write the lite decision-record file `~/.knowledge/modules/shared/records/decisions/<YYYY-MM-DD>-<slug>.md` with conformant frontmatter (so it passes the lint and the router can find it) plus the 3-line body:
    ```
    ---
    id: dec.<YYYY-MM-DD>-<slug>
@@ -77,6 +77,7 @@ For Lite-weight decisions, run this 3-step variant. Skip Phases 1-5; produce a 3
    ---
    DECISION: <chosen path>
    CHIEF RISK (accepted): <one line — reversible, floor-clear>
+   CONFIDENCE / WOULD CHANGE IF: <how sure; what would flip it>
    AUTONOMY VERDICT: decided-and-acting
    ```
    The frontmatter `keywords` make it discoverable — there is no catalog file to update. Use the full template (Phase 6) only when the case feels novel.
