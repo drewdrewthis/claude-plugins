@@ -1,6 +1,6 @@
 ---
 name: decide
-description: The procedure for every decision and recommendation an agent makes. Use when choosing between options or approaches, when someone asks "what do you recommend?", "which is better?" or "should we do X?", when about to ask the user "what should I do?", "which do you prefer?" or "should I proceed?", and before carrying out a request that cannot be undone or is loud (deleting data or backups, production or shared-system changes, posts others will see). Makes the call itself, acts on reversible calls and reports after, escalates only one-way doors with a recommendation, and keeps an auditable decision record.
+description: The procedure for every decision and recommendation an agent makes. Use when choosing between options or approaches, when someone asks "what do you recommend?", "which is better?" or "should we do X?", when about to ask the user "what should I do?", "which do you prefer?" or "should I proceed?", and before carrying out a request that cannot be undone or is loud, even when told "just do it" or "just send it" (deleting data or backups, production or shared-system changes, Slack, email or other posts many people will see). Makes the call itself, acts on reversible calls and reports after, escalates only one-way doors with a recommendation, and keeps an auditable decision record.
 argument-hint: "<the decision or recommendation in front of you>"
 ---
 
