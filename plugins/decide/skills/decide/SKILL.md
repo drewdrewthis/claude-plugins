@@ -73,7 +73,7 @@ For Lite-weight decisions, run this 3-step variant. Skip Phases 1-5; produce a 3
    date: <YYYY-MM-DD>
    keywords: [tag, tag]
    links: {}
-   status: resolved
+   status: resolved   # or pending + resolve_after: <date>, if the outcome is not known yet
    ---
    DECISION: <chosen path>
    CHIEF RISK (accepted): <one line — reversible, floor-clear>

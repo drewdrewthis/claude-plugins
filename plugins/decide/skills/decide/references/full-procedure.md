@@ -23,7 +23,7 @@ Read this when Phase 0 triage picks **Full procedure**. Phase 0 and the Lite pat
     - **Comparative** — acceptable relative to what? A negative every path carries is a cost of the goal, not a strike against this path.
 
 11. **The autonomy gate — this is what the decomposition is FOR.** The decomposition tells you which kind of decision this is:
-    - **Decide and act yourself** if the chosen path is reversible, clears the floor, and isn't a genuine values call you can't infer. This is the large majority. Do not ask the human.  ⚠ fm.ask-when-rules-decide — if the decomposition already determines the answer, act on it; presenting the conclusion as a question is deferral.
+    - **Decide and act yourself** if the chosen path is reversible, clears the floor, has no loud or wide blast radius (the rule 3 list in `../SKILL.md`), and isn't a genuine values call you can't infer. This is the large majority. Do not ask the human.  ⚠ fm.ask-when-rules-decide — if the decomposition already determines the answer, act on it; presenting the conclusion as a question is deferral.
     - **Escalate to the human** only if the path is irreversible, has a ruin-class floor, affects shared systems in a hard-to-undo way, or hinges on a values judgment the human's preference genuinely can't be inferred for. This is the minority. Escalating here is correct — it is not the reflexive deferral the skill exists to stop.
 
 **Escalation triggers — concrete examples:** the list in rule 3 of `../SKILL.md`. Most are *reversible with loud blast radius*, escalating on the floor test, not on reversibility itself.

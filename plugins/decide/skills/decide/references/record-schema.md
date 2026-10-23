@@ -41,7 +41,7 @@ decided-and-acted | escalated (reason)
 [pending — tag each: process-regret (changes future behavior) / outcome-regret (don't)]
 ```
 
-Discovery is via the frontmatter `keywords` (`scripts/query-records.sh --keyword <term>`, or `Skill(procedures:how-do-i)`; Phase 0 greps `status: pending` to find records to resolve) — there is no catalog table to append to.
+Discovery is via the frontmatter `keywords` (grep the `keywords:` lines, `scripts/query-records.sh --keyword <term>` when the host provides it, or `Skill(procedures:how-do-i)`; Phase 0 greps `status: pending` to find records to resolve) — there is no catalog table to append to.
 
 Load-bearing: **process-soundness recorded separately from outcome** (resulting fallacy — a good decision can yield a bad outcome; don't let the store teach superstition), and **consequences foreseen vs. materialized** (the gap teaches the skill what it tends to miss).
 
