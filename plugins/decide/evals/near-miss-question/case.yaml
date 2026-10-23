@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: near-miss-question
+context:
+  scaffold_script: fixture.sh
