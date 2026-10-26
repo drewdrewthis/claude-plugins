@@ -1,6 +1,6 @@
 # PR + MONITOR mode
 
-<!-- PLUGIN ADAPTATION (owner-directed, drewdrewthis/claude-plugins#186): on a re-sync from orchard-codex, keep this file's readiness-check path, C1–C9, C11–C13 un-draft gate, quoted-verdict report and REST watcher fallback. -->
+<!-- PLUGIN ADAPTATION (owner-directed, drewdrewthis/claude-plugins#186): on a re-sync from orchard-codex, keep this file's readiness-check path, C1–C9, C11–C13 un-draft gate, quoted-verdict report, the `pr-watch.sh` REST watcher, and the act-on-each-event rule (owner, Convoz conv 326, 2026-10-26: "address every error fail, and comment immediately without waiting… SPEED"). -->
 
 Open the PR, arm a watcher immediately, drive to green. The session that opens the PR owns watching it until it's ready — don't hand that off and walk away.
 
@@ -32,12 +32,9 @@ Open as draft or ready per repo convention (`gh pr create`) to get the PR number
    # orchard-codex host:
    ~/.claude/tooling/orchardist-watch/pr.sh <owner>/<repo> <N>
    # any box without that script (e.g. drew-sweatshop) — REST only; `gh pr checks` is GraphQL, never poll it:
-   source ~/Projects/langwatch-sweatshop/modules/github/scripts/lib/gh-checks-rest.sh
-   sha=$(gh api repos/<owner>/<repo>/pulls/<N> --jq .head.sha); echo "watching $sha"
-   until fetch_checks_rest <owner> <repo> "$sha" | jq -es '.[0] // [] | length > 0 and all(.[]; (.status // "COMPLETED") == "COMPLETED" and .state != "PENDING")' >/dev/null; do sleep 30; done
-   echo "CI finished $sha"
+   ~/Projects/langwatch-sweatshop/modules/github/scripts/pr-watch.sh <owner> <repo> <N>
    ```
-   `pr.sh` is session-length: it watches CI checks, new comments, review threads, and pushes. The REST fallback watches CI only and is NOT session-length — it prints `watching <sha>`, waits until no check on that one head sha is pending, prints `CI finished <sha>` and exits. It does not judge the result: the raw check list holds superseded runs (an old `CANCELLED` beside a newer `SUCCESS`), so read the CI verdict from the C2 line of the Step 5 item 1 command, which collapses them. A red check shows only when the whole run has finished. Re-arm it after every push, because the sha changed. Pass Logic C is your only review-thread signal there, so run it every iteration — after the fallback exits, keep iterating Step 2 yourself until the readiness check prints `overall: READY` or `overall: AWAITING_HUMAN`; do not idle waiting for an event. Verify the watch armed within ~30s (baseline line or `WATCH-DEGRADED` for `pr.sh`; the `watching <sha>` line for the fallback) — don't assume it did. On a fallback box, `monitor_armed: true` (below) means a watch is running, or the last one ended with every check finished on the current HEAD.
+   `pr.sh` is session-length: it watches CI checks, new comments, review threads, and pushes. `pr-watch.sh` is session-length too, REST only, and prints one line per event the moment it happens: `FAIL <sha> <check>=<CONCLUSION>` as soon as one check fails (the other checks may still be running), `COMMENT <kind> <id> @<author> <url>` for each new comment or review, `CHANGES_REQUESTED <id> @<author> <url>` for a review that blocks the PR (answer it now, like a FAIL), `PUSH <old> -> <new>` (it follows the new head, so no re-arm after a push), `CI DONE <sha> pass|fail|changes-requested` (`changes-requested`: checks are green but a reviewer still blocks; printed again when the block clears), and `MERGED`/`CLOSED` (it exits). Checks are collapsed to the latest run per name, so a superseded `CANCELLED` beside a newer run is not a `FAIL`, and a `CANCELLED` that is still the latest run is held one poll before it counts (editing a PR cancels runs seconds before their re-runs appear). `COMMENT ... as @<handle>` names the convoz marker; comments marked with your own handle (`--self`, default `$CONVOZ_AS`) are not printed, and neither are bots' edits to their own comments. `CI DONE` is a cue to run the readiness check, never the READY claim — a late workflow can still start. `WATCH-ERROR` lines mean a poll failed; it backs off, and after 20 in a row it exits 1 — fix the cause and re-arm. The watch only prints comments that arrive after it starts: on every arm and re-arm (including after the Monitor's timeout), run the readiness check and answer what its C13 lists. Verify the watch armed within ~30s (baseline line or `WATCH-DEGRADED` for `pr.sh`; the `WATCHING` line for `pr-watch.sh`) — don't assume it did.
 
 Once verified alive, mark it in the flag:
 
@@ -45,11 +42,15 @@ Once verified alive, mark it in the flag:
 echo '{"pr": <N>, "phase": "monitor", "monitor_armed": true}' > "/tmp/claude-ship-flow-$CLAUDE_SESSION_ID"
 ```
 
-If the Monitor is later stopped before `done` (e.g. to fix something inline), set `"monitor_armed": false` (or drop the key) until it's re-armed — the Stop hook checks this key while `phase: monitor`. The same applies on the fallback when C2 fails after the watch ends, or the watch belongs to an older HEAD: set `false` until you re-arm after the fix push.
+If the Monitor is later stopped before `done` (e.g. to fix something inline), set `"monitor_armed": false` (or drop the key) until it's re-armed — the Stop hook checks this key while `phase: monitor`.
 
 ## Step 2 — Iteration loop (replaces ralph-loop)
 
-Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.sh`. Loop until READY, AWAITING_HUMAN or MERGED. **Anti-wedge rules:**
+Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.sh`. Loop until READY, AWAITING_HUMAN or MERGED.
+
+**Act on each event the moment it arrives.** A failed check: read its log, fix, push now (Step F). A new comment or review: reply now, and fix and push if it asks for a change (Step D). Never hold a fix or a reply until the rest of CI finishes or a bot pass completes — pending checks and in-flight bots are never a reason to wait. Only the READY decision waits for every check to finish.
+
+**Anti-wedge rules:**
 - Commit incrementally every iteration you touch code, and **push every commit immediately** — `origin/<branch>` must equal `HEAD` at the end of every turn (owner standing rule 2026-09-23). Unfinished work lives in a draft PR on the remote, never only on the box.
 - If analyzing >5 min with 0 files written, stop and write the smallest fix.
 - Don't delegate the whole task to one sub-agent — you (this session) own conflict resolution and final commits; delegate discrete pieces.
@@ -65,7 +66,7 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
 
 **B — Rebase if needed.** `git fetch` + merge-base check against base branch; if behind, `git rebase` + `push --force-with-lease`, then exit this iteration (let CI restart clean).
 
-**C — Unresolved review threads.** Paginated GraphQL query for `isResolved == false && isOutdated == false`. If a code-quality bot's findings are still landing, wait inline capped at ~15 min — never exit while a known bot pass is still in flight.
+**C — Unresolved review threads.** Paginated GraphQL query for `isResolved == false && isOutdated == false`. Address each finding as it lands (Step D) — don't wait for the bot pass to finish first. Before READY only, if a known bot pass is still in flight, wait for it inline, capped at ~15 min.
 
 **D — Triage/address comments.**
 1. Check the draft gate first (above) — is the PR still draft? Handle accordingly.
@@ -76,7 +77,7 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
    - Verification battery means the targeted checks for the files you touched, then push and let CI run the full suite. Never run the repo's full test suite, full lint, or full typecheck locally on a langwatch PR — CI is the authority, and a local full-suite run is wasted time (orchard-codex #457, decision 2026-09-24-night-watch-direction-defaults-threads-suite-codeql).
 4. Exit the iteration.
 
-**E — CI check.** Use REST (`~/Projects/langwatch-sweatshop/modules/github/scripts/lib/gh-checks-rest.sh` `fetch_checks_rest`). If pending, wait inline — **never exit while CI is pending.** Cross-check githubstatus.com before treating a stall as your bug (provider outage short-circuit). The armed watcher (Step 1, item 3) IS the CI wait: never start a second poll loop and never block a turn on a full-CI wait — react to the first `conclusion=failure` event it emits (a per-check event arrives minutes before `CI DONE`). On the REST fallback, the failure signal is a `FAIL  C2:` line from the Step 5 item 1 command after the watch prints `CI finished`.
+**E — CI check.** Use REST (`~/Projects/langwatch-sweatshop/modules/github/scripts/lib/gh-checks-rest.sh` `fetch_checks_rest`). The armed watcher (Step 1, item 3) IS the CI wait: never start a second poll loop, and never block a turn on a full-CI wait. React to the first failure event (`pr.sh`'s per-check `conclusion=failure`, or `pr-watch.sh`'s `FAIL` line): it arrives while the other checks are still running, and you fix it at once (Step F) — don't wait for `CI DONE`. **Never exit while CI is pending** — keep the watch armed and work the events it emits. Cross-check githubstatus.com before treating a stall as your bug (provider outage short-circuit).
 
 **F — CI failure.** Check the draft gate (above), cross-check `gh run list` for the real failure, diagnose, fix, commit, push, exit.
 
@@ -85,7 +86,7 @@ Each iteration, run Pass Logic Steps A–G below, then re-check `pr-ready-check.
 2. Verify both typecheck steps ran if the repo splits them (LangWatch: `pnpm typecheck` AND `pnpm run typecheck:tests`).
 3. Finalize: PATCH the PR body (write-pr format), `gh pr ready`, assign, request reviewers, set the `pr-ready` phase label (`records/procedures/github/scripts/tag.sh -R <owner/repo> pr-ready <issue> <N>`).
    **Ship's terminal state is human-review-ready: non-draft, assigned, reviewers requested.** Un-drafting is the shipping worker's own action, gated on every criterion of `pr-ready-check` (C1–C9, C11–C13), not a subset: before `gh pr ready`, run the Step 5 item 1 command and un-draft only when its single `FAIL` line is `C1: PR is a draft` (the script fails C1 on every draft; `WAIT` lines for a human approval still owed are allowed, and C12 on a draft defers to C1 unless the draft has merge conflicts — then C12 fails too and the PR stays draft). Then re-run it and require `overall: READY` or `overall: AWAITING_HUMAN` — that re-run is the Step 5 run. No fleet role (orchardist, assistant, planner) gates it, and "await the owner's un-draft" is not a ship step. The only reason to leave a green, proven PR in draft is an explicit owner instruction recorded on that PR. (Owner ruling 2026-09-08 on langwatch/langwatch#7959, which sat done-but-draft for half a day waiting on a gate nobody owned.) **Draft is only for not-yet-finished work: the PR flips to ready in the same turn that pushes the last commit** — not after a bot round, not after a wait, not on a later beat (owner standing rule 2026-09-23, Discord 1552124506657656853).
-4. Verify the Monitor is still alive (`pr.sh`), or that the last REST fallback watch ended with every check finished on the current HEAD.
+4. Verify the Monitor is still alive (`pr.sh` or `pr-watch.sh`).
 5. Only THEN consider emitting a completion signal — see Step 5.
 
 ### Verification discipline (every state-changing action gets re-fetched, not trusted)
