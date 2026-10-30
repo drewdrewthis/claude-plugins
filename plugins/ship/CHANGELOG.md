@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/drewdrewthis/claude-plugins/compare/ship-v0.3.0...ship-v0.4.0) (2026-10-30)
+
+
+### Features
+
+* **ship:** list the Decisions table among the required PR body sections ([#267](https://github.com/drewdrewthis/claude-plugins/issues/267)) ([5bef724](https://github.com/drewdrewthis/claude-plugins/commit/5bef7246f806f35d9c2c7648d92835fd2287dcd6))
+
 ## [0.3.0](https://github.com/drewdrewthis/claude-plugins/compare/ship-v0.2.0...ship-v0.3.0) (2026-10-20)
 
 
