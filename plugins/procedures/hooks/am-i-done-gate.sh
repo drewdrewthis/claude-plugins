@@ -64,6 +64,14 @@ command -v jq >/dev/null 2>&1 || ge_release_or_failopen "AM_I_DONE_GATE" "am-i-d
 # Ephemeral one-shot (claude --print / SDK): no human to report to.
 case "${CLAUDE_CODE_ENTRYPOINT:-}" in sdk-cli) exit 0 ;; esac
 
+# Gate off (the default) => nothing below can matter, and what is below is the
+# expensive part: ta_turn_used_tools scans the whole session transcript on every
+# Stop (seconds on a 100+ MB one). Quiet check only — ge_peek does not record;
+# the armed_by row is still written by the ge_enabled call at the block point,
+# so an armed gate records exactly what it did before. The late check stays: it
+# is the one that records, and ge_peek is not a substitute for it.
+if declare -F ge_peek >/dev/null 2>&1 && ! ge_peek "AM_I_DONE_GATE"; then exit 0; fi
+
 # shellcheck source=lib/turn-state.sh
 . "$SCRIPT_DIR/lib/turn-state.sh" 2>/dev/null || ge_release_or_failopen "AM_I_DONE_GATE" "am-i-done" "lib-unreadable:turn-state"
 # shellcheck source=lib/gate-audience.sh

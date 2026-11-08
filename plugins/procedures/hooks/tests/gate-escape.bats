@@ -96,6 +96,20 @@ fm_gate() { # fm_gate [VAR=value]...
 
 # ---------- ge_enabled semantics ----------
 
+@test "escape: ge_peek answers exactly as ge_enabled does but never records" {
+  for spec in "HOW_DO_I_GATE" "HOW_DO_I_GATE PROCEDURES_ENABLE_HOW_DO_I_GATE=true" \
+              "FRONTMATTER_CHECK" "FRONTMATTER_CHECK PROCEDURES_ENABLE_FRONTMATTER_CHECK=false"; do
+    set -- $spec; key="$1"; shift
+    run env "$@" bash -c ". '$HOOKS/lib/gate-escape.sh'; ge_peek $key; echo \$?"
+    peeked="$output"
+    [ ! -s "$GATE_ESCAPE_LOG" ] || { echo "ge_peek recorded for: $spec"; false; }
+    run ge "$key" "$@"
+    [ "$output" = "$peeked" ] || { echo "peek=$peeked enabled=$output for: $spec"; false; }
+    : > "$GATE_ESCAPE_LOG"
+  done
+}
+
+
 @test "escape: an unset switch leaves a default-off gate OFF and a default-on gate ON" {
   run ge HOW_DO_I_GATE
   [ "$output" = "1" ]

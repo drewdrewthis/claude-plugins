@@ -570,3 +570,35 @@ headless_plugin() {
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
   [[ "$output" == *"AM-I-DONE"* ]]
 }
+
+# The transcript scan (ta_turn_used_tools) is seconds on a 100+ MB transcript and
+# was paid on every Stop even with the gate off. Output cannot tell an early exit
+# from a late one (both are silent), so the trace does: an unarmed gate must not
+# reach ga_binds_main or the scan, and the armed control must.
+@test "am-i-done-gate: unarmed exits before the audience check and the transcript scan" {
+  start_turn
+  user_prompt
+  assistant_tool Edit
+  run bash -c "unset PROCEDURES_ENABLE_AM_I_DONE_GATE CLAUDE_PLUGIN_OPTION_ENABLE_AM_I_DONE_GATE; echo '$STOP' | CLAUDE_CODE_AGENT=technician bash -x '$HOOKS/am-i-done-gate.sh' 2>&1"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ga_binds_main"* ]]
+  [[ "$output" != *"ta_turn_used_tools"* ]]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
+  [ ! -s "$GATE_FAILOPEN_LOG" ]
+
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash -x '$HOOKS/am-i-done-gate.sh' 2>&1"
+  [[ "$output" == *"ga_binds_main"* ]]
+  [[ "$output" == *"ta_turn_used_tools"* ]]
+  [[ "$output" == *"AM-I-DONE"* ]]
+}
+
+# The early check is a quiet peek: an armed gate still records armed_by only
+# where it would act, not on every Stop that merely passes through.
+@test "am-i-done-gate: armed, a conversational turn releases without an armed_by row" {
+  start_turn
+  user_prompt
+  run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$GATE_ESCAPE_LOG" ]
+}
