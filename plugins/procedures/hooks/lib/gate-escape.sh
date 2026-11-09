@@ -133,20 +133,38 @@ ge_release_or_failopen() {
     gate_failopen "$@"
 }
 
-# ge_enabled <GATE_KEY> — 0 if the gate is on, 1 if off. Polarity is per key
-# (ge__default_off). A default-ON gate is on unless explicitly released
-# (false/0). A default-OFF gate is off unless explicitly armed (true/1).
-# Recording lives here, at the single site that can answer either question, so
-# no caller can forget it.
-ge_enabled() {
+# ge__resolve <GATE_KEY> — the decision, with no side effect. Returns 0 if the
+# gate is on, 1 if off. Polarity is per key (ge__default_off): a default-ON gate
+# is on unless explicitly released (false/0), a default-OFF gate is off unless
+# explicitly armed (true/1). Sets GE__SRC (the switch variable that decided it)
+# and GE__FIELD (armed_by | released_by); GE__SRC is empty when no switch
+# deviated from the key's own default, i.e. nothing to record.
+ge__resolve() {
     local key="$1"
     local opt="CLAUDE_PLUGIN_OPTION_ENABLE_$key" plain="PROCEDURES_ENABLE_$key"
+    GE__SRC="" GE__FIELD=""
     if ge__default_off "$key"; then
-        if ge__on "${!opt:-}"; then ge__record "$key" "$opt" armed_by; return 0; fi
-        if ge__on "${!plain:-}"; then ge__record "$key" "$plain" armed_by; return 0; fi
+        if ge__on "${!opt:-}"; then GE__SRC="$opt"; GE__FIELD=armed_by; return 0; fi
+        if ge__on "${!plain:-}"; then GE__SRC="$plain"; GE__FIELD=armed_by; return 0; fi
         return 1
     fi
-    if ge__off "${!opt:-}"; then ge__record "$key" "$opt"; return 1; fi
-    if ge__off "${!plain:-}"; then ge__record "$key" "$plain"; return 1; fi
+    if ge__off "${!opt:-}"; then GE__SRC="$opt"; GE__FIELD=released_by; return 1; fi
+    if ge__off "${!plain:-}"; then GE__SRC="$plain"; GE__FIELD=released_by; return 1; fi
     return 0
+}
+
+# ge_peek <GATE_KEY> — ge_enabled's answer WITHOUT the record. For a hook that
+# wants to stop early when the gate is off, before it has any reason to claim
+# the gate was armed: the arm is recorded where the gate would actually act
+# (ge_enabled), not on every event that merely passes through.
+ge_peek() { ge__resolve "$1"; }
+
+# ge_enabled <GATE_KEY> — 0 if the gate is on, 1 if off (see ge__resolve for
+# the polarity). Recording lives here, at the single site that can answer
+# either question observably, so no caller can forget it.
+ge_enabled() {
+    ge__resolve "$1"
+    local rc=$?
+    [ -n "$GE__SRC" ] && ge__record "$1" "$GE__SRC" "$GE__FIELD"
+    return "$rc"
 }
