@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.8](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.7...procedures-v0.17.8) (2026-11-09)
+
+
+### Bug Fixes
+
+* **procedures:** am-i-done gate exits before the transcript scan when the gate is off ([#269](https://github.com/drewdrewthis/claude-plugins/issues/269)) ([2e6b195](https://github.com/drewdrewthis/claude-plugins/commit/2e6b19553d5b4c0264a544bf56318165bf56f6e6))
+
 ## [0.17.7](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.6...procedures-v0.17.7) (2026-10-10)
 
 
