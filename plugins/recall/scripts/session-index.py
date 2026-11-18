@@ -87,7 +87,7 @@ WINDOW_CHARS = 1200
 # incremental path keys on (mtime, size), and a finished session's transcript
 # never changes again — so without a bump every already-indexed file is skipped
 # forever and the new content is only ever captured for sessions yet to happen.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _schema_version(db):
@@ -303,6 +303,22 @@ def iter_messages(jsonl_path, roles, start_line=1, stop_line=None):
             if not isinstance(obj, dict):
                 continue
             role = obj.get("type")
+            if role == "attachment":
+                # A message typed while Claude is mid-turn is stored as a
+                # queued_command attachment, not a "user" record; without this
+                # the human's steering never reaches the index. Other
+                # attachment types are harness output and stay skipped.
+                attachment = obj.get("attachment")
+                if (
+                    "user" in roles
+                    and isinstance(attachment, dict)
+                    and attachment.get("type") == "queued_command"
+                    and isinstance(attachment.get("prompt"), str)
+                ):
+                    text = attachment["prompt"].strip()
+                    if len(text) >= MIN_TEXT_LEN and not text.startswith(NOISE_PREFIXES):
+                        yield line_no, "user", text
+                continue
             if role not in roles:
                 continue
             # A record can carry `"message": null`, and a text block can arrive

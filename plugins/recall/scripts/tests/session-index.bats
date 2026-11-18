@@ -481,7 +481,7 @@ db.execute("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?)",
             st.st_mtime, st.st_size, 1, prompt, prompt))
 db.execute("INSERT INTO sessions_fts (file_path, session_id, project, user_text)"
            " VALUES (?,?,?,?)", (transcript, "aaa", "-home-me-proj", prompt))
-db.execute("PRAGMA user_version = 2")
+db.execute("PRAGMA user_version = 4")
 db.commit()
 PY
   run python3 "$SCRIPT" build
@@ -1245,4 +1245,68 @@ import json, sys
 r = json.load(sys.stdin)
 assert len(r) == 2, "scope was applied after the limit: %r" % (r,)
 assert all(h["project"] == "-home-me-alpha" for h in r), r'
+}
+
+# write_attachments <project-dir> <session-id>
+#
+# Line 1 an ordinary user turn, line 2 a mid-turn message Claude Code stores as
+# a queued_command attachment, line 3 an attachment of another type carrying
+# its own unique word.
+write_attachments() {
+  mkdir -p "$SESSION_INDEX_PROJECTS/$1"
+  python3 - "$SESSION_INDEX_PROJECTS/$1/$2.jsonl" <<'PY'
+import json, sys
+recs = [
+    {"type": "user", "message": {"content": "an ordinary opening question here"}},
+    {"type": "attachment", "attachment": {
+        "type": "queued_command", "commandMode": "prompt",
+        "prompt": "please also consider the zorblax angle"}},
+    {"type": "attachment", "attachment": {
+        "type": "hook_success", "prompt": "a flimflam note from some hook"}},
+]
+with open(sys.argv[1], "w") as fh:
+    for rec in recs:
+        fh.write(json.dumps(rec) + "\n")
+PY
+}
+
+@test "a queued_command attachment is searchable as a user turn" {
+  write_attachments "-home-me-proj" "aaa"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "zorblax"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+hits = json.load(sys.stdin)
+assert len(hits) == 1, hits
+# line_offset addresses the WINDOW start, and both turns share one window.
+assert hits[0]["line_offset"] == 1, hits[0]["line_offset"]
+assert hits[0]["roles"] == "user", hits[0]["roles"]'
+  run python3 "$SCRIPT" context "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" --tail 6
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+m = json.load(sys.stdin)
+assert [x["text"] for x in m] == ["an ordinary opening question here", "please also consider the zorblax angle"], m
+assert m[1]["role"] == "user", m[1]
+assert m[1]["line"] == 2, m[1]'
+}
+
+@test "an attachment of another type is not indexed" {
+  write_attachments "-home-me-proj" "aaa"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "flimflam"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ] || echo "$output" | grep -q '"error"'
+}
+
+@test "ordinary user and assistant turns are unchanged beside attachments" {
+  write_attachments "-home-me-proj" "aaa"
+  python3 "$SCRIPT" build >/dev/null
+  run python3 "$SCRIPT" search "opening"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+hits = json.load(sys.stdin)
+assert len(hits) == 1 and hits[0]["line_offset"] == 1, hits'
 }
