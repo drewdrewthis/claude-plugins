@@ -21,6 +21,13 @@
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     },
+    "plugins/recall": {
+      "release-type": "simple",
+      "component": "recall",
+      "extra-files": [
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
+    },
     "plugins/worklog": {
       "release-type": "simple",
       "component": "worklog",
