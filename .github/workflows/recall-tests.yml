@@ -1,0 +1,51 @@
+name: recall-tests
+
+# Recall's session index is shared by every agent on the machine, so its bats
+# suites run on every change to the plugin. Paths-filtered: nothing else in the
+# repo affects this result.
+# Runs on pull_request AND on push to main so a merge can't land a combination
+# no single PR tested.
+on:
+  pull_request:
+    paths:
+      - "plugins/recall/**"
+      - ".github/workflows/recall-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/recall/**"
+      - ".github/workflows/recall-tests.yml"
+
+permissions:
+  contents: read
+
+# On a push the PR number is empty; fall back to the ref so pushes don't all
+# collapse into one self-cancelling group.
+concurrency:
+  group: recall-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bats:
+    # Linux only: the suites have not been checked on macOS yet.
+    runs-on: ubuntu-latest
+    # Seconds of work, no network. A ceiling turns a hang into a failed check.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install bats
+        # python3 is preinstalled on the runner.
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Record the toolchain under test
+        run: |
+          bash --version | head -1
+          bats --version
+          python3 --version
+          python3 -c "import sqlite3; sqlite3.connect(':memory:').execute('CREATE VIRTUAL TABLE t USING fts5(x)'); print('fts5 ok')"
+      - name: Run the recall suite
+        working-directory: plugins/recall
+        # Both suite directories.
+        run: bats scripts/tests hooks/tests
