@@ -269,6 +269,15 @@ def get_db():
     return db
 
 
+def _utf8_safe(text):
+    """Replace lone UTF-16 surrogates with "?".
+
+    A half-cut emoji survives json.loads as a lone surrogate str, which
+    sqlite3 cannot encode; one such turn used to abort the whole build.
+    """
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
 def iter_messages(jsonl_path, roles, start_line=1, stop_line=None):
     """Yield (line_no, role, text) for real turns, skipping harness noise.
 
@@ -315,7 +324,7 @@ def iter_messages(jsonl_path, roles, start_line=1, stop_line=None):
                     and attachment.get("type") == "queued_command"
                     and isinstance(attachment.get("prompt"), str)
                 ):
-                    text = attachment["prompt"].strip()
+                    text = _utf8_safe(attachment["prompt"]).strip()
                     if len(text) >= MIN_TEXT_LEN and not text.startswith(NOISE_PREFIXES):
                         yield line_no, "user", text
                 continue
@@ -336,7 +345,7 @@ def iter_messages(jsonl_path, roles, start_line=1, stop_line=None):
             else:
                 # Non-string content would otherwise be indexed as a Python repr.
                 continue
-            text = text.strip()
+            text = _utf8_safe(text).strip()
             if len(text) < MIN_TEXT_LEN or text.startswith(NOISE_PREFIXES):
                 continue
             yield line_no, role, text
@@ -419,7 +428,8 @@ def read_cwd(jsonl_path):
             except json.JSONDecodeError:
                 continue
             if isinstance(obj, dict) and obj.get("cwd"):
-                return obj["cwd"]
+                cwd = obj["cwd"]
+                return _utf8_safe(cwd) if isinstance(cwd, str) else cwd
     return None
 
 
