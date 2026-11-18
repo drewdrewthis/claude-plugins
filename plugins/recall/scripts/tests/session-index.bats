@@ -1288,7 +1288,8 @@ assert hits[0]["roles"] == "user", hits[0]["roles"]'
 import json,sys
 m = json.load(sys.stdin)
 assert [x["text"] for x in m] == ["an ordinary opening question here", "please also consider the zorblax angle"], m
-assert m[1]["role"] == "user", m[1]'
+assert m[1]["role"] == "user", m[1]
+assert m[1]["line"] == 2, m[1]'
 }
 
 @test "an attachment of another type is not indexed" {
