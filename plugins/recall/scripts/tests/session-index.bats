@@ -1310,3 +1310,24 @@ import json,sys
 hits = json.load(sys.stdin)
 assert len(hits) == 1 and hits[0]["line_offset"] == 1, hits'
 }
+
+# A half-cut emoji leaves a lone UTF-16 surrogate escape in the JSON; json.loads
+# yields a str sqlite3 cannot encode, which used to abort the whole build.
+@test "a lone surrogate escape in a transcript does not abort build" {
+  write_attachments "-home-me-proj" "aaa"
+  python3 - "$SESSION_INDEX_PROJECTS/-home-me-proj/aaa.jsonl" <<'PY'
+import sys
+with open(sys.argv[1], "a") as fh:
+    fh.write(r'{"type": "user", "message": {"content": "cut emoji \ud83d beside the quibbleflux word"}}' + "\n")
+    fh.write(r'{"type": "attachment", "attachment": {"type": "queued_command", "prompt": "queued \ud83d with wibblesnarf inside"}}' + "\n")
+PY
+  run python3 "$SCRIPT" build
+  [ "$status" -eq 0 ]
+  for word in quibbleflux wibblesnarf; do
+    run python3 "$SCRIPT" search "$word"
+    [ "$status" -eq 0 ]
+    echo "$output" | python3 -c '
+import json,sys
+assert len(json.load(sys.stdin)) == 1'
+  done
+}
