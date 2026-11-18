@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/drewdrewthis/claude-plugins/compare/recall-v0.3.0...recall-v0.3.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **recall:** replace lone surrogates so one cut emoji cannot abort the build ([#274](https://github.com/drewdrewthis/claude-plugins/issues/274)) ([f3d3336](https://github.com/drewdrewthis/claude-plugins/commit/f3d333611fd24a726a5e8fbbb7258f7908cd2497))
+
 ## [0.3.0](https://github.com/drewdrewthis/claude-plugins/compare/recall-v0.2.0...recall-v0.3.0) (2026-11-18)
 
 
