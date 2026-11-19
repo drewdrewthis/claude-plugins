@@ -54,6 +54,11 @@
       "name": "decide",
       "source": "./plugins/decide",
       "description": "/decide:decide resolves a decision yourself instead of asking the human: triage, decompose consequences, run the autonomy gate, act, and write an auditable decision record — escalating only the irreversible, ruin-class, or values-laden minority. Hook denies Discord replies that ask the owner to decide reversible calls."
+    },
+    {
+      "name": "task-list",
+      "source": "./plugins/task-list",
+      "description": "/task-list keeps a running task list per agent: every ask, plan step and sub-agent job goes on it; done needs proof, blocked a named blocker, drop a reason. The dotclaude turn watcher reminds the agent of open tasks with no revival ping or blocker."
     }
   ]
 }

@@ -28,6 +28,13 @@
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     },
+    "plugins/task-list": {
+      "release-type": "simple",
+      "component": "task-list",
+      "extra-files": [
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
+    },
     "plugins/worklog": {
       "release-type": "simple",
       "component": "worklog",
