@@ -1,6 +1,6 @@
 {
   "name": "task-list",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "/task-list keeps a running task list per agent so no ask is dropped: every ask, plan step and sub-agent job goes on it; done needs proof, blocked needs a named blocker, drop needs a reason (an owner's ask only with the owner's OK). The turn watcher in dotclaude reminds the agent of open tasks with no revival ping or blocker.",
   "author": {
     "name": "Drü"
