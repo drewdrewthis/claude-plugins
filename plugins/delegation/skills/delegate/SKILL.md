@@ -1,6 +1,7 @@
 ---
 name: delegate
-description: "Hand a task to the right specialist subagent instead of doing it yourself. Routes a task shape to an agent + model from your own roster, then builds the briefing that makes the handoff land. Use whenever work could go to a subagent — implementation, search, prose, planning, review, AC sharpening, stress-testing, debugging, audits — or when you catch yourself about to do specialist work inline."
+description: "Hand a task to the right specialist subagent instead of doing it yourself. Routes a task shape to an agent + model from your own roster, then builds the briefing that makes the handoff land."
+when_to_use: "Whenever work could go to a subagent — implementation, search, prose, planning, review, AC sharpening, stress-testing, debugging, audits — or when you catch yourself about to do specialist work inline."
 user-invocable: true
 argument-hint: "<the task to delegate>"
 ---

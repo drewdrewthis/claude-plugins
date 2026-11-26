@@ -1,6 +1,7 @@
 ---
 name: improve
-description: "Make an idea, plan, PR or file better before it runs: stress-test it, simplify it and check it through the matching domain lenses in parallel, then hand back the improved version with a change list. Use when handed an artifact to improve, or before acting on a plan or PR nobody has challenged. Not a critique dump and not a merge gate."
+description: "Make an idea, plan, PR or file better before it runs: stress-test it, simplify it and check it through the matching domain lenses in parallel, then hand back the improved version with a change list. Not a critique dump and not a merge gate."
+when_to_use: "Before acting on a plan, idea or PR nobody has challenged, e.g. right after /plan or before opening a PR. Also when asked to improve, stress-test, poke holes in, sanity-check, simplify or make better a plan, idea, design, PR or file."
 user-invocable: true
 argument-hint: "<idea | plan | PR url or number | file path>"
 ---
@@ -22,6 +23,7 @@ Empty → the plan or idea under discussion in this conversation; restate it in 
 ## 2. Gather context
 
 - Everything the artifact names: files, issues, docs.
+- Past lessons: run `/procedures:what-do-i-know` with the goal "improve <one-line artifact>" and the artifact's domain terms. Pass the hits to every lens; a past mistake the artifact repeats is a change.
 - When it changes or concerns a long-running agent: find that agent's workspace (named in the artifact, or where the agent runs), then read its `CLAUDE.md` and `.claude/CLAUDE.md`, the newest two files in its notes dir, and its auto-memory `MEMORY.md` (`ls -d ~/.claude/projects/*<repo dirname>*/memory`; keyed on the git root, `autoMemoryDirectory` overrides). Its conventions bind the improved artifact. Workspace not on this host → put it under owner questions; never guess its rules.
 
 ## 3. Pick lenses
