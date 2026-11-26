@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.0](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.7...procedures-v0.18.0) (2026-11-26)
+
+
+### Features
+
+* **procedures,delegation:** /improve, record hints and /improve nudge; drop am-i-done/how-do-i aliases ([#280](https://github.com/drewdrewthis/claude-plugins/issues/280)) ([6a0e85f](https://github.com/drewdrewthis/claude-plugins/commit/6a0e85feea90f73dce1d99336dae5520025d182c))
+
+
+### Bug Fixes
+
+* **procedures:** am-i-done gate exits before the transcript scan when the gate is off ([#269](https://github.com/drewdrewthis/claude-plugins/issues/269)) ([2e6b195](https://github.com/drewdrewthis/claude-plugins/commit/2e6b19553d5b4c0264a544bf56318165bf56f6e6))
+
 ## [0.17.7](https://github.com/drewdrewthis/claude-plugins/compare/procedures-v0.17.6...procedures-v0.17.7) (2026-10-10)
 
 
