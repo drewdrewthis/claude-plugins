@@ -9,5 +9,5 @@
   "plugins/ship": "0.3.0",
   "plugins/decide": "0.3.0",
   "plugins/recall": "0.3.1",
-  "plugins/task-list": "0.1.0"
+  "plugins/task-list": "0.2.0"
 }
