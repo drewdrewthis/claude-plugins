@@ -250,7 +250,9 @@ one plugin serves a fleet whose rosters differ.
 
 | piece | what |
 |---|---|
-| `/delegate` | classify the task shape (kind / difficulty / focus), run `scripts/route-delegation.sh` for the agent + model + why, then build the briefing — self-contained, result-demanding, coding/docs standards woven in — and verify what comes back |
+| `/delegate` | classify the task shape (kind / difficulty / focus), run `scripts/route-delegation.sh` for the agent + model + why, prefer a domain agent from `lenses.md` when one fits, then build the briefing — self-contained, result-demanding, coding/docs standards woven in — and verify what comes back |
+| `/improve` | take an idea, plan, PR or file and return a BETTER version: gather the artifact plus, when it concerns a long-running agent, that agent's `CLAUDE.md`, notes and memory; run the matching lenses from `lenses.md` in parallel (always a stress-test and a simplicity lens); synthesize the improved artifact, a change list (change, lens, why), rejected suggestions and owner-only questions. Never pushes or edits; a lens whose agent is missing on this host runs as its questions through the built-in `Plan` agent |
+| `lenses.md` | the domain-lens registry shared by `/improve` and `/delegate`: one section per lens with triggers, agent (or `none`) and 3–5 questions. Add a lens by copying a section |
 | `/create-new-sub-agent` | mint the specialist the router had no row for: `templates/agent.template.md` (single mandate, right-sized tier, tools allowlist, tripwires) + `references/write-agent-doc.procedure.md`, written into the host roster |
 | `scripts/route-delegation.sh` | the routing table AS A SCRIPT — one row per task shape, each agent's model read LIVE from the roster's `model:` frontmatter, so retuning the roster propagates without editing prose. `--list` dumps every route |
 | `hooks/guard-general-purpose.sh` | PreToolUse (`Agent\|Task`) hook: denies the `general-purpose` subagent (or an omitted `subagent_type`), which inherits the session model tier, and points at `/delegate` and `route-delegation.sh --list`. Deny, not ask, so unattended sessions never stall; fails open |

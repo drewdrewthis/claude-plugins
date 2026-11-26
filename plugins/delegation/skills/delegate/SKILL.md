@@ -34,6 +34,8 @@ It answers `agent`, `model`, and `why`, reading each model live from your roster
 
 Config: `CLAUDE_AGENTS_DIR`, else `$CODEX_ROOT/agents`, else `~/.claude/agents`.
 
+**Domain check.** Read `${CLAUDE_PLUGIN_ROOT}/lenses.md`. When a lens that is not `always: yes` matches the task's subject, and its agent is in your Agent tool's list and does this kind of work (read its description), dispatch that agent instead of the shape route. Either way, put the matched lenses' questions in the brief.
+
 ## 3. Build the briefing
 
 This is the half no script can do.
