@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/drewdrewthis/claude-plugins/compare/recall-v0.3.1...recall-v0.4.0) (2026-11-26)
+
+
+### Features
+
+* **procedures,delegation:** /improve, record hints and /improve nudge; drop am-i-done/how-do-i aliases ([#280](https://github.com/drewdrewthis/claude-plugins/issues/280)) ([6a0e85f](https://github.com/drewdrewthis/claude-plugins/commit/6a0e85feea90f73dce1d99336dae5520025d182c))
+
 ## [0.3.1](https://github.com/drewdrewthis/claude-plugins/compare/recall-v0.3.0...recall-v0.3.1) (2026-11-18)
 
 
