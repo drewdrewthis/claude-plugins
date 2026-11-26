@@ -4,7 +4,7 @@ One section per lens. A lens is a domain, the agent that judges it, and the ques
 
 - **always** — `yes`: /improve runs it on every artifact.
 - **triggers** — examples of the domain: words and path globs. Match by meaning, not by string; a passing mention is not a match.
-- **agent** — a name in the host roster, or `none`. Missing or `none` → the caller runs the questions through a read-only reviewer.
+- **agent** — a name in the host roster, or `none`. Missing or `none` → the caller falls back as its own skill says.
 - **questions** — 3 to 5, each answerable from the artifact plus its context.
 
 Add a lens: copy a section, fill all four fields.

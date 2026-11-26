@@ -34,7 +34,7 @@ It answers `agent`, `model`, and `why`, reading each model live from your roster
 
 Config: `CLAUDE_AGENTS_DIR`, else `$CODEX_ROOT/agents`, else `~/.claude/agents`.
 
-**Domain check.** Read `${CLAUDE_PLUGIN_ROOT}/lenses.md`. When a lens that is not `always: yes` matches the task's subject, and its agent is in your Agent tool's list and does this kind of work (read its description), dispatch that agent instead of the shape route. Either way, put the matched lenses' questions in the brief.
+**Domain check** — after the route, only on exit 0 or 2. Read `${CLAUDE_PLUGIN_ROOT}/lenses.md` and find the lenses (not `always: yes`) whose domain the task's subject touches. For `--kind` review, plan, audit or stress-test, dispatch a matched lens's agent instead of the routed one when it is in your Agent tool's list. For any other kind, keep the routed agent. Either way, put the matched lenses' questions in the brief.
 
 ## 3. Build the briefing
 

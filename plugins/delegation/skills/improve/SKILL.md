@@ -1,6 +1,6 @@
 ---
 name: improve
-description: "Make an idea, plan, PR or file better before it runs: stress-test it, simplify it and check it through the matching domain lenses (harness, security, UX, infra, tests, LangWatch) in parallel, then hand back the improved version with a change list. Use when handed an artifact to improve, or before acting on a plan or PR nobody has challenged. Not a critique dump and not a merge gate."
+description: "Make an idea, plan, PR or file better before it runs: stress-test it, simplify it and check it through the matching domain lenses in parallel, then hand back the improved version with a change list. Use when handed an artifact to improve, or before acting on a plan or PR nobody has challenged. Not a critique dump and not a merge gate."
 user-invocable: true
 argument-hint: "<idea | plan | PR url or number | file path>"
 ---
@@ -12,7 +12,7 @@ Lens registry: `${CLAUDE_PLUGIN_ROOT}/lenses.md`.
 ## 1. Classify and load
 
 `$ARGUMENTS` is one of:
-- **PR** — a URL or number: `gh pr view <ref> --json title,body,files,headRefName` and `gh pr diff <ref>`.
+- **PR** — a URL or number: `gh pr view <ref> --json title,body,files,headRefName` and `gh pr diff <ref>` (`-R owner/repo` when it is not this repo).
 - **file** — an existing path: read it whole.
 - **plan** — steps or a design toward a goal.
 - **idea** — anything else.
@@ -22,7 +22,7 @@ Empty → the plan or idea under discussion in this conversation; restate it in 
 ## 2. Gather context
 
 - Everything the artifact names: files, issues, docs.
-- When it changes or concerns a long-running agent: find that agent's workspace (named in the artifact, or where the agent runs), then read its `CLAUDE.md` and `.claude/CLAUDE.md`, the newest two files in its notes dir, and its auto-memory `~/.claude/projects/<workspace path with / and . as ->/memory/MEMORY.md`. Its conventions bind the improved artifact. Workspace not on this host → put it under owner questions; never guess its rules.
+- When it changes or concerns a long-running agent: find that agent's workspace (named in the artifact, or where the agent runs), then read its `CLAUDE.md` and `.claude/CLAUDE.md`, the newest two files in its notes dir, and its auto-memory `MEMORY.md` (`ls -d ~/.claude/projects/*<repo dirname>*/memory`; keyed on the git root, `autoMemoryDirectory` overrides). Its conventions bind the improved artifact. Workspace not on this host → put it under owner questions; never guess its rules.
 
 ## 3. Pick lenses
 
@@ -37,7 +37,7 @@ One message, one Agent call per lens. Each brief is self-contained:
 - the lens's questions;
 - "Read-only. Return proposed changes, not critique: each one is the exact edit (replacement text; for a PR, file:line plus patch), why, and its evidence (file:line, doc link, command output). Mark anything only the owner can decide as OWNER."
 
-Wait for every lens before step 5.
+Wait for every lens before step 5. A lens that fails or returns nothing: say so under Rejected; do not rerun it.
 
 ## 5. Synthesize
 
