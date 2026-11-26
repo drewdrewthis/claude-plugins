@@ -6,8 +6,8 @@
 #
 # STATE MODEL — one marker file per invariant, keyed by session:
 #   $STATE_DIR/<session_id>.turn       created by the reset hook each turn
-#   $STATE_DIR/<session_id>.how_do_i   created when Skill(how-do-i) runs
-#   $STATE_DIR/<session_id>.am_i_done  created when Skill(am-i-done) runs
+#   $STATE_DIR/<session_id>.how_do_i   created when Skill(what-do-i-know) runs
+#   $STATE_DIR/<session_id>.am_i_done  created when Skill(adherence-check) runs
 #
 # WHY MARKER FILES, NOT ONE JSON OBJECT:
 # the JSON form required a read-modify-write per flag, which is a lost-update

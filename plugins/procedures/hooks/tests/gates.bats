@@ -66,9 +66,9 @@ assistant_tool() {
 
 # ---------- turn-state-record ----------
 
-@test "record: an evil:how-do-i look-alike does NOT satisfy the invariant" {
+@test "record: an evil:what-do-i-know look-alike does NOT satisfy the invariant" {
   start_turn
-  printf '{"session_id":"%s","tool_name":"Skill","tool_input":{"skill":"evil:how-do-i"}}' "$SID" \
+  printf '{"session_id":"%s","tool_name":"Skill","tool_input":{"skill":"evil:what-do-i-know"}}' "$SID" \
     | bash "$HOOKS/turn-state-record.sh"
   run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [[ "$output" == *"deny"* ]]
@@ -76,7 +76,7 @@ assistant_tool() {
 
 @test "record: the legacy {tool,input} payload shape still marks the flag" {
   start_turn
-  printf '{"session_id":"%s","tool":"Skill","input":{"skill":"how-do-i"}}' "$SID" \
+  printf '{"session_id":"%s","tool":"Skill","input":{"skill":"what-do-i-know"}}' "$SID" \
     | bash "$HOOKS/turn-state-record.sh"
   run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [ -z "$output" ]
@@ -89,18 +89,18 @@ assistant_tool() {
   [[ "$output" == *"deny"* ]]
 }
 
-@test "record: namespaced procedures:how-do-i stamps the how_do_i marker" {
+@test "record: namespaced procedures:what-do-i-know stamps the how_do_i marker" {
   start_turn
-  ran_skill "procedures:how-do-i"
+  ran_skill "procedures:what-do-i-know"
   run bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [ -z "$output" ]
 }
 
-@test "record: namespaced procedures:am-i-done stamps its marker" {
+@test "record: namespaced procedures:adherence-check stamps its marker" {
   start_turn
   user_prompt
   assistant_tool Edit
-  ran_skill "procedures:am-i-done"
+  ran_skill "procedures:adherence-check"
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
   [ -z "$output" ]
 }
@@ -173,7 +173,7 @@ assistant_tool() {
   # actually honoured a stale flag, and both the message test above and the
   # same-turn release test below would still pass.
   start_turn
-  ran_skill how-do-i
+  ran_skill what-do-i-know
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [ -z "$output" ]
 
@@ -182,9 +182,9 @@ assistant_tool() {
   [[ "$output" == *"HOW-DO-I-GATE"* ]]
 }
 
-@test "how-do-i-gate: allows once Skill(how-do-i) has run" {
+@test "how-do-i-gate: allows once Skill(what-do-i-know) has run" {
   start_turn
-  ran_skill how-do-i
+  ran_skill what-do-i-know
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
   [ -z "$output" ]
 }
@@ -295,7 +295,7 @@ assistant_tool() {
   start_turn
   user_prompt
   assistant_tool Edit
-  ran_skill am-i-done
+  ran_skill adherence-check
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
   [ -z "$output" ]
 }
@@ -428,8 +428,8 @@ assistant_tool() {
 # ---------- #28: the message must name a form that RESOLVES ----------
 #
 # Shipped in a plugin, the invocable names are plugin-scoped
-# (Skill(procedures:how-do-i)). A gate that DENIES while naming a bare
-# `Skill(how-do-i)` sends the agent after a skill it cannot call: deny, retry,
+# (Skill(procedures:what-do-i-know)). A gate that DENIES while naming a bare
+# `Skill(what-do-i-know)` sends the agent after a skill it cannot call: deny, retry,
 # deny — a hard wedge with no exit. turn-state-record.sh already accepts both
 # forms, so recognition was never the gap; only the messages were.
 
@@ -446,9 +446,9 @@ headless_plugin() {
 @test "how-do-i-gate: the deny names the plugin-scoped skill, not a bare name" {
   start_turn
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
-  [[ "$output" == *"Skill(procedures:how-do-i)"* ]] \
+  [[ "$output" == *"Skill(procedures:what-do-i-know)"* ]] \
     || { echo "deny does not name the resolvable form: $output"; false; }
-  [[ "$output" != *"Skill(how-do-i)"* ]] \
+  [[ "$output" != *"Skill(what-do-i-know)"* ]] \
     || { echo "deny still names the bare, unresolvable form: $output"; false; }
 }
 
@@ -457,9 +457,9 @@ headless_plugin() {
   user_prompt
   assistant_tool Edit
   run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
-  [[ "$output" == *"Skill(procedures:am-i-done)"* ]] \
+  [[ "$output" == *"Skill(procedures:adherence-check)"* ]] \
     || { echo "block does not name the resolvable form: $output"; false; }
-  [[ "$output" != *"Skill(am-i-done)"* ]] \
+  [[ "$output" != *"Skill(adherence-check)"* ]] \
     || { echo "block still names the bare, unresolvable form: $output"; false; }
 }
 
@@ -467,7 +467,7 @@ headless_plugin() {
   # The message may name only one form, but it must never name a form that
   # fails to satisfy. Both are accepted, so naming the scoped one is safe.
   local form
-  for form in how-do-i procedures:how-do-i; do
+  for form in what-do-i-know procedures:what-do-i-know; do
     start_turn
     ran_skill "$form"
     run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
@@ -477,7 +477,7 @@ headless_plugin() {
 
 @test "am-i-done-gate: BOTH the bare and the plugin-scoped invocation satisfy it" {
   local form
-  for form in am-i-done procedures:am-i-done; do
+  for form in adherence-check procedures:adherence-check; do
     start_turn
     user_prompt
     assistant_tool Edit
@@ -601,4 +601,24 @@ headless_plugin() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
   [ ! -s "$GATE_ESCAPE_LOG" ]
+}
+
+# PLUGIN ADAPTATION: owner-directed (dec.2026-11-26-agent-system-revamp-steps-3-6):
+# the how-do-i/am-i-done skill aliases are removed, so their names mark nothing.
+@test "record: the removed alias names mark nothing, bare or namespaced" {
+  local form
+  for form in how-do-i procedures:how-do-i; do
+    start_turn
+    ran_skill "$form"
+    run env CLAUDE_CODE_AGENT=technician bash -c "echo '$PAYLOAD_EDIT' | bash '$HOOKS/how-do-i-gate.sh'"
+    [[ "$output" == *"deny"* ]] || { echo "Skill($form) still satisfies the how-do-i gate"; false; }
+  done
+  for form in am-i-done procedures:am-i-done; do
+    start_turn
+    user_prompt
+    assistant_tool Edit
+    ran_skill "$form"
+    run env CLAUDE_CODE_AGENT=technician bash -c "echo '$STOP' | bash '$HOOKS/am-i-done-gate.sh'"
+    [[ "$output" == *"AM-I-DONE"* ]] || { echo "Skill($form) still satisfies the am-i-done gate"; false; }
+  done
 }

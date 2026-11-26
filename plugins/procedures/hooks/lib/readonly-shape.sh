@@ -18,7 +18,7 @@
 # and a deny: quoting can only ever cost an allow, never buy one.
 #
 # FAILS CLOSED. A shape this cannot judge confidently is NOT read-only. The
-# cost of a false deny is one `Skill(how-do-i)` call; the cost of a false allow
+# cost of a false deny is one `Skill(what-do-i-know)` call; the cost of a false allow
 # is an unenforced invariant. Hence an ALLOWLIST of commands with no write
 # mode, guarded by an up-front rejection of the constructs that hide a command
 # from the segment scan entirely: command substitution (`$(…)`, backticks),

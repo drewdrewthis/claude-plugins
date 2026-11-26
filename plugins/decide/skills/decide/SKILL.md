@@ -12,7 +12,7 @@ Every decision and every recommendation you make goes through this procedure. Th
 
 **Use it to think, not to fill in a form.** If every phase points the same way before you have taken an alternative seriously, you are ratifying a choice you already made, not deciding (`confirmation-shaped-decide`, in `references/deferral-patterns.md`). Scale the effort to the stakes.
 
-<!-- PLUGIN ADAPTATION (plugin-hosting context): vendored from orchard-codex@develop-sweatshop skills/decide. The decision-record store defaults to ~/.knowledge/modules/shared/records/decisions/ (host data root, not this plugin); discovery via procedures plugin's /what-do-i-know (procedures:how-do-i alias still works). query-records.sh is not shipped here — see README. -->
+<!-- PLUGIN ADAPTATION (plugin-hosting context): vendored from orchard-codex@develop-sweatshop skills/decide. The decision-record store defaults to ~/.knowledge/modules/shared/records/decisions/ (host data root, not this plugin); discovery via procedures plugin's /what-do-i-know. query-records.sh is not shipped here — see README. The Background tier names the `decider` agent (host roster), with `Plan` as fallback. -->
 
 ## The rules
 
@@ -48,7 +48,7 @@ Watch for the deferral reflex: the moment you are about to ask "what should I do
 
    **Meta-check — `lite-pass-too-aggressive`.** Certainty about the triage weight is itself a decision. If you're *certain* this is Lite (not unsure), ask: am I certain because I've genuinely assessed reversibility, floor, and values — or because the lighter weight serves a path I'm already on? Confident-in-the-wrong-direction looks identical to confident-and-correct from the inside; the tell is whether the weight you picked happens to be the one that lets you skip the alternatives in Phase 4.
 
-4. **Background tier (option at Full).** If ALL THREE triggers fire, run the Full procedure in a **background agent** (spawn via the Agent tool with `run_in_background: true` and a clean brief), then return to the deciding session to act on the record:
+4. **Background tier (option at Full).** If ALL THREE triggers fire, run the Full procedure in a **background agent** (dispatch the `decider` agent (Agent tool, `run_in_background: true`, a clean brief; fall back to `Plan` if your roster has no decider)), then return to the deciding session to act on the record:
    - Weight = Full procedure (this option is not available at Fast or Lite — the trajectory bias is bounded enough there to skip the cost), AND
    - Self-assessed correctness confidence is **<90%**, AND
    - Trajectory-rich context: >30 turns since the last fresh boot OR a strong user-framing turn ("just do X," "obviously the right call is Y") in the last few turns.

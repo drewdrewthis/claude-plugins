@@ -1,6 +1,7 @@
 ---
 name: delegate
-description: "Hand a task to the right specialist subagent instead of doing it yourself. Routes a task shape to an agent + model from your own roster, then builds the briefing that makes the handoff land. Use whenever work could go to a subagent — implementation, search, prose, planning, review, AC sharpening, stress-testing, debugging, audits — or when you catch yourself about to do specialist work inline."
+description: "Hand a task to the right specialist subagent instead of doing it yourself. Routes a task shape to an agent + model from your own roster, then builds the briefing that makes the handoff land."
+when_to_use: "Whenever work could go to a subagent — implementation, search, prose, planning, review, AC sharpening, stress-testing, debugging, audits — or when you catch yourself about to do specialist work inline."
 user-invocable: true
 argument-hint: "<the task to delegate>"
 ---
@@ -33,6 +34,8 @@ It answers `agent`, `model`, and `why`, reading each model live from your roster
 | 3 | roster drift — the matched agent's file or `model:` key is missing | fix the roster first; do not delegate around a broken entry |
 
 Config: `CLAUDE_AGENTS_DIR`, else `$CODEX_ROOT/agents`, else `~/.claude/agents`.
+
+**Domain check** — after the route, only on exit 0 or 2. Read `${CLAUDE_PLUGIN_ROOT}/lenses.md` and find the lenses (not `always: yes`) whose domain the task's subject touches. For `--kind` review, plan, audit or stress-test, dispatch a matched lens's agent instead of the routed one when it is in your Agent tool's list. For any other kind, keep the routed agent. Either way, put the matched lenses' questions in the brief.
 
 ## 3. Build the briefing
 

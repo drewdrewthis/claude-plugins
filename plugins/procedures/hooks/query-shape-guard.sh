@@ -63,7 +63,7 @@ AGENT="$(printf '%s' "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null || true
 [ -n "$AGENT" ] || AGENT="${CLAUDE_CODE_AGENT:-}"
 
 # PLUGIN ADAPTATION (#135): procedures:work-reviewer is the sole audience —
-# how-do-i runs inline here, so it has no fork identity to guard.
+# what-do-i-know runs inline here, so it has no fork identity to guard.
 case "$AGENT" in
     procedures:work-reviewer) ;;
     *) exit 0 ;;

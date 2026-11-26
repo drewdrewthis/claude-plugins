@@ -1,11 +1,13 @@
 ---
 name: update-records
-description: "Write any durable knowledge artifact to its store — mistake, decision, solution, failure-mode, procedure, evolution, principle, invariant, policy, standard, reference, or skill. THE single entry point: there is no separate create or log command. Use when the user corrects you (mistake), a judgment call is resolved (decision), a non-obvious fix is confirmed (solution), a recurring agent mistake reaches the promotion bar (failure-mode), or novel work needs crystallizing and /how-do-i returned nothing (procedure, reference, skill, or a rule kind). Triggers: 'log a mistake', 'record this decision', 'document this fix', 'promote this to a failure mode', 'write a procedure for this', 'create a new skill', or codifying a rule after a correction."
+description: "Write any durable knowledge artifact to its store — mistake, decision, solution, failure-mode, procedure, evolution, principle, invariant, policy, standard, reference, or skill. THE single entry point: there is no separate create or log command. Use when the user corrects you (mistake), a judgment call is resolved (decision), a non-obvious fix is confirmed (solution), a recurring agent mistake reaches the promotion bar (failure-mode), or novel work needs crystallizing and /what-do-i-know returned nothing (procedure, reference, skill, or a rule kind). Triggers: 'log a mistake', 'record this decision', 'document this fix', 'promote this to a failure mode', 'write a procedure for this', 'create a new skill', or codifying a rule after a correction."
 user-invocable: true
 argument-hint: "<kind> [text]"
 ---
 
 # /update-records
+
+<!-- PLUGIN ADAPTATION: owner-directed (dec.2026-11-26-agent-system-revamp-steps-3-6) — the /how-do-i alias is removed, so this skill and its references/ name /what-do-i-know. -->
 
 THE single entry point for every knowledge artifact. Pick `<kind>` from the table, then follow that row. There is no separate create command — creating and recording are the same act, and splitting them across two skills only made agents pick the wrong one.
 
@@ -29,11 +31,11 @@ The four script-backed kinds call the deterministic writer:
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" <kind> [flags…]
 ```
 
-The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal) and writing the file. No index files are maintained: discovery is the record's frontmatter (id, description, keywords) plus `/how-do-i`, which scans every store via `build-record-index.sh` and its numbered index. You own the JUDGMENT half below. Templates live in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/templates/`, the longhand procedures in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/references/`.
+The script owns the mechanical half — building the JSON via `jq -n` (never an inline echoed brace-literal) and writing the file. No index files are maintained: discovery is the record's frontmatter (id, description, keywords) plus `/what-do-i-know`, which scans every store via `build-record-index.sh` and its numbered index. You own the JUDGMENT half below. Templates live in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/templates/`, the longhand procedures in `${CLAUDE_PLUGIN_ROOT}/skills/update-records/references/`.
 
 **Choosing among the four rule kinds:** an **invariant** forbids absolutely and has no carve-outs — the moment you write "except when", it is a **principle**, which guides judgment where the rules do not reach. A **policy** grants or withholds authority and is in force from merge until a line is struck. A **standard** states the measurable bar a finished artifact must clear, never the steps to clear it. These are not a severity scale: promoting a rule you still intend to break trains every reader to treat the whole kind as advice.
 
-**Rules that hold for every kind:** check `/how-do-i` for an existing artifact first; six-key frontmatter on every record (the frontmatter hook enforces it); draft-then-promote — a first success earns a draft, promotion needs the gate in `docs/adrs/001-procedural-knowledge-system.md` ("Evolution"). Patching an existing PROCEDURE is `/evolve-procedure`, not this skill.
+**Rules that hold for every kind:** check `/what-do-i-know` for an existing artifact first; six-key frontmatter on every record (the frontmatter hook enforces it); draft-then-promote — a first success earns a draft, promotion needs the gate in `docs/adrs/001-procedural-knowledge-system.md` ("Evolution"). Patching an existing PROCEDURE is `/evolve-procedure`, not this skill.
 
 `--project <owner/repo>` is OPTIONAL on `decision`, `solution`, and `failure-mode`, and writes the frontmatter `project:` key so repo-scoped records are distinguishable from corpus-wide ones at a glance. Pass it only when the record is genuinely about ONE repo; omit it for anything corpus-wide.
 
@@ -43,7 +45,7 @@ Resume the interrupted conversation immediately after — the four script-backed
 
 ## kind = mistake
 
-Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `/how-do-i`, which sweeps failure-modes + `mistakes.jsonl` per query.
+Appends a structured entry to `~/.claude/mistakes.jsonl`. Consumed by `/what-do-i-know`, which sweeps failure-modes + `mistakes.jsonl` per query.
 
 **Triggers:** user correction ("no", "wrong", "not that", a redirect); self-catch; after codifying a rule from a correction; manual `/update-records mistake <description>`.
 
@@ -99,7 +101,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-record.sh" mistake \
 
 ## kind = decision
 
-Writes `records/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by the pre-action grep that prevents relitigating settled choices.
+Writes `records/decisions/<date>-<slug>.md` (id `dec.<date>-<slug>`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/what-do-i-know`'s store-wide index. Consumed by the pre-action grep that prevents relitigating settled choices.
 
 **Pre-action grep first** — `grep -rl '<keywords>' ~/.claude/records/decisions/`; if the question is already settled, link the existing record instead of creating a duplicate.
 
@@ -124,7 +126,7 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = solution
 
-Writes `records/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/how-do-i`'s store-wide index. Consumed by `/how-do-i`'s pre-action sweep.
+Writes `records/solutions/<date>-<slug>.md` (id `sol.<date>-<slug>`, plus `situation_tags` and `resolve_after`). No index file is maintained — discovery is the frontmatter (id, description, keywords) plus `/what-do-i-know`'s store-wide index. Consumed by `/what-do-i-know`'s pre-action sweep.
 
 **Gather:** `slug` (kebab-case, ≤6 words, names the *problem* not the fix), `keywords` (problem domain, tool name, error class), `situation-tags` (lowercase situation class: `daemon`, `gh-cli`, `env-config`, …), `resolve-after` (~3 months out; env/version hacks expire faster), a one-line `summary` = the canonical resolution, and the prose `body` (Symptom / Rule / optional Check / optional Recipe — Recipe only when flags/order matter).
 
@@ -147,7 +149,7 @@ Re-running with the same `--slug`/`--date` REFUSES if the file already exists (n
 
 ## kind = failure-mode
 
-Writes `records/failure-modes/<slug>.md` (BARE slug filename, no `fm.` prefix; id `fm.<slug>`; `rule:` field = the one-sentence rule, whole and self-contained). Does NOT merge on re-run — see below. Consumed by `/how-do-i`, which sweeps failure-modes + `mistakes.jsonl` per query.
+Writes `records/failure-modes/<slug>.md` (BARE slug filename, no `fm.` prefix; id `fm.<slug>`; `rule:` field = the one-sentence rule, whole and self-contained). Does NOT merge on re-run — see below. Consumed by `/what-do-i-know`, which sweeps failure-modes + `mistakes.jsonl` per query.
 
 **Triggers:** a mistake pattern reached **≥3** occurrences in `~/.claude/mistakes.jsonl` (the promotion bar, script-enforced); "promote this to a rule"; a FACE record nesting under a mega parent.
 

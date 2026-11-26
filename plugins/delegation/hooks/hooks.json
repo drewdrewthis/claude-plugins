@@ -1,11 +1,18 @@
 {
-  "description": "Deny the general-purpose subagent (it inherits the session model tier); route by task shape via /delegation:delegate instead",
+  "description": "Deny the general-purpose subagent (it inherits the session model tier); route by task shape via /delegation:delegate instead. Suggest /delegation:improve when a prompt is a plan, design or PR about to be acted on",
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Agent|Task",
         "hooks": [
           { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/guard-general-purpose.sh", "timeout": 5 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/improve-nudge.sh", "timeout": 5 }
         ]
       }
     ]

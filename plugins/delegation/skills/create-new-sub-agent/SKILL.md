@@ -1,6 +1,7 @@
 ---
 name: create-new-sub-agent
-description: "Mint a new specialist subagent when no existing one fits a recurring task shape. Writes a right-sized agent file — single mandate, model tier, tools allowlist, tripwires — into your agent roster and lints it. Use after /delegate's router exits 2, or when you notice yourself repeatedly hand-briefing the same kind of work."
+description: "Mint a new specialist subagent when no existing one fits a recurring task shape. Writes a right-sized agent file — single mandate, model tier, tools allowlist, tripwires — into your agent roster and lints it."
+when_to_use: "After /delegate's router exits 2, or when you notice yourself repeatedly hand-briefing the same kind of work."
 user-invocable: true
 argument-hint: "<what the specialist is for>"
 ---

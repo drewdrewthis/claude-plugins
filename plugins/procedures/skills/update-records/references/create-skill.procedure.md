@@ -27,7 +27,7 @@ here and write that instead (`create-procedure.procedure.md`).
 Keep skills FEW. Workflow content lives in the procedure record; the skill
 carries only what is true at the moment of invocation.
 
-In-repo examples: `am-i-done` gates onto the `work-reviewer` agent; `take-note`
+In-repo examples: `adherence-check` forks onto the `work-reviewer` agent; `take-note`
 wraps a script; `evolve-procedure` is a thin wrapper over a procedure record.
 
 ### 1. Capture intent

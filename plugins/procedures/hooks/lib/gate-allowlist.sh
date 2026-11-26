@@ -6,7 +6,7 @@
 # (sol.2026-07-08-hook-conflict-markers-freeze-all-tools).
 #
 # ALLOWLISTED:
-#   Skill  — Skill(how-do-i) / Skill(am-i-done) ARE compliance.
+#   Skill  — Skill(what-do-i-know) / Skill(adherence-check) ARE compliance.
 #   Agent  — ONLY when the dispatch payload names a compliance skill
 #            (how-do-i / am-i-done / procedures). A blanket Agent allow let
 #            any delegated write bypass the gate — delegation is the main way
@@ -41,7 +41,7 @@ set -uo pipefail
 # readonly-shape.sh answers "does this Bash line mutate?". Sourced defensively:
 # if it is unreadable, `ros_is_read_only` is undefined and every Bash call is
 # denied — the pre-fix behaviour for all but a handful of shapes, and a deny
-# costs one Skill(how-do-i), so degradation is safe.
+# costs one Skill(what-do-i-know), so degradation is safe.
 # ${BASH_SOURCE[0]%/*} is the file's own name when sourced by a bare name
 # (no slash) — guard with the same fallback how-do-i-gate.sh uses, so a
 # future caller doesn't silently lose Bash inspection.
@@ -61,7 +61,7 @@ gal_is_compliance_path() {
         Agent)
             # Compliance dispatches name their skill somewhere in the payload;
             # a work delegation does not. jq failure yields "" → deny, which
-            # costs one Skill(how-do-i) — fail closed is safe here.
+            # costs one Skill(what-do-i-know) — fail closed is safe here.
             local ap
             ap="$(printf '%s' "$payload" | jq -r '
                 (.tool_input // .input // {})

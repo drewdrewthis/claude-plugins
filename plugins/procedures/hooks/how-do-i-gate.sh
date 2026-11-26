@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # how-do-i-gate.sh — PreToolUse hook (all tools; no matcher).
 #
-# SINGLE RESPONSIBILITY: enforce ONE invariant — Skill(procedures:how-do-i) runs before a
+# SINGLE RESPONSIBILITY: enforce ONE invariant — Skill(procedures:what-do-i-know) runs before a
 # main agent acts.
 #
 # AUDIENCE: every MAIN agent (owner-set 2026-08-02, resolving orchard-codex#99).
@@ -97,7 +97,10 @@ ts_is_marked "$SID" how_do_i && exit 0
 # invoked. It therefore fires only when we are certain, and introduces no new
 # way to wedge. What it misses: skills on disk but disabled in session config.
 # Costs one builtin test, no fork.
-[ -r "$SCRIPT_DIR/../skills/how-do-i/SKILL.md" ] \
+# PLUGIN ADAPTATION: owner-directed — the how-do-i skill alias is removed
+# (dec.2026-11-26-agent-system-revamp-steps-3-6); the gate asks for and checks
+# what-do-i-know, the skill it always forwarded to.
+[ -r "$SCRIPT_DIR/../skills/what-do-i-know/SKILL.md" ] \
     || gate_failopen "how-do-i" "skill-unresolvable" "$SID"
 
 # Everything above said this call WOULD be denied (absent an arm). Only now
@@ -113,7 +116,7 @@ if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "HOW_DO_I_GATE"; then e
 # (observed: a main agent proposed exactly that, on the premise that a
 # same-session run should carry over). Per-turn re-gating is deliberate and
 # load-bearing — see lib/turn-state.sh and turn-state-reset.sh.
-jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(procedures:how-do-i). Run it before acting, then retry. Gating is PER TURN by design — a lookup from an earlier turn does not carry over. Invoke with TWO parts separated by '|': GOAL = one concrete sentence stating what you are about to DO and where; TERMS = the full search vocabulary — every concept the answer might touch, 2–3 synonyms each, corpus words included (proc, fm, evolve, squash), phrases hyphenated. The term list must be COMPLETE: there is exactly one query. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
+jq -nc --arg r "HOW-DO-I-GATE: this turn has not run Skill(procedures:what-do-i-know). Run it before acting, then retry. Gating is PER TURN by design — a lookup from an earlier turn does not carry over. Invoke with TWO parts separated by '|': GOAL = one concrete sentence stating what you are about to DO and where; TERMS = the full search vocabulary — every concept the answer might touch, 2–3 synonyms each, corpus words included (proc, fm, evolve, squash), phrases hyphenated. The term list must be COMPLETE: there is exactly one query. File reads and read-only shell inspection stay available — look first, then ask, then act (CLAUDE.md invariant; enforced by hooks/how-do-i-gate.sh)." '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
