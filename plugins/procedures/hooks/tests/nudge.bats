@@ -55,7 +55,7 @@ prompt_json() { jq -nc --arg p "$1" '{session_id:"s1", hook_event_name:"UserProm
   run --separate-stderr bash "$HOOK" <<<"$(prompt_json 'the telegram poller keeps getting 409 conflicts')"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "$REMINDER" ]
-  [[ "${lines[1]}" == "Related records — open one if it applies"* ]]
+  [[ "${lines[1]}" == "Related records (open with"* ]]
   [ "${lines[2]}" = "  sol.telegram-poller-conflict — Two telegram pollers on one bot token return 409 conflicts; kill the orphan." ]
   [ "${#lines[@]}" -eq 3 ]
 }
@@ -87,13 +87,13 @@ prompt_json() { jq -nc --arg p "$1" '{session_id:"s1", hook_event_name:"UserProm
 
 @test "hints are capped at RECORD_HINTS_MAX records" {
   for i in 1 2 3 4 5 6 7; do
-    printf -- '---\nid: sol.cap-%s\nkeywords: [alpha, gamma]\ndescription: alpha gamma record %s\n---\n' "$i" "$i" \
+    printf -- '---\nid: sol.cap-%s\nkeywords: [alpha, gamma, delta]\ndescription: alpha gamma delta record %s\n---\n' "$i" "$i" \
       > "$ROOT/records/solutions/cap-$i.md"
   done
-  run --separate-stderr bash "$HOOK" <<<"$(prompt_json 'alpha gamma')"
+  run --separate-stderr bash "$HOOK" <<<"$(prompt_json 'alpha gamma delta')"
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c '^  sol\.cap-')" -eq 5 ]
-  RECORD_HINTS_MAX=2 run --separate-stderr bash "$HOOK" <<<"$(prompt_json 'alpha gamma')"
+  RECORD_HINTS_MAX=2 run --separate-stderr bash "$HOOK" <<<"$(prompt_json 'alpha gamma delta')"
   [ "$(printf '%s\n' "$output" | grep -c '^  sol\.cap-')" -eq 2 ]
 }
 
@@ -116,10 +116,10 @@ prompt_json() { jq -nc --arg p "$1" '{session_id:"s1", hook_event_name:"UserProm
 
 @test "the hint block never exceeds a header plus RECORD_HINTS_MAX lines" {
   for i in 1 2 3 4 5 6 7; do
-    printf -- '---\nid: sol.cap-%s\nkeywords: [alpha, gamma]\ndescription: alpha gamma record %s\n---\n' "$i" "$i" \
+    printf -- '---\nid: sol.cap-%s\nkeywords: [alpha, gamma, delta]\ndescription: alpha gamma delta record %s\n---\n' "$i" "$i" \
       > "$ROOT/records/solutions/cap-$i.md"
   done
-  run --separate-stderr bash "$HOOK" <<<"$(prompt_json 'alpha gamma')"
+  run --separate-stderr bash "$HOOK" <<<"$(prompt_json 'alpha gamma delta')"
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 7 ]   # reminder + header + 5 hints
 }

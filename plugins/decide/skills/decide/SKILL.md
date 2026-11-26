@@ -12,7 +12,7 @@ Every decision and every recommendation you make goes through this procedure. Th
 
 **Use it to think, not to fill in a form.** If every phase points the same way before you have taken an alternative seriously, you are ratifying a choice you already made, not deciding (`confirmation-shaped-decide`, in `references/deferral-patterns.md`). Scale the effort to the stakes.
 
-<!-- PLUGIN ADAPTATION (plugin-hosting context): vendored from orchard-codex@develop-sweatshop skills/decide. The decision-record store defaults to ~/.knowledge/modules/shared/records/decisions/ (host data root, not this plugin); discovery via procedures plugin's /what-do-i-know. query-records.sh is not shipped here — see README. -->
+<!-- PLUGIN ADAPTATION (plugin-hosting context): vendored from orchard-codex@develop-sweatshop skills/decide. The decision-record store defaults to ~/.knowledge/modules/shared/records/decisions/ (host data root, not this plugin); discovery via procedures plugin's /what-do-i-know. query-records.sh is not shipped here — see README. The Background tier names the `decider` agent (host roster), with `Plan` as fallback. -->
 
 ## The rules
 

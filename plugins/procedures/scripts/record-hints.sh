@@ -22,7 +22,7 @@
 # description (title, then purpose, when there is no description). Each shared
 # word adds log(N/df), so a word in every record counts for almost nothing; id
 # and keyword hits count 1.5x. A record needs RECORD_HINTS_MIN_TERMS distinct
-# shared words (default 2) — one shared word is mostly noise on a corpus this
+# shared words (default 3) — one or two shared words are mostly noise on a corpus this
 # size.
 #
 # Output: nothing when no record qualifies. Otherwise a header naming the
@@ -37,9 +37,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || exit 0
 . "$SCRIPT_DIR/lib/stores.sh" 2>/dev/null || exit 0
 
 MAX="${RECORD_HINTS_MAX:-5}"
-MIN_TERMS="${RECORD_HINTS_MIN_TERMS:-2}"
+MIN_TERMS="${RECORD_HINTS_MIN_TERMS:-3}"
 case "$MAX" in ''|*[!0-9]*) MAX=5 ;; esac
-case "$MIN_TERMS" in ''|*[!0-9]*) MIN_TERMS=2 ;; esac
+case "$MIN_TERMS" in ''|*[!0-9]*) MIN_TERMS=3 ;; esac
 
 PROMPT="$(cat 2>/dev/null || true)"
 [ -n "$PROMPT" ] || exit 0
@@ -166,7 +166,7 @@ END {
 }' 2>/dev/null | sort -t "$(printf '\t')" -k1,1gr -k2,2 | head -n "$MAX")" || true
 [ -n "$HITS" ] || exit 0
 
-echo "Related records — open one if it applies (grep -rl '^id: <id>'${ROOTS_SHOWN}):"
+echo "Related records (open with /what-do-i-know or grep -rl '^id: <id>' on the record roots):"
 printf '%s\n' "$HITS" | awk -F'\t' '{
     s = $3
     if (length(s) > 100) s = substr(s, 1, 97) "..."
