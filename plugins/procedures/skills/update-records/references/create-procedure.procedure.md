@@ -9,7 +9,7 @@ status: active
 
 # /create-procedure
 
-Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `records/procedures/<area>/<name>/` (`references/procedures/...` is the legacy per-root fallback until that root is renamed — see `stores_records_dir`). Consumed by the `/how-do-i` pipeline: its `description` is what `build-record-index.sh` indexes for selection, and its `keywords` stay greppable (the invoking skill's prompt carries the resolved path).
+Creates a `PROCEDURE.md` + `EVOLUTION.md` pair under `records/procedures/<area>/<name>/` (`references/procedures/...` is the legacy per-root fallback until that root is renamed — see `stores_records_dir`). Consumed by the `/what-do-i-know` pipeline: its `description` is what `build-record-index.sh` indexes for selection, and its `keywords` stay greppable (the invoking skill's prompt carries the resolved path).
 
 # Triggers
 

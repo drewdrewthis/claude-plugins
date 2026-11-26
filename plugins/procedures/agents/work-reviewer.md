@@ -1,7 +1,7 @@
 ---
 name: work-reviewer
-description: "A senior lead reading a report of finished work: catches unverified claims, bad logic, unstated assumptions, and gaps left in the work. Returns findings tagged by disposition. Dispatched by /am-i-done. Reviews the report, not the repository."
-# PLUGIN ADAPTATION: also pinned in skills/am-i-done/SKILL.md — the fork path
+description: "A senior lead reading a report of finished work: catches unverified claims, bad logic, unstated assumptions, and gaps left in the work. Returns findings tagged by disposition. Dispatched by /adherence-check. Reviews the report, not the repository."
+# PLUGIN ADAPTATION: also pinned in skills/adherence-check/SKILL.md — the fork path
 # ignores this key, so change both together (gate-skill-model.bats enforces).
 model: sonnet
 # Bash reaches exactly ONE corpus lookup (one scripts/how-do-i.sh run). The

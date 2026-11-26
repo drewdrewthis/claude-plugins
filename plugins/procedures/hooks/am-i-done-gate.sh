@@ -2,7 +2,7 @@
 # am-i-done-gate.sh — Stop hook.
 #
 # SINGLE RESPONSIBILITY: on a turn that called any tool, require ONE
-# Skill(procedures:am-i-done) review before the turn ends. Nothing else.
+# Skill(procedures:adherence-check) review before the turn ends. Nothing else.
 #
 # REPLACES the retired 3-pass streak sweep (done-gate-stop.sh, deleted
 # orchard-codex#197). That hook asked the agent to re-grade its own work N
@@ -108,7 +108,10 @@ esac
 # why a file check is the best available seam and why it is one-sided. Checked
 # BEFORE the mark: recording "asked" for a review we never actually asked for
 # would suppress the next legitimate ask this turn.
-[ -r "$SCRIPT_DIR/../skills/am-i-done/SKILL.md" ] \
+# PLUGIN ADAPTATION: owner-directed — the am-i-done skill alias is removed
+# (dec.2026-11-26-agent-system-revamp-steps-3-6); the gate asks for and checks
+# adherence-check, the skill it always forwarded to.
+[ -r "$SCRIPT_DIR/../skills/adherence-check/SKILL.md" ] \
     || gate_failopen "am-i-done" "skill-unresolvable" "$SID"
 
 # Everything above said this turn WOULD be blocked (absent an arm). Only now
@@ -119,7 +122,7 @@ if declare -F ge_enabled >/dev/null 2>&1 && ! ge_enabled "AM_I_DONE_GATE"; then 
 
 ts_mark "$SID" am_i_done_asked
 
-jq -nc --arg r "AM-I-DONE: this turn used tools, and the work has not been reviewed. Run Skill(procedures:am-i-done) with a report of what you did and the evidence for it — each claim paired with the command you ran and its actual output. A reviewer will read it once and return follow-ups. Asked once per turn; the next Stop releases either way." '{
+jq -nc --arg r "AM-I-DONE: this turn used tools, and the work has not been reviewed. Run Skill(procedures:adherence-check) with a report of what you did and the evidence for it — each claim paired with the command you ran and its actual output. A reviewer will read it once and return follow-ups. Asked once per turn; the next Stop releases either way." '{
   decision: "block",
   reason: $r
 }'

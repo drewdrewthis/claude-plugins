@@ -235,7 +235,7 @@ PIPELINE_CALL="bash '$SCRIPTS/how-do-i.sh' --question 'goal and terms here as on
 
 @test "the documented justfile probe pipeline is sanctioned end to end" {
   # KNOWN DEVIATION, deliberately left failing — fix the guard, not this test.
-  # The exact command skills/how-do-i/SKILL.md step 4 documents is denied,
+  # The exact command skills/what-do-i-know/SKILL.md step 3 documents is denied,
   # by two compounding defects in the segment scan:
   #   1. splitting on &&/||/;/&/| leaves the leading space on every segment
   #      after the first, while the "just "*/"jq "* patterns are anchored at

@@ -1,6 +1,6 @@
 ---
 name: recall
-description: "Search what you and Claude said in past Claude Code sessions and synthesize it into the current one. Use when: 'what were we discussing about X', 'recall X', 'catch me up on X', 'remind me about X', 'did we already decide X'. Corpus is session TRANSCRIPTS — for procedures, decisions and other written records use /how-do-i."
+description: "Search what you and Claude said in past Claude Code sessions and synthesize it into the current one. Use when: 'what were we discussing about X', 'recall X', 'catch me up on X', 'remind me about X', 'did we already decide X'. Corpus is session TRANSCRIPTS — for procedures, decisions and other written records use /what-do-i-know."
 user-invocable: true
 argument-hint: "<topic to recall>"
 context: fork

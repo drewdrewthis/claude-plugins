@@ -23,8 +23,8 @@ ga_is_subagent() {
     [ -n "$aid" ]
 }
 
-# ga_binds_main <payload> — 0 when a main-agent invariant (/how-do-i,
-# /am-i-done) binds this call. Every non-subagent session is a main agent.
+# ga_binds_main <payload> — 0 when a main-agent invariant (/what-do-i-know,
+# /adherence-check) binds this call. Every non-subagent session is a main agent.
 ga_binds_main() {
     ga_is_subagent "${1:-}" && return 1
     return 0

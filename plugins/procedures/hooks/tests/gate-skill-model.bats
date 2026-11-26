@@ -49,22 +49,24 @@ fm_key() {
     || { echo "corpus has $expected context:fork skills but the loop checked $checked"; false; }
 }
 
-# PLUGIN ADAPTATION: how-do-i runs inline; the checks below pin that contract.
-@test "am-i-done is among the context:fork skills checked above" {
+# PLUGIN ADAPTATION: what-do-i-know runs inline; the checks below pin that
+# contract. The how-do-i/am-i-done aliases are removed (owner-directed,
+# dec.2026-11-26-agent-system-revamp-steps-3-6), so the canonical names are pinned.
+@test "adherence-check is among the context:fork skills checked above" {
   # Pins WHICH skills the loop covers, so deleting a skill's `context: fork`
   # cannot quietly drop it from the invariant while the count still passes.
-  [ "$(fm_key "$SKILLS/am-i-done/SKILL.md" context)" = "fork" ]
+  [ "$(fm_key "$SKILLS/adherence-check/SKILL.md" context)" = "fork" ]
 }
 
-# PLUGIN ADAPTATION: how-do-i runs inline, so AC-4 has one remaining checked fork.
-@test "how-do-i runs inline (context: inline), carrying none of the fork keys" {
-  # how-do-i runs on the main thread: it declares `context: inline` and none of
+# PLUGIN ADAPTATION: what-do-i-know runs inline, so AC-4 has one remaining checked fork.
+@test "what-do-i-know runs inline (context: inline), carrying none of the fork keys" {
+  # what-do-i-know runs on the main thread: it declares `context: inline` and none of
   # the fork keys (`agent:`/`model:`/`background:`). A re-vendor that restores
   # `context: fork` must fail here.
-  [ "$(fm_key "$SKILLS/how-do-i/SKILL.md" context)" = "inline" ]
-  [ -z "$(fm_key "$SKILLS/how-do-i/SKILL.md" agent)" ]
-  [ -z "$(fm_key "$SKILLS/how-do-i/SKILL.md" model)" ]
-  [ -z "$(fm_key "$SKILLS/how-do-i/SKILL.md" background)" ]
+  [ "$(fm_key "$SKILLS/what-do-i-know/SKILL.md" context)" = "inline" ]
+  [ -z "$(fm_key "$SKILLS/what-do-i-know/SKILL.md" agent)" ]
+  [ -z "$(fm_key "$SKILLS/what-do-i-know/SKILL.md" model)" ]
+  [ -z "$(fm_key "$SKILLS/what-do-i-know/SKILL.md" background)" ]
 }
 
 @test "the agent-side model declaration is still present (belt and braces)" {
@@ -104,9 +106,9 @@ fm_key() {
     done
   done <<< "$declaring"
 
-  # am-i-done→work-reviewer is the model-pinned gate fork (recall forks with no
+  # adherence-check→work-reviewer is the model-pinned gate fork (recall forks with no
   # agent: so it is not counted).
-  [ "$checked" -ge 1 ] || { echo "expected at least the am-i-done fork, checked $checked"; false; }
+  [ "$checked" -ge 1 ] || { echo "expected at least the adherence-check fork, checked $checked"; false; }
 }
 
 @test "AC-6: the README records fork-model inheritance as documented harness design" {

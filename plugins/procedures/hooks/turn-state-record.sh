@@ -6,19 +6,20 @@
 #
 # PostToolUse(Skill) fires when the Skill tool RETURNS, which is before the
 # skill's own body has finished acting. That ordering is deliberate: calling
-# Skill(how-do-i) marks the flag before how-do-i's own greps and subagent
-# dispatch run, so the gate does not deny the skill mid-execution.
+# Skill(what-do-i-know) marks the flag before its own pipeline run and any
+# subagent dispatch, so the gate does not deny the skill mid-execution.
 #
 # NAMESPACE-QUALIFIED NAMES TOO. The Skill tool passes tool_input.skill through
-# verbatim, and a namespaced invocation (Skill(procedures:how-do-i)) arrives as
+# verbatim, and a namespaced invocation (Skill(procedures:what-do-i-know)) arrives as
 # "<plugin>:<name>" rather than the bare name — so the case arms match both the
 # bare form AND this plugin's own "procedures:" prefix. Still not a bare
-# wildcard: an unrelated `evil:how-do-i` must not satisfy the invariant, so only
-# THIS plugin's namespace ("procedures") is accepted, not `*:how-do-i`.
+# wildcard: an unrelated `evil:what-do-i-know` must not satisfy the invariant, so
+# only THIS plugin's namespace ("procedures") is accepted, not `*:what-do-i-know`.
 #
-# OLD NAMES TOO. what-do-i-know/adherence-check are the current skill names;
-# how-do-i/am-i-done are deprecated functional aliases (see their SKILL.md) and
-# still mark the same KEY — either name satisfies the same per-turn invariant.
+# PLUGIN ADAPTATION: owner-directed (dec.2026-11-26-agent-system-revamp-steps-3-6):
+# the deprecated how-do-i/am-i-done skill aliases are removed, so only
+# what-do-i-know/adherence-check mark a KEY. The KEY names (how_do_i, am_i_done)
+# and the gate names stay — they are state and machinery, not skill names.
 #
 # FAIL-OPEN: no jq, unparseable payload, unwritable state => exit 0 silently.
 # A failed record means a gate asks again, which is recoverable; a crash here
@@ -34,8 +35,8 @@ TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '(.tool_name // .tool) // empty' 2>/de
 
 SKILL="$(printf '%s' "$INPUT" | jq -r '(.tool_input.skill // .input.skill) // empty' 2>/dev/null || true)"
 case "$SKILL" in
-    how-do-i|procedures:how-do-i|what-do-i-know|procedures:what-do-i-know) KEY="how_do_i" ;;
-    am-i-done|procedures:am-i-done|adherence-check|procedures:adherence-check) KEY="am_i_done" ;;
+    what-do-i-know|procedures:what-do-i-know) KEY="how_do_i" ;;
+    adherence-check|procedures:adherence-check) KEY="am_i_done" ;;
     *) exit 0 ;;
 esac
 

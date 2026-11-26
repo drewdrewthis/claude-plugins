@@ -9,7 +9,7 @@ status: active
 
 # /create-reference
 
-Creates a reference doc at `records/<area>/<name>.md` (or `records/<name>.md` for top-level files; `references/...` is the legacy per-root fallback until that root is renamed — see `stores_records_dir`). Consumed by skills and agents that link to it for durable knowledge. Discoverable via `/how-do-i`'s store-wide index and keyword grep.
+Creates a reference doc at `records/<area>/<name>.md` (or `records/<name>.md` for top-level files; `references/...` is the legacy per-root fallback until that root is renamed — see `stores_records_dir`). Consumed by skills and agents that link to it for durable knowledge. Discoverable via `/what-do-i-know`'s store-wide index and keyword grep.
 
 # Triggers
 
@@ -62,7 +62,7 @@ Creates a reference doc at `records/<area>/<name>.md` (or `records/<name>.md` fo
 
    Body is free-form. Use `## ` section headers for scanability. Lead with the conclusion or most-referenced fact. Prefer tables for 2+-dimensional content.
 
-4. **No index row.** No index files are maintained anywhere in the stores — do NOT create or append to one. Discovery is the record's frontmatter (id, description, keywords) plus the `/how-do-i` index, which `build-record-index.sh` rebuilds from the stores on every query (the invoking skill's prompt carries the resolved path).
+4. **No index row.** No index files are maintained anywhere in the stores — do NOT create or append to one. Discovery is the record's frontmatter (id, description, keywords) plus the `/what-do-i-know` index, which `build-record-index.sh` rebuilds from the stores on every query (the invoking skill's prompt carries the resolved path).
 
 5. Confirm the file path and report. Resume the interrupted conversation.
 

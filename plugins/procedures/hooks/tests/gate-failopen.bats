@@ -342,7 +342,7 @@ unarmed() { # <gate-script> <payload>
 
 @test "case 4b: how-do-i-gate records lib-unreadable:turn-state instead of releasing silently" {
   start_turn
-  ran_skill how-do-i
+  ran_skill what-do-i-know
   unreadable_lib turn-state.sh
   run drive "how-do-i-gate.sh" technician "$PAYLOAD_EDIT"
   [ "$status" -eq 0 ]
@@ -355,7 +355,7 @@ unarmed() { # <gate-script> <payload>
 
 @test "case 4b: how-do-i-gate records lib-unreadable:gate-audience instead of releasing silently" {
   start_turn
-  ran_skill how-do-i
+  ran_skill what-do-i-know
   unreadable_lib gate-audience.sh
   run drive "how-do-i-gate.sh" technician "$PAYLOAD_EDIT"
   [ "$status" -eq 0 ]
@@ -368,7 +368,7 @@ unarmed() { # <gate-script> <payload>
 
 @test "case 4b: how-do-i-gate records lib-unreadable:gate-allowlist instead of releasing silently" {
   start_turn
-  ran_skill how-do-i
+  ran_skill what-do-i-know
   unreadable_lib gate-allowlist.sh
   run drive "how-do-i-gate.sh" technician "$PAYLOAD_EDIT"
   [ "$status" -eq 0 ]

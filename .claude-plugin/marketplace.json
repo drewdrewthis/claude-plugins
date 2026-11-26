@@ -8,7 +8,7 @@
     {
       "name": "procedures",
       "source": "./plugins/procedures",
-      "description": "Procedural knowledge system: /how-do-i, /update-records (+templates), /am-i-done, the how-do-i/am-i-done gate hooks with turn-state wiring, and the evolve-sweep Stop hook that dispatches post-turn record evolution."
+      "description": "Procedural knowledge system: /what-do-i-know, /update-records (+templates), /adherence-check, a nudge that reminds both exist and hints related records, the how-do-i/am-i-done gate hooks with turn-state wiring, and the evolve-sweep Stop hook that dispatches post-turn record evolution."
     },
     {
       "name": "worklog",
@@ -18,7 +18,7 @@
     {
       "name": "delegation",
       "source": "./plugins/delegation",
-      "description": "Delegation machinery: /delegate routes a task shape to a specialist from the host's own agent roster, /create-new-sub-agent mints one when none fits (template + linter); /improve returns a better idea, plan or PR via parallel domain lenses; a hook denies the general-purpose subagent."
+      "description": "Delegation machinery: /delegate routes a task shape to a specialist from the host's own agent roster, /create-new-sub-agent mints one when none fits (template + linter); /improve returns a better idea, plan or PR via parallel domain lenses; a hook denies the general-purpose subagent; another suggests /improve when a plan or PR is about to be acted on."
     },
     {
       "name": "about-my-person",
